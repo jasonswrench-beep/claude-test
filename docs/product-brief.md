@@ -7,7 +7,7 @@
 **Context:** A module of **OpenStage**, a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
 
-> **Provenance note.** Items marked *(relayed)* come from OpenStage's scoping document, capability matrix, or notes as reported to this brief. The author of this brief has no access to the OpenStage repository and has not read those files. Facts about what OpenStage's code does today are listed in [section 12](#12-open-questions) as things to confirm in the repo, not decisions.
+> **Provenance note.** Items marked *(relayed)* come from OpenStage's scoping document, capability matrix, or notes as reported to this brief. The author of this brief has no access to OpenStage's project files (they are on the owner's computer, not on GitHub) and has not read those files. Facts about what OpenStage's code does today are listed in [section 12](#12-open-questions) as things to confirm in the repo, not decisions.
 
 > **Plain-language guide.** This brief uses a few technical terms; the [glossary](#15-plain-language-glossary) at the end explains them all.
 >
@@ -344,9 +344,9 @@ A folder or zip of `project.json` (versioned schema) + media segments + `events.
 
 *Resolved: Release 1 scope (section 8) confirmed; name (OpenStage Capture); the Camtasia-style timeline is in Release 1; one big first release; no code from the existing OpenScreen project; GPL helper tools: option 1; MP4 output; Windows only; no compliance deadline; no contribution rules; single publisher; SCORM 1.2 only; narration delivery; no VPAT yet, accessibility statement instead.*
 
-### Facts to confirm in the OpenStage repo (not decisions)
+### Facts to confirm in OpenStage's project files (not decisions)
 
-These are answered by reading files, not by deciding. They go to whoever has the repository.
+These are answered by reading files, not by deciding. They go to whoever can open the OpenStage project files on the owner's computer, for example the Claude session used for OpenStage. OpenStage is not on GitHub yet, so the session that wrote this brief cannot read it.
 
 - **What does `publish.ts` output today?** The decided targets (SCORM 1.2 for Release 1) are what it *must* do; what it *does* is unverified. If it does not exist yet, the honest answer is "nothing yet."
 - **How does the format specification define the timeline?** Confirm it matches the "basic appear/disappear timing, not keyframe animation" description, so the separation in 9.3 holds.
@@ -389,7 +389,7 @@ These are answered by reading files, not by deciding. They go to whoever has the
 1. ~~Confirm the Release 1 list.~~ **Done:** confirmed by the owner (section 8).
 2. **Baseline screen-reader pass** on OpenStage's existing editor patterns (NVDA and Narrator). It gates the whole approach.
 3. **Put the rule checks in place** from the first line of code: license checking and the FFmpeg build-flag guard (section 7).
-4. **Confirm the repo facts** in section 12 by reading the files, starting with `publish.ts` and the format specification. This needs someone with access to the OpenStage repository.
+4. **Confirm the OpenStage facts** in section 12 by reading the project files on the owner's computer, starting with `publish.ts` and the format specification.
 5. **Write the process protocol** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe segments, `recover`.
 6. **Windows capture spike:** screen + mic + system audio + cursor events + UI Automation element info, written to the draft project format; then kill the process mid-recording and recover.
 7. **MP4 render spike:** render that project to MP4 through Media Foundation, confirm the license checks pass, and check which Windows editions have the needed media components.

@@ -2,20 +2,18 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** Draft v0.5 — for review
+**Status:** Draft v0.6 — for review
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage**, a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
 
 > **Provenance note.** Items marked *(relayed)* come from OpenStage's scoping document, capability matrix, or notes as reported to this brief. The author of this brief has no access to the OpenStage repository and has not read those files. Facts about what OpenStage's code does today are listed in [section 12](#12-open-questions) as things to confirm in the repo, not decisions.
 
-> **Plain-language guide.** This brief uses a few technical terms; the [glossary](#15-plain-language-glossary) at the end explains them all. The two that matter most:
-> - **Release 1** (the industry calls it the **MVP**, "minimum viable product") is the first version people can use for real, start to finish: record, trim, add captions, drop it into a course. It does the whole job, but not every advanced feature.
-> - **Release 2** (the industry calls it **v1**) is the next, fuller version with the more advanced features.
+> **Plain-language guide.** This brief uses a few technical terms; the [glossary](#15-plain-language-glossary) at the end explains them all.
 >
-> Where this brief says "MVP" it means Release 1, and where it says "v1" it means Release 2.
+> **The plan is one big first release, called Release 1,** containing everything major, rather than a small first version followed by a bigger one. (The industry would call a small first version an "MVP"; that is not the plan here.) A short list of things is deliberately left until *after* Release 1; see [section 8](#8-scope-one-big-first-release).
 >
-> **Decisions that need you** are collected in [section 12](#12-open-questions), in plain terms, each with a recommended default.
+> **Most decisions are now made** and recorded in the table below. The few items still open are in [section 12](#12-open-questions).
 
 ## Decisions so far
 
@@ -26,13 +24,19 @@
 | Engine language | Rust |
 | Process model | Separate process with **no interface of its own**. OpenStage's UI and global hotkeys drive it; JSON on stdout; same pattern OpenStage already uses for `publish.ts`, `narrate.py`, and `validate.py` |
 | Interface | Native HTML controls inside OpenStage. No separate GUI toolkit |
-| Platforms | **Windows first** (the only test hardware available). macOS and Linux later, when testers exist |
-| Editing | **Camtasia-style multi-track timeline confirmed** (owner: screen recording needs a more complex timeline). *When* it arrives, Release 1 or Release 2, is [open question 1](#12-open-questions) |
-| Publishing | **One publisher only: OpenStage's.** Any capture path hands assets to it; OpenStage Capture never ships its own exporter. v1 targets **SCORM 1.2 only**; SCORM 2004 and xAPI are Later *(relayed)* |
+| Platforms | **Windows only for Release 1.** macOS and JAWS testing only if a Mac user and a JAWS license become available later; Linux is not planned |
+| Editing | **Camtasia-style multi-track timeline, in Release 1** (owner: screen recording needs a more complex timeline, and everything major should ship at once) |
+| Publishing | **One publisher only: OpenStage's.** Any capture path hands assets to it; OpenStage Capture never ships its own exporter. Release 1 targets **SCORM 1.2 only**; SCORM 2004 and xAPI are Later *(relayed)* |
 | Narration | Text-first. Audio generation is **download on first use, never bundled** in the installer. Nothing breaks if it is never downloaded |
 | Speech | Local only, permissive licenses only |
 | Accessibility bar | WCAG 2.2 AA for output; ATAG 2.0 Part A for the editor (this brief proposes adding Part B). **No conformance report yet; publish an accessibility statement** |
 | Name | **OpenStage Capture** (confirmed by owner; crate prefix `openstage-capture`). Replaces the working title "OpenScreen" |
+| Release plan | **One big first release (Release 1)** with everything major; section 8 says what is in and out |
+| Video output | **MP4** (H.264 video, AAC audio) using Windows's built-in encoders. WebM is not in Release 1. A legal check on patents is still advised before shipping |
+| Narration helper tools (GPL) | **Option 1, for now:** they stay separate and the user installs them; OpenStage never includes or hosts them |
+| Code from other projects | **None** copied from the existing OpenScreen project (owner: cleaner). Rules for any future outside code stay in section 7 |
+| Compliance deadline | **None** at present (owner). The accessibility targets are quality goals, not deadlines |
+| Contribution rules | **None** for now; development is by the owner and collaborators only. Revisit before accepting outside contributors |
 
 ---
 
@@ -69,16 +73,16 @@ Three ideas drive the design:
 
 | Capability | Camtasia | Captivate | Storyline | Our stance |
 |---|---|---|---|---|
-| Screen + audio + webcam capture | ✔ | ✔ | ✔ (step-by-step) | **MVP** |
-| Editing | multi-track timeline | basic | basic | **Wanted: Camtasia-style multi-track timeline.** MVP builds the accessible track/clip model and a clip list with trim/split; the full multi-track UI follows in v1 (open question 1) |
-| Editable cursor, click effects | ✔ | ✔ | partial | **MVP**, enabled by separate interaction data |
-| Auto zoom/pan | ✔ (SmartFocus) | ✔ | — | **v1** |
-| Callouts, annotations, shapes | ✔ | ✔ | ✔ | **v1**, reusing OpenStage's canvas where possible |
-| Captions / transcript | ✔ | ✔ | ✔ | **MVP** from script; speech-to-text **v1** |
-| Auto step-by-step slides from clicks | — | ✔ | ✔ | **v1** |
-| Demo / Practice / Assessment modes | — | ✔ | ✔ | **v1** |
-| SCORM / xAPI export | partial (quizzes) | ✔ | ✔ | **One publisher (OpenStage's).** v1: SCORM 1.2 only. SCORM 2004 and xAPI: Later |
-| Audio description track | ? | ? | ? | **v1** *(competitor support not verified)* |
+| Screen + audio + webcam capture | ✔ | ✔ | ✔ (step-by-step) | **Release 1** |
+| Editing | multi-track timeline | basic | basic | **Release 1: Camtasia-style multi-track timeline**, built on an accessible track/clip model with a keyboard-operable table view as its foundation |
+| Editable cursor, click effects | ✔ | ✔ | partial | **Release 1**, enabled by separate interaction data |
+| Auto zoom/pan | ✔ (SmartFocus) | ✔ | — | **Release 1** |
+| Callouts, annotations, shapes | ✔ | ✔ | ✔ | **Release 1**, reusing OpenStage's canvas where possible |
+| Captions / transcript | ✔ | ✔ | ✔ | **Release 1**: from the narration script, and from speech-to-text for human-recorded audio (fallback rule in section 8) |
+| Auto step-by-step slides from clicks | — | ✔ | ✔ | **Release 1** |
+| Demo / Practice / Assessment modes | — | ✔ | ✔ | **Release 1** |
+| SCORM / xAPI export | partial (quizzes) | ✔ | ✔ | **One publisher (OpenStage's).** Release 1: SCORM 1.2 only. SCORM 2004 and xAPI: after Release 1 |
+| Audio description track | ? | ? | ? | **Release 1** *(competitor support not verified)* |
 | Branching, variables, full authoring suite | — | ✔ | ✔ | **Non-goal**; that is OpenStage |
 | Templates, asset library, themes | ✔ | ✔ | ✔ | Later |
 
@@ -88,7 +92,7 @@ Three ideas drive the design:
 1. Reliable capture of screen (full / window / region), system audio, microphone, and webcam on Windows, with a documented capture-to-file path.
 2. Record interaction events in a **documented, open project format** (versioned JSON + media files) that other tools can read and write.
 3. Editing inside OpenStage's interface, fully operable by keyboard and screen reader, sufficient to finish a tutorial: trim, split, reorder, annotate, on a Camtasia-style multi-track timeline.
-4. Output as MP4/WebM video and as slide-per-step content. **There is exactly one publisher (OpenStage's).** Any capture path hands assets to it, so editor preview and published output cannot drift apart.
+4. Output as MP4 video and as slide-per-step content. **There is exactly one publisher (OpenStage's).** Any capture path hands assets to it, so editor preview and published output cannot drift apart.
 5. **Accessible by construction:** meet the targets in section 6 for both the editing experience and the output.
 6. **Engine only.** No interface of its own; usable headless and through a documented, versioned process protocol.
 7. 100% Apache-2.0-compatible dependency tree.
@@ -100,7 +104,7 @@ Three ideas drive the design:
 - Live streaming or multi-camera production (OBS's territory).
 - Cloud hosting, review/collab workflows, or an LMS.
 - Mobile-device and browser-based capture.
-- Building a speech-to-text engine into the MVP.
+- Building a speech-recognition engine from scratch (an existing local, permissively licensed one will be chosen instead).
 
 ## 6. Accessibility requirements
 
@@ -124,7 +128,7 @@ The recorder and editor are OpenStage HTML, so they inherit OpenStage's accessib
 
 ### 6.2 The output must be accessible, and the tool must make that the easy path (ATAG Part B)
 
-- **Captions as a first-class track.** Timed text, language-tagged, edited alongside audio, exported as sidecar (WebVTT/SRT). **From the narration script by default**, which is how OpenStage works today; from speech-to-text for human-recorded audio in v1. Always human-editable and flagged "auto-generated, unreviewed" until approved.
+- **Captions as a first-class track.** Timed text, language-tagged, edited alongside audio, exported as sidecar (WebVTT/SRT). **From the narration script by default**, which is how OpenStage works today; from speech-to-text for human-recorded audio (see the fallback rule in section 8). Always human-editable and flagged "auto-generated, unreviewed" until approved.
 - **Transcripts and step-by-step text** generated from the same data as captions.
 - **Audio description track** (WCAG 1.2.3 / 1.2.5): written as text and voiced through the same script-to-speech route; support extended description (pausing video) in interactive output.
 - **Alt text for non-text content** (callouts, shapes, images, hotspots), with a prompt rather than silent omission. Pre-fill from the Windows UI Automation tree where available, for example "Button: Save".
@@ -137,8 +141,8 @@ The recorder and editor are OpenStage HTML, so they inherit OpenStage's accessib
 
 ### 6.3 Accessibility in the process
 
-- **First deliverable: a baseline screen-reader pass on OpenStage's existing editor patterns** (the ones the recorder will reuse) with NVDA and Narrator on Windows. JAWS if a license is available. VoiceOver when someone with a Mac can test. So far only scripted keyboard and structure checks have been run.
-- Accessibility acceptance criteria on every user story; no feature merges without keyboard and screen-reader behavior defined. OpenStage's acceptance tests already require keyboard-only operation and NVDA and VoiceOver verification for the editor and published output *(relayed)*; keep the test evidence, because it is the raw material for a real ACR later.
+- **First deliverable: a baseline screen-reader pass on OpenStage's existing editor patterns** (the ones the recorder will reuse) with NVDA and Narrator on Windows. JAWS and VoiceOver are out of scope for now (no JAWS license or Mac tester yet), and the accessibility statement will say so. So far only scripted keyboard and structure checks have been run.
+- Accessibility acceptance criteria on every user story; no feature merges without keyboard and screen-reader behavior defined. OpenStage's acceptance tests already require keyboard-only operation and NVDA and VoiceOver verification for the editor and published output *(relayed)*; keep the test evidence, because it is the raw material for a real ACR later. VoiceOver verification waits until a Mac tester exists.
 - **Automated:** axe-core (or equivalent) on every generated HTML package in CI.
 - **Manual:** scripted passes with real assistive technology on the core flows (record → trim → caption → insert into course) before each release.
 - **User testing** with people who use assistive technology, from the first usable build.
@@ -146,11 +150,12 @@ The recorder and editor are OpenStage HTML, so they inherit OpenStage's accessib
 
 ### 6.4 Compliance context
 
+- **No compliance deadline today (owner).** The targets in this section are quality goals, not deadlines. The context below is kept for institutions that may adopt the tool later.
 - **Written bar vs. this brief.** OpenStage's notes state the course bar as WCAG 2.2 AA in one place and 2.1 AA in another. This brief targets **2.2 AA**; it includes the 2.1 AA requirements apart from the obsolete 4.1.1 Parsing criterion. Reconcile the notes.
 - **Two separate claims; do not conflate them.** **WCAG 2.2 AA** is the claim about the published course, what learners experience, and most vendors document it. **ATAG 2.0 Part A** is the claim about the authoring tool, what authors experience, and it is much less commonly documented. The ATAG claim is the one worth documenting properly over time.
 - **No VPAT/ACR yet.** A conformance report written without testing is a false claim that institutions will rely on when adopting the tool. Publish the accessibility statement (6.3) and build the evidence as the acceptance tests run.
 - **When an ACR will be asked for.** A free tool used by an individual instructor rarely reaches procurement. Expect a request once a department, campus, or system adopts or recommends it institutionally, and treat it as near-certain if the project takes grant or institutional funding, because documentation obligations can arrive attached to the money. This is a landscape, not legal advice.
-- **US public institutions.** The DOJ's ADA Title II rule sets **WCAG 2.1 AA** for web content and mobile apps of state and local governments, which includes public universities. An April 2026 interim final rule moved the compliance dates to **April 26, 2027** (entities serving 50,000 or more people) and **April 26, 2028** (smaller entities and special districts). This comes from law-firm and university summaries ([Plante Moran](https://plantemoran.com/explore-our-thinking/insight/2026/04/doj-extends-ada-title-ii-web-accessibility-compliance-deadlines), [Duane Morris](https://www.duanemorris.com/alerts/doj_extends_ada_title_ii_digital_accessibility_deadlines_one_year_0426.html), [University of Arizona](https://accessibility.arizona.edu/news/doj-issues-interim-final-rule-title-ii-digital-accessibility-compliance-dates)), not the Federal Register, and the rule may have changed since. Because 2.2 AA is a superset, meeting this brief's target meets that standard. Which date applies to a given institution is for its accessibility officer or ADA coordinator, not this brief.
+- **For reference, US public institutions.** The DOJ's ADA Title II rule sets **WCAG 2.1 AA** for web content and mobile apps of state and local governments, which includes public universities. An April 2026 interim final rule moved the compliance dates to **April 26, 2027** (entities serving 50,000 or more people) and **April 26, 2028** (smaller entities and special districts). This comes from law-firm and university summaries ([Plante Moran](https://plantemoran.com/explore-our-thinking/insight/2026/04/doj-extends-ada-title-ii-web-accessibility-compliance-deadlines), [Duane Morris](https://www.duanemorris.com/alerts/doj_extends_ada_title_ii_digital_accessibility_deadlines_one_year_0426.html), [University of Arizona](https://accessibility.arizona.edu/news/doj-issues-interim-final-rule-title-ii-digital-accessibility-compliance-dates)), not the Federal Register, and the rule may have changed since. Because 2.2 AA is a superset, meeting this brief's target meets that standard. Which date applies to a given institution is for its accessibility officer or ADA coordinator, not this brief.
 - **Section 508 and EN 301 549** also cover authoring tools; per OpenStage's notes, ATAG Part A fits that. WCAG 2.2 AA covers the web-content levels of 508, EN 301 549, and AODA.
 
 ## 7. Licensing & dependency policy
@@ -165,11 +170,11 @@ The project is **Apache-2.0** and will be part of OpenStage, so every dependency
 
 Practical consequences:
 
-- **Do not bundle FFmpeg.** Prefer **OS-native encoders and capture APIs** (Media Foundation on Windows) and permissive codecs (OpenH264, VP9, AV1, Opus). If FFmpeg is ever optional, it must be a user-supplied, dynamically loaded, LGPL build, never a default dependency.
+- **Do not bundle FFmpeg.** Release 1 produces MP4 (H.264 video, AAC audio) with **Windows's built-in encoders** (Media Foundation), so FFmpeg is not needed. If FFmpeg is ever optional, it must be a user-supplied, dynamically loaded, LGPL build, never a default dependency.
 - **FFmpeg guard before any integration.** `cargo-deny` does not see native libraries. Add a CI check that fails the build if any FFmpeg build configuration contains `--enable-gpl` or `--enable-nonfree`, and flags `--enable-version3` for review, **before** any code or build configuration from another project is brought in. A GPL FFmpeg build entering through an imported build configuration would silently relicense the combined work.
-- **Reusing code from other projects, even permissively licensed ones:** attribution in `NOTICE`, a license check on the specific files, and no imported build configuration until it has been audited. Never copy build configurations wholesale.
-- **Codec patents are separate from copyright licenses.** Apache-2.0 grants patent rights only for the project's own contributions. H.264/AAC (and HEVC) carry third-party patent pools. Using the OS encoder or Cisco's pre-built OpenH264 binary shifts this to the platform vendor; VP9/AV1/Opus avoid it. **Needs legal review before shipping.**
-- **Housekeeping:** SPDX header on every source file, a `NOTICE` file for third-party attributions, `cargo-deny` license checks in CI, and a decision on **DCO vs. CLA** (use OpenStage's policy if it has one).
+- **Reusing code from other projects, even permissively licensed ones** (the owner has decided that no code is copied from the existing OpenScreen project): attribution in `NOTICE`, a license check on the specific files, and no imported build configuration until it has been audited. Never copy build configurations wholesale.
+- **Codec patents are separate from copyright licenses.** Apache-2.0 grants patent rights only for the project's own contributions. H.264/AAC (and HEVC) carry third-party patent pools. Using Windows's built-in encoder shifts this to Microsoft; patent-free formats (VP9, AV1, Opus) avoid it. **The owner has chosen MP4 (H.264/AAC) as the output; a legal review is still advised before shipping.** Also check early that the Windows editions you support include the media components (the "N" editions of Windows may need Microsoft's Media Feature Pack; verify).
+- **Housekeeping:** SPDX header on every source file, a `NOTICE` file for third-party attributions, `cargo-deny` license checks in CI, and no contribution agreement while development is limited to the owner and collaborators (Apache-2.0 already says contributions submitted to the project come under the same license unless stated otherwise; set rules before accepting outside contributors).
 - **Bundled assets** (fonts, icons, cursor sets, sample media, default caption fonts) meet the same bar. Many are CC-BY-SA or SIL OFL; check each.
 
 ### Narration delivery *(decided; relayed)*
@@ -199,39 +204,65 @@ Per OpenStage's notes, the Python environment that runs Kokoro narration include
 | **2. Replace them with tools under a relaxed license** | Find substitutes under Apache, MIT, or BSD licenses, so narration can be downloaded and offered as freely as the voice model itself. | Smoothest for users. No GPL anywhere. | Someone has to find and test a replacement for each language, and pronunciation quality might drop. It is not known whether a good enough replacement exists. |
 | **3. Include them and follow the GPL's rules** | OpenStage hands out the helper tools itself, publishes their source code, and keeps their license notices, with the tools staying separate programs. | Smoothest for users, with no search for substitutes. | Needs a lawyer's sign-off, brings ongoing obligations, and some institutions' software policies may balk at GPL code in the package. |
 
-**Recommendation:** choose **option 1 now** and look into **option 2** in the background. Skip option 3 unless a lawyer says it is fine. The decision is **not urgent**: it is only needed before the first installer is released. This is a decision for OpenStage's owner, ideally with legal advice, and is not legal advice itself. The separate-process design keeps GPL code out of OpenStage Capture's own binary and source, but it does not remove the redistribution obligations of anything shipped alongside.
+**Decided (owner): option 1, for now.** Option 2 stays available as a later improvement; option 3 is off the table unless a lawyer says it is fine. Revisit before any installer ships anything that includes these tools. This is a decision for OpenStage's owner, ideally with legal advice, and is not legal advice itself. The separate-process design keeps GPL code out of OpenStage Capture's own binary and source, but it does not remove the redistribution obligations of anything shipped alongside.
 
-## 8. Scope by milestone
+## 8. Scope: one big first release
 
-Windows first. Accessibility work is spread across every milestone rather than saved for the end, because the hardest parts (the process protocol's audio cues, the track/clip model's keyboard behavior, and the project-format tracks) are architectural.
+The owner would rather have everything major ready to ship at once, so this brief plans **a single first release, Release 1**, for **Windows only**. Accessibility work runs through all of it rather than being saved for the end, because the hardest parts (the audio cues, the timeline's keyboard behavior, and the project-format tracks) are architectural.
 
-**Release 1 (the MVP) — "record, trim, drop into a course"**
-- Capture on Windows: screen/window/region + mic + system audio + webcam
-- Interaction logging: cursor position, clicks, key events, active window; opt-in with a clear on-screen and audible indicator
-- **Process protocol v0**: `record`, `render`, `probe`, `recover`; JSON-lines events; graceful stop; crash-safe output (see section 9)
-- **Project format v0** (documented) with caption, transcript, alt-text, and language fields from day one
-- **Track/clip model** with its keyboard-operable table view: the accessible foundation the multi-track timeline will sit on
-- **OpenStage integration:** recorder panel in native HTML, global hotkeys, audible state cues, clip list with trim/split, insert as a video asset in a slide with its caption track
-- **Script-first captions** through OpenStage's existing narration route; WebVTT/SRT import and export
+**The trade-off, stated plainly:** a bigger first release takes longer to reach anyone, and the timeline, the interactive step-by-step content, and the captioning all have to reach the same accessibility standard before it ships. To manage that, the work is **built in a suggested order** (below) even though it **ships as one release**.
+
+### Release 1 includes
+
+**Recording**
+- Capture on Windows: screen/window/region + microphone + system audio + webcam
+- Interaction logging: cursor position, clicks, key events, active window; opt-in, with a clear on-screen and audible indicator
+- Recorder panel in native HTML, global hotkeys, audible state cues
+- Process protocol and crash-safe recording with a `recover` command (section 9)
+
+**Editing**
+- Track/clip model with a keyboard-operable table view
+- **Camtasia-style multi-track timeline**, keyboard-complete and screen-reader-verified before it ships
+- Trim, split, delete, reorder, multi-track
 - Cursor re-styling and click highlights at render time (with flash safeguards)
-- Export MP4 (Media Foundation) and WebM (VP9/Opus)
-- Baseline screen-reader pass on the reused OpenStage patterns (6.3)
+- Auto zoom/pan; callouts, text, arrows, blur/redact
+
+**Accessible content**
+- Captions from the narration script, and WebVTT/SRT import and export
+- **Local speech-to-text** for human-recorded audio (see the fallback rule below)
+- Transcripts, alt text, audio description track (script → speech)
+- Accessibility checker pane
+
+**Interactive training**
+- Auto step segmentation → slide-per-step content in OpenStage's slide model, with step text and alt text pre-filled from UI Automation
+- Demo / Practice / Assessment output with keyboard-operable hotspots and text-entry checks, through OpenStage's player and publisher
+
+**Output and publishing**
+- Export **MP4** (H.264 video, AAC audio) through Windows's built-in encoders
+- Insert as a video asset or slide-per-step content in an OpenStage course
+- **Publishing: SCORM 1.2 only**, through the single publisher. A recording-bearing course that reports completion correctly in a real LMS is the must-pass acceptance test, because a course that fails to report completion correctly is worse than no course *(relayed)*
+
+**Quality and honesty**
+- Project format v0 (documented) with caption, transcript, alt-text, and language fields from day one
+- Baseline screen-reader pass on the reused OpenStage patterns; full manual pass with NVDA and Narrator before release (6.3)
 - Accessibility statement published
 
-**Release 2 (v1) — "teach with it"**
-- **Camtasia-style multi-track timeline UI** over the MVP track/clip model, keyboard-complete and screen-reader-verified before it ships *(recommended placement; see open question 1)*
-- Auto step segmentation → slide-per-step content in OpenStage's slide model, with step text and alt text pre-filled from UI Automation
-- Auto zoom/pan; callouts, text, arrows, blur/redact
-- Demo / Practice / Assessment output with keyboard-operable hotspots and text-entry checks, through OpenStage's player and publisher
-- **Publishing: SCORM 1.2 only**, through the single publisher. A recording-bearing course that reports completion correctly in a real LMS is the must-pass acceptance test, because a course that fails to report completion correctly is worse than no course *(relayed)*
-- **Local speech-to-text** for human-recorded audio (model and library audited for license first)
-- Audio description track (script → speech)
-- Accessibility checker pane
-- macOS (needs a tester and hardware), then Linux (PipeWire + xdg-desktop-portal)
+**Fallback rule for speech-to-text.** This is the one Release 1 item whose feasibility isn't yet known. If no local, permissively licensed speech-recognition tool passes the license and quality audit, Release 1 ships with script-first captions only, and speech recognition moves to the next release. It must not delay everything else.
 
-**Later**
-- SCORM 2004 (earns its place by separating completion status from success status, once 1.2 is proven in a real LMS), xAPI and cmi5 (need a learning record store we do not control, so shipping them early would be a checkbox, not a capability)
-- Sign-language track, accessible PDF/HTML step guides, templates and themes, noise removal, localization, plugin API.
+### Suggested build order inside Release 1 *(not separate releases)*
+
+1. **Foundations:** baseline screen-reader pass on OpenStage's patterns; license and FFmpeg CI guards; process-protocol spec; project format.
+2. **Recording:** reliable capture with crash recovery; hotkeys and audio cues.
+3. **Editing foundation:** track/clip model and keyboard table view; MP4 rendering.
+4. **Timeline:** the visual multi-track timeline over that model.
+5. **Learning features:** step segmentation, zoom and callouts, practice modes; captions, speech-to-text, audio description; accessibility checker.
+6. **Publishing and hardening:** SCORM 1.2 in a real LMS; full manual screen-reader pass; accessibility statement.
+
+### After Release 1 *(not scheduled)*
+
+- **macOS** (when a Mac user is available) and **Linux**; **JAWS** and **VoiceOver** testing
+- SCORM 2004 (it separates completion status from success status; do it once 1.2 is proven in a real LMS), xAPI and cmi5 (they need a learning record store we do not control, so shipping them early would be a checkbox, not a capability)
+- WebM output, sign-language track, accessible PDF/HTML step guides, templates and themes, noise removal, localization, plugin API
 
 ## 9. Architecture and technical considerations
 
@@ -249,7 +280,7 @@ OpenStage already launches `publish.ts`, `narrate.py`, and `validate.py` as sepa
 
 - Windows Graphics Capture for screen/window; WASAPI loopback for system audio, WASAPI for the microphone
 - UI Automation for the element under each click (name and role); optional, best-effort, permission-aware, and **opt-in per recording** because it can expose on-screen text
-- Media Foundation for H.264/AAC encoding, with VP9/Opus as the portable fallback
+- Media Foundation for H.264/AAC (MP4) encoding. WebM (VP9/Opus) is not in Release 1; it could be added later as a patent-free option
 - macOS: ScreenCaptureKit (needs Screen Recording and Accessibility permissions). Linux: PipeWire via xdg-desktop-portal; Wayland restricts global input capture, so interaction logging there may be limited
 
 ### 9.3 Project format and timeline scope
@@ -290,6 +321,7 @@ A folder or zip of `project.json` (versioned schema) + media segments + `events.
 |---|---|---|
 | **No real screen-reader testing of OpenStage exists yet** | The patterns this module reuses may not work as intended | Baseline NVDA/Narrator pass before building on them (6.3) |
 | **Multi-track timeline is hard to make keyboard- and screen-reader-operable** | Authors with disabilities locked out of the headline feature; ATAG Part A claim at risk | Structural model first; visual timeline is a view over it; does not ship until verified |
+| **One big first release** | A longer wait before anything ships; more to test at once; schedule risk | Build in the suggested order (section 8); freeze the Release 1 list; apply the speech-to-text fallback rule |
 | Timeline scope collides with OpenStage's basic slide-timing spec *(relayed)* | Pressure to change OpenStage's format | Keep the media timeline in OpenStage Capture's project format; render to assets (9.3) |
 | A GPL FFmpeg build enters via imported build configuration | Silently relicenses the combined work | CI guard on FFmpeg build flags before any integration (section 7) |
 | The host name "OpenStage" is also an existing phone product line | Search noise; possible trademark friction | Trademark and search check before the name goes public (section 13) |
@@ -300,44 +332,45 @@ A folder or zip of `project.json` (versioned schema) + media segments + `events.
 | GPL components in the narration environment | Redistribution obligations if mirrored or bundled | Keep upstream-sourced and user-installed, or replace; decide before any installer (section 7) |
 | Downloaded narration weights tampered with or corrupted | Unverified blob runs inference | SHA-256 verification before load |
 | Managed institutional machines block downloads | Narration unavailable to a core audience | Documented manual placement path; text-first narration keeps everything else working |
-| Windows-only hardware | macOS/Linux and VoiceOver unverified | Windows first; recruit a Mac tester before promising macOS |
-| Permissive-only encoder options are thinner than FFmpeg's | Output format/quality limits | OS encoders; VP9/AV1 as the portable fallback |
-| Codec patent exposure (H.264/AAC) | Legal | Legal review; default to OS encoders / OpenH264 |
-| No speech-to-text yet | Human-recorded audio can't be auto-captioned | Script-first captions in MVP; audited local STT in v1 |
+| Windows-only hardware | macOS, Linux, VoiceOver, and JAWS unverified | Windows only for Release 1; make no claims for platforms or screen readers that were not tested |
+| Windows's built-in encoders are the only MP4 route | Output depends on Windows media components (some Windows editions may lack them) | Check supported Windows editions early; other encoders can be added later under the license rules |
+| Codec patent exposure (H.264/AAC in MP4) | Legal | Use Windows's built-in encoder; legal check before shipping |
+| Speech-to-text may not pass the license and quality audit | Human-recorded audio can't be auto-captioned | Script-first captions always work; the fallback rule in section 8 moves speech recognition out of Release 1 rather than delaying it |
 | Auto-generated captions and alt text are wrong | Inaccessible content that looks accessible | Always editable; flagged unreviewed until approved |
 | Conformance claims made without testing | Institutions rely on a false claim | Accessibility statement only until real testing exists |
 | Scope creep toward a full authoring suite | Never ships | Hold the non-goals line; OpenStage is the authoring suite |
 
 ## 12. Open questions
 
-*Resolved: name (OpenStage Capture); the Camtasia-style timeline is confirmed as wanted; single publisher; SCORM 1.2 only for v1; narration delivery; no VPAT yet, accessibility statement instead.*
+*Resolved: name (OpenStage Capture); the Camtasia-style timeline is in Release 1; one big first release; no code from the existing OpenScreen project; GPL helper tools: option 1; MP4 output; Windows only; no compliance deadline; no contribution rules; single publisher; SCORM 1.2 only; narration delivery; no VPAT yet, accessibility statement instead.*
 
 ### Facts to confirm in the OpenStage repo (not decisions)
 
 These are answered by reading files, not by deciding. They go to whoever has the repository.
 
-- **What does `publish.ts` output today?** The decided targets (SCORM 1.2 for v1) are what it *must* do; what it *does* is unverified. If it does not exist yet, the honest answer is "nothing yet."
+- **What does `publish.ts` output today?** The decided targets (SCORM 1.2 for Release 1) are what it *must* do; what it *does* is unverified. If it does not exist yet, the honest answer is "nothing yet."
 - **How does the format specification define the timeline?** Confirm it matches the "basic appear/disappear timing, not keyframe animation" description, so the separation in 9.3 holds.
 - **Which written WCAG bar is canonical in OpenStage's notes, 2.1 or 2.2?** (This brief assumes 2.2 AA.)
 - **Is there any FFmpeg build configuration** in OpenStage, or anywhere being drawn on, and what flags does it use?
 - **Does a Tauri sidecar fit** how OpenStage launches its other tools?
 - **Has the player's reflow gap (1.4.10) been fixed or scoped?**
 
-### Decisions
+### Items still open
 
-Each decision has a recommended default, so "go with your recommendation" is a valid answer.
+1. **Confirm the Release 1 list.** Section 8 lists everything planned for the single big first release. Read it and say if anything should move to "after Release 1". *Default if you say nothing: it stands as written.*
+2. **Pick a speech-recognition tool.** This is research, not a decision for you: candidates will be checked for license and quality (the fallback rule in section 8 applies if none passes).
+3. **Legal check on MP4 patents** before anything ships. H.264 and AAC involve patent licensing; Windows's built-in encoder handles this on the platform side, but get it confirmed.
+4. **Trademark and search check on the names** ("OpenStage" and "OpenStage Capture") before they go public (section 13).
 
-1. **When should the Camtasia-style timeline arrive?** You have confirmed you want it. The only question is whether it comes in Release 1 or Release 2.
-   - **Option A: in Release 1.** The first usable version includes the full multi-track timeline. *Good:* you get the headline feature from day one. *Not so good:* a longer wait before anything is usable, and the timeline is the hardest feature to make fully usable with a keyboard and screen reader, so building it first is the riskiest path.
-   - **Option B (recommended): in Release 2.** Release 1 has a simpler list-style editor: a table of clips you can trim, split, and reorder, built on the same foundations as the timeline. The full Camtasia-style timeline arrives in Release 2. *Good:* something usable sooner, and the timeline gets built properly on a proven base. *Not so good:* a longer wait for the timeline itself.
-   - If the timeline is what makes the product worth releasing at all, choose A and accept a longer first release.
-2. **Is any code being copied from the existing OpenScreen project (the Electron and TypeScript screen recorder), or was only the name borrowed?** Yes or no. *Assumed no.* If yes, we need to credit it in a `NOTICE` file and check what it brings with it before anything is copied (section 7).
-3. **The GPL helper tools for narration:** option 1, 2, or 3 in section 7. *Recommended: option 1 now, and look into option 2.* Not urgent; needed only before the first installer.
-4. **Compliance deadlines and reports.** Ask your campus accessibility officer or ADA coordinator which deadline applies and whether anyone will ask for a formal accessibility conformance report. Only your institution can answer this.
-5. **Testing help.** Is there anyone with a Mac who can test with VoiceOver (Apple's screen reader), and do you have access to JAWS (a paid Windows screen reader)? Without them, testing claims are limited to Windows with NVDA and Narrator.
-6. **Automatic captions from a recorded voice.** Needed once authors record their own voice rather than writing a script. It requires a speech-recognition tool that runs on the user's own computer under a relaxed license. *Not needed for Release 1, so no decision is needed yet.*
-7. **Video file formats.** The most common format (H.264/AAC, the kind most MP4 files use) involves patent licensing fees. Windows can produce it with its own built-in support, which shifts that to Microsoft. The alternative is patent-free formats such as WebM, which fewer devices play. *Recommended: use Windows's built-in support and also offer WebM, after a legal check.*
-8. **Rules for outside contributors.** When other people contribute code, do they sign an agreement (a CLA) or just certify with each contribution that they have the right to share it (a DCO)? If OpenStage already has a policy, this project follows it.
+### Revisit when…
+
+| If this happens | Then |
+|---|---|
+| A Mac user becomes available | Add macOS capture and VoiceOver testing |
+| A JAWS license becomes available | Add JAWS testing |
+| The tool is adopted by a department, campus, or system, or takes grant or institutional funding | Expect requests for an accessibility conformance report and possibly deadlines; build on the test evidence already collected |
+| Outside contributors want to help | Set contribution rules (section 7) before accepting their code |
+| Anyone wants an installer that includes the narration tools | Revisit the GPL decision (section 7) before it ships |
 
 ## 13. Naming
 
@@ -347,26 +380,29 @@ Each decision has a recommended default, so "go with your recommendation" is a v
 
 **Checks done on the new name.** The crate names `openstage-capture` and `openstage_capture` are unregistered on crates.io. This does not cover GitHub, npm, or trademarks.
 
+**No code is being reused** from the existing OpenScreen project (owner decision: cleaner).
+
 **One thing to know about the host name.** "OpenStage" is also the name of an existing line of IP desk phones sold by Unify, under a trademark licensed from Siemens (per Unify's own wiki). That is a different industry from e-learning software, so confusion may be limited, but searches will be noisy and a trademark and search check is worth doing before the name goes public. This is not legal advice.
 
 ## 14. Proposed next steps
 
-1. **Baseline screen-reader pass** on OpenStage's existing editor patterns (NVDA and Narrator). It gates the whole approach.
-2. **Add the FFmpeg build-flag CI guard** (section 7) before any code or build configuration from another project is integrated.
-3. **Confirm the repo facts** in section 12 by reading the files, starting with `publish.ts` and the format specification.
-4. **Settle open questions 1–3** (when the timeline arrives; any code reuse from the existing OpenScreen project; the GPL helper tools).
-5. **Write the process protocol v0** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe segments, `recover`.
+1. **Confirm the Release 1 list** (section 8; open item 1).
+2. **Baseline screen-reader pass** on OpenStage's existing editor patterns (NVDA and Narrator). It gates the whole approach.
+3. **Put the rule checks in place** from the first line of code: license checking and the FFmpeg build-flag guard (section 7).
+4. **Confirm the repo facts** in section 12 by reading the files, starting with `publish.ts` and the format specification. This needs someone with access to the OpenStage repository.
+5. **Write the process protocol** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe segments, `recover`.
 6. **Windows capture spike:** screen + mic + system audio + cursor events + UI Automation element info, written to the draft project format; then kill the process mid-recording and recover.
-7. **Render spike:** that project to MP4 (Media Foundation) and WebM with only allowed dependencies; confirm `cargo-deny` and the FFmpeg guard pass.
-8. **Write and publish the accessibility statement**, and decide the narration-environment plan before any installer ships.
-9. Convert this brief into a PRD with user stories, each carrying accessibility acceptance criteria.
+7. **MP4 render spike:** render that project to MP4 through Media Foundation, confirm the license checks pass, and check which Windows editions have the needed media components.
+8. **Audit speech-recognition candidates** (license and quality) to decide whether they fit Release 1 or trigger the fallback rule.
+9. **Draft the accessibility statement.**
+10. **Convert this brief into a PRD** with user stories, each carrying accessibility acceptance criteria.
 
 ## 15. Plain-language glossary
 
 | Term | What it means |
 |---|---|
-| **Release 1 / MVP** | "Minimum viable product": the first version that does the whole job end to end and can be used for real. |
-| **Release 2 / v1** | The next, fuller version, with the more advanced features. |
+| **Release 1** | The first public release. Planned as one big release with everything major, rather than a small first version (what the industry calls an "MVP") followed by a bigger one. |
+| **MP4 (H.264/AAC)** | The most widely playable video file type. Its video and audio formats involve patent licensing, which Windows's built-in encoder covers on the platform side. |
 | **Capture engine** | The part that records the screen, sound, and mouse and keyboard activity. |
 | **Separate process** | A program that runs on its own, apart from OpenStage. If it crashes, OpenStage keeps running. |
 | **Crash-safe** | The recording is saved in small pieces as it goes, so a crash loses seconds, not the whole take. |

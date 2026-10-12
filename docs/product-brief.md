@@ -1,13 +1,21 @@
-# OpenScreen — Product Brief
+# OpenStage Capture — Product Brief
 
-*(working title; **recommend renaming**, see [Naming](#13-naming))*
+*(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** Draft v0.4 — for review
+**Status:** Draft v0.5 — for review
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage**, a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
 
 > **Provenance note.** Items marked *(relayed)* come from OpenStage's scoping document, capability matrix, or notes as reported to this brief. The author of this brief has no access to the OpenStage repository and has not read those files. Facts about what OpenStage's code does today are listed in [section 12](#12-open-questions) as things to confirm in the repo, not decisions.
+
+> **Plain-language guide.** This brief uses a few technical terms; the [glossary](#15-plain-language-glossary) at the end explains them all. The two that matter most:
+> - **Release 1** (the industry calls it the **MVP**, "minimum viable product") is the first version people can use for real, start to finish: record, trim, add captions, drop it into a course. It does the whole job, but not every advanced feature.
+> - **Release 2** (the industry calls it **v1**) is the next, fuller version with the more advanced features.
+>
+> Where this brief says "MVP" it means Release 1, and where it says "v1" it means Release 2.
+>
+> **Decisions that need you** are collected in [section 12](#12-open-questions), in plain terms, each with a recommended default.
 
 ## Decisions so far
 
@@ -19,12 +27,12 @@
 | Process model | Separate process with **no interface of its own**. OpenStage's UI and global hotkeys drive it; JSON on stdout; same pattern OpenStage already uses for `publish.ts`, `narrate.py`, and `validate.py` |
 | Interface | Native HTML controls inside OpenStage. No separate GUI toolkit |
 | Platforms | **Windows first** (the only test hardware available). macOS and Linux later, when testers exist |
-| Editing | **Camtasia-style multi-track timeline is wanted** (owner's decision). Sequencing and its relationship to OpenStage's format spec: see [open question 1](#12-open-questions) |
-| Publishing | **One publisher only: OpenStage's.** Any capture path hands assets to it; OpenScreen never ships its own exporter. v1 targets **SCORM 1.2 only**; SCORM 2004 and xAPI are Later *(relayed)* |
+| Editing | **Camtasia-style multi-track timeline confirmed** (owner: screen recording needs a more complex timeline). *When* it arrives, Release 1 or Release 2, is [open question 1](#12-open-questions) |
+| Publishing | **One publisher only: OpenStage's.** Any capture path hands assets to it; OpenStage Capture never ships its own exporter. v1 targets **SCORM 1.2 only**; SCORM 2004 and xAPI are Later *(relayed)* |
 | Narration | Text-first. Audio generation is **download on first use, never bundled** in the installer. Nothing breaks if it is never downloaded |
 | Speech | Local only, permissive licenses only |
 | Accessibility bar | WCAG 2.2 AA for output; ATAG 2.0 Part A for the editor (this brief proposes adding Part B). **No conformance report yet; publish an accessibility statement** |
-| Name | OpenScreen is a working title and collides with an existing project; see Naming |
+| Name | **OpenStage Capture** (confirmed by owner; crate prefix `openstage-capture`). Replaces the working title "OpenScreen" |
 
 ---
 
@@ -182,15 +190,22 @@ Per OpenStage's notes, the Python environment that runs Kokoro narration include
 
 - **Today it is fine:** OpenStage doesn't bundle them and talks to them as a separate program the user installed from upstream.
 - **Mirroring the weights on our own release is fine** (Apache-2.0). **Mirroring or auto-downloading the GPL components from our own release would make the project a distributor of GPL code**, with source-offer and notice obligations.
-- Options: (1) keep them upstream-sourced and user-installed, documented as optional (the current arrangement); (2) replace the GPL phonemization components with permissive ones, after evaluating license and quality per language; (3) distribute under GPL terms with legal sign-off.
 
-This is a decision for OpenStage's owner with legal advice, not something this brief can settle. The separate-process design keeps GPL code out of OpenScreen's own binary and source, but it does not remove the redistribution obligations of anything shipped alongside.
+**In plain terms.** Narration relies on two helper tools that turn written words into speech sounds. Both are published under the **GPL**, a "share-alike" license: anyone who *hands out* the tools must also publish their source code and follow the GPL's rules, and mixing them into a product can pull that whole product under the GPL. OpenStage is Apache-2.0, which is more relaxed, so the two need to be kept cleanly apart. There are three ways to do that:
+
+| Option | What it means in practice | Good | Not so good |
+|---|---|---|---|
+| **1. Keep them separate; the user installs them** *(today's arrangement)* | OpenStage never includes or hosts the helper tools. A user who wants spoken narration installs them once from their official source, and OpenStage uses them if they are there. Everything except spoken narration works without them. | No legal risk. No extra work. Nothing changes. | An extra setup step for anyone who wants narration, which is a real hurdle on locked-down campus computers. |
+| **2. Replace them with tools under a relaxed license** | Find substitutes under Apache, MIT, or BSD licenses, so narration can be downloaded and offered as freely as the voice model itself. | Smoothest for users. No GPL anywhere. | Someone has to find and test a replacement for each language, and pronunciation quality might drop. It is not known whether a good enough replacement exists. |
+| **3. Include them and follow the GPL's rules** | OpenStage hands out the helper tools itself, publishes their source code, and keeps their license notices, with the tools staying separate programs. | Smoothest for users, with no search for substitutes. | Needs a lawyer's sign-off, brings ongoing obligations, and some institutions' software policies may balk at GPL code in the package. |
+
+**Recommendation:** choose **option 1 now** and look into **option 2** in the background. Skip option 3 unless a lawyer says it is fine. The decision is **not urgent**: it is only needed before the first installer is released. This is a decision for OpenStage's owner, ideally with legal advice, and is not legal advice itself. The separate-process design keeps GPL code out of OpenStage Capture's own binary and source, but it does not remove the redistribution obligations of anything shipped alongside.
 
 ## 8. Scope by milestone
 
 Windows first. Accessibility work is spread across every milestone rather than saved for the end, because the hardest parts (the process protocol's audio cues, the track/clip model's keyboard behavior, and the project-format tracks) are architectural.
 
-**MVP (v0.1) — "record, trim, drop into a course"**
+**Release 1 (the MVP) — "record, trim, drop into a course"**
 - Capture on Windows: screen/window/region + mic + system audio + webcam
 - Interaction logging: cursor position, clicks, key events, active window; opt-in with a clear on-screen and audible indicator
 - **Process protocol v0**: `record`, `render`, `probe`, `recover`; JSON-lines events; graceful stop; crash-safe output (see section 9)
@@ -203,8 +218,8 @@ Windows first. Accessibility work is spread across every milestone rather than s
 - Baseline screen-reader pass on the reused OpenStage patterns (6.3)
 - Accessibility statement published
 
-**v1 — "teach with it"**
-- **Camtasia-style multi-track timeline UI** over the MVP track/clip model, keyboard-complete and screen-reader-verified before it ships
+**Release 2 (v1) — "teach with it"**
+- **Camtasia-style multi-track timeline UI** over the MVP track/clip model, keyboard-complete and screen-reader-verified before it ships *(recommended placement; see open question 1)*
 - Auto step segmentation → slide-per-step content in OpenStage's slide model, with step text and alt text pre-filled from UI Automation
 - Auto zoom/pan; callouts, text, arrows, blur/redact
 - Demo / Practice / Assessment output with keyboard-operable hotspots and text-entry checks, through OpenStage's player and publisher
@@ -241,9 +256,9 @@ OpenStage already launches `publish.ts`, `narrate.py`, and `validate.py` as sepa
 
 A folder or zip of `project.json` (versioned schema) + media segments + `events.jsonl`, with caption, audio-description, transcript, alt-text, and language tracks defined in the schema from v0. No proprietary container.
 
-**Two different timelines; keep them separate.** OpenStage's format specification defines slide timing as basic object appear/disappear timing, explicitly not keyframe animation *(relayed; the spec has not been read for this brief)*. A Camtasia-style multi-track timeline needs more: tracks of video, audio, captions, callouts, and zoom/pan over time. The recommended boundary: **the media timeline belongs to OpenScreen's project format**, and OpenScreen renders it to a video asset or slide-per-step content that is handed to the single publisher. OpenStage's slide timing stays basic and its spec does not change. If the spec must change, that is OpenStage's decision.
+**Two different timelines; keep them separate.** OpenStage's format specification defines slide timing as basic object appear/disappear timing, explicitly not keyframe animation *(relayed; the spec has not been read for this brief)*. A Camtasia-style multi-track timeline needs more: tracks of video, audio, captions, callouts, and zoom/pan over time. The recommended boundary: **the media timeline belongs to OpenStage Capture's project format**, and OpenStage Capture renders it to a video asset or slide-per-step content that is handed to the single publisher. OpenStage's slide timing stays basic and its spec does not change. If the spec must change, that is OpenStage's decision.
 
-**Proposed crate layout** (to align with OpenStage's workspace conventions): `openscreen-capture` · `openscreen-project` · `openscreen-timeline` · `openscreen-render` · `openscreen-protocol` · `openscreen-a11y` (caption/alt-text model, checker) · `openscreen-cli`
+**Proposed crate layout** (to align with OpenStage's workspace conventions): `openstage-capture` (the engine) · `openstage-capture-project` · `openstage-capture-timeline` · `openstage-capture-render` · `openstage-capture-protocol` · `openstage-capture-a11y` (caption/alt-text model, checker) · `openstage-capture-cli`
 
 ### 9.4 Hard problems to design early
 
@@ -275,9 +290,9 @@ A folder or zip of `project.json` (versioned schema) + media segments + `events.
 |---|---|---|
 | **No real screen-reader testing of OpenStage exists yet** | The patterns this module reuses may not work as intended | Baseline NVDA/Narrator pass before building on them (6.3) |
 | **Multi-track timeline is hard to make keyboard- and screen-reader-operable** | Authors with disabilities locked out of the headline feature; ATAG Part A claim at risk | Structural model first; visual timeline is a view over it; does not ship until verified |
-| Timeline scope collides with OpenStage's basic slide-timing spec *(relayed)* | Pressure to change OpenStage's format | Keep the media timeline in OpenScreen's project format; render to assets (9.3) |
+| Timeline scope collides with OpenStage's basic slide-timing spec *(relayed)* | Pressure to change OpenStage's format | Keep the media timeline in OpenStage Capture's project format; render to assets (9.3) |
 | A GPL FFmpeg build enters via imported build configuration | Silently relicenses the combined work | CI guard on FFmpeg build flags before any integration (section 7) |
-| Existing project already uses the name OpenScreen | Confusion, search noise, possible trademark friction | Rename before the name goes public (section 13) |
+| The host name "OpenStage" is also an existing phone product line | Search noise; possible trademark friction | Trademark and search check before the name goes public (section 13) |
 | Cancel kills the process tree mid-recording | Lost or corrupt recordings | Crash-safe segments, append-only events, `recover` command |
 | Global hotkeys collide with screen-reader keys | Authors can't start or stop recording | Configurable hotkeys; test against NVDA, JAWS, Narrator defaults |
 | Live-region announcements may not fire while another app has focus | Screen-reader users don't know recording state | Audio cues from the capture process; verify with real AT |
@@ -295,7 +310,7 @@ A folder or zip of `project.json` (versioned schema) + media segments + `events.
 
 ## 12. Open questions
 
-*Resolved since v0.3: timeline wanted (owner's decision); single publisher; v1 publishes SCORM 1.2 only; narration delivery; no VPAT yet, accessibility statement instead.*
+*Resolved: name (OpenStage Capture); the Camtasia-style timeline is confirmed as wanted; single publisher; SCORM 1.2 only for v1; narration delivery; no VPAT yet, accessibility statement instead.*
 
 ### Facts to confirm in the OpenStage repo (not decisions)
 
@@ -310,31 +325,65 @@ These are answered by reading files, not by deciding. They go to whoever has the
 
 ### Decisions
 
-1. **Timeline sequencing.** This brief proposes the track/clip model and a keyboard-operable table view in the MVP, and the visual multi-track timeline in v1, gated on keyboard and screen-reader verification. Is that the right order, or is the timeline needed in the MVP?
-2. **Relationship to the existing OpenScreen project.** Is any code from it being reused, or only the name? If code, see section 7 (attribution in `NOTICE`, no imported build configuration). If only the name, rename (section 13).
-3. **The GPL narration components.** Which of the three options in section 7?
-4. **Institutional or legal requirement.** Ask the campus accessibility officer or ADA coordinator which compliance date applies and whether an ACR will be requested. Only the institution can answer this.
-5. **Test access.** Is a Mac and VoiceOver tester available, and is a JAWS license?
-6. **Speech-to-text.** Needed once authors record their own voice. Which local, permissive model and library, after an audit?
-7. **Codec position.** Comfortable relying on OS-provided H.264/AAC, or royalty-free codecs only?
-8. **Contribution model.** DCO or CLA, or OpenStage's existing policy?
+Each decision has a recommended default, so "go with your recommendation" is a valid answer.
+
+1. **When should the Camtasia-style timeline arrive?** You have confirmed you want it. The only question is whether it comes in Release 1 or Release 2.
+   - **Option A: in Release 1.** The first usable version includes the full multi-track timeline. *Good:* you get the headline feature from day one. *Not so good:* a longer wait before anything is usable, and the timeline is the hardest feature to make fully usable with a keyboard and screen reader, so building it first is the riskiest path.
+   - **Option B (recommended): in Release 2.** Release 1 has a simpler list-style editor: a table of clips you can trim, split, and reorder, built on the same foundations as the timeline. The full Camtasia-style timeline arrives in Release 2. *Good:* something usable sooner, and the timeline gets built properly on a proven base. *Not so good:* a longer wait for the timeline itself.
+   - If the timeline is what makes the product worth releasing at all, choose A and accept a longer first release.
+2. **Is any code being copied from the existing OpenScreen project (the Electron and TypeScript screen recorder), or was only the name borrowed?** Yes or no. *Assumed no.* If yes, we need to credit it in a `NOTICE` file and check what it brings with it before anything is copied (section 7).
+3. **The GPL helper tools for narration:** option 1, 2, or 3 in section 7. *Recommended: option 1 now, and look into option 2.* Not urgent; needed only before the first installer.
+4. **Compliance deadlines and reports.** Ask your campus accessibility officer or ADA coordinator which deadline applies and whether anyone will ask for a formal accessibility conformance report. Only your institution can answer this.
+5. **Testing help.** Is there anyone with a Mac who can test with VoiceOver (Apple's screen reader), and do you have access to JAWS (a paid Windows screen reader)? Without them, testing claims are limited to Windows with NVDA and Narrator.
+6. **Automatic captions from a recorded voice.** Needed once authors record their own voice rather than writing a script. It requires a speech-recognition tool that runs on the user's own computer under a relaxed license. *Not needed for Release 1, so no decision is needed yet.*
+7. **Video file formats.** The most common format (H.264/AAC, the kind most MP4 files use) involves patent licensing fees. Windows can produce it with its own built-in support, which shifts that to Microsoft. The alternative is patent-free formats such as WebM, which fewer devices play. *Recommended: use Windows's built-in support and also offer WebM, after a legal check.*
+8. **Rules for outside contributors.** When other people contribute code, do they sign an agreement (a CLA) or just certify with each contribution that they have the right to share it (a DCO)? If OpenStage already has a policy, this project follows it.
 
 ## 13. Naming
 
-**Recommend renaming.** "OpenScreen" is already the name of an existing, MIT-licensed open-source screen recorder (an Electron and TypeScript alternative to Screen Studio, per its documentation and directory listings; the repository itself was not examined for this brief, and a report that it uses FFmpeg was not confirmed). It also collides with the W3C **Open Screen Protocol**. Sharing the name would cause search confusion, possible attribution questions, and trademark friction, and would suggest a relationship to that project that may not exist.
+**Decided: OpenStage Capture** (by the owner). It replaces the working title "OpenScreen".
 
-The crate names `openscreen`, `open-screen`, and `openstage` were all unregistered on crates.io when checked (this does not cover GitHub, npm, or trademarks).
+**Why the working title was dropped.** "OpenScreen" is already the name of an existing, MIT-licensed open-source screen recorder (an Electron and TypeScript alternative to Screen Studio, per its documentation and directory listings; its repository was not examined for this brief) and of a W3C standard, the Open Screen Protocol. Sharing the name would have caused search confusion and attribution questions, and might have suggested a relationship to that project that does not exist.
 
-*Recommendation:* since this ships inside OpenStage, use an in-family name such as **OpenStage Capture** or **OpenStage Screen** (crate prefix `openstage-`). Keep "OpenScreen" only as an internal working title until then, and do a trademark and search check before any name goes public.
+**Checks done on the new name.** The crate names `openstage-capture` and `openstage_capture` are unregistered on crates.io. This does not cover GitHub, npm, or trademarks.
+
+**One thing to know about the host name.** "OpenStage" is also the name of an existing line of IP desk phones sold by Unify, under a trademark licensed from Siemens (per Unify's own wiki). That is a different industry from e-learning software, so confusion may be limited, but searches will be noisy and a trademark and search check is worth doing before the name goes public. This is not legal advice.
 
 ## 14. Proposed next steps
 
 1. **Baseline screen-reader pass** on OpenStage's existing editor patterns (NVDA and Narrator). It gates the whole approach.
 2. **Add the FFmpeg build-flag CI guard** (section 7) before any code or build configuration from another project is integrated.
 3. **Confirm the repo facts** in section 12 by reading the files, starting with `publish.ts` and the format specification.
-4. **Settle open questions 1 and 2** (timeline sequencing; relationship to the existing OpenScreen) and pick a name.
+4. **Settle open questions 1–3** (when the timeline arrives; any code reuse from the existing OpenScreen project; the GPL helper tools).
 5. **Write the process protocol v0** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe segments, `recover`.
 6. **Windows capture spike:** screen + mic + system audio + cursor events + UI Automation element info, written to the draft project format; then kill the process mid-recording and recover.
 7. **Render spike:** that project to MP4 (Media Foundation) and WebM with only allowed dependencies; confirm `cargo-deny` and the FFmpeg guard pass.
 8. **Write and publish the accessibility statement**, and decide the narration-environment plan before any installer ships.
 9. Convert this brief into a PRD with user stories, each carrying accessibility acceptance criteria.
+
+## 15. Plain-language glossary
+
+| Term | What it means |
+|---|---|
+| **Release 1 / MVP** | "Minimum viable product": the first version that does the whole job end to end and can be used for real. |
+| **Release 2 / v1** | The next, fuller version, with the more advanced features. |
+| **Capture engine** | The part that records the screen, sound, and mouse and keyboard activity. |
+| **Separate process** | A program that runs on its own, apart from OpenStage. If it crashes, OpenStage keeps running. |
+| **Crash-safe** | The recording is saved in small pieces as it goes, so a crash loses seconds, not the whole take. |
+| **Timeline** | The strip in editors like Camtasia where video, audio, captions, and effects are arranged over time in layers. |
+| **Track / clip** | A track is one layer (for example the screen video, or the narration). A clip is one piece on a track. |
+| **Project format** | The way a recording and all its edits are saved in files, so other tools can read them. |
+| **Publisher** | The part of OpenStage that turns a finished course into a package a learning system can run. |
+| **LMS** | Learning management system: the website where learners take courses (for example Canvas or Moodle). |
+| **SCORM 1.2** | The long-standing standard a course uses to report to an LMS that a learner finished. Widest compatibility. |
+| **xAPI** | A newer reporting standard that also needs a separate "learning record store" to be useful. |
+| **Screen reader** | Software that reads the screen aloud for blind and low-vision users (NVDA, JAWS, Narrator, VoiceOver). |
+| **WCAG 2.2 AA** | The international yardstick for accessible web content. This is the target for courses and recordings. |
+| **ATAG 2.0** | The matching yardstick for tools that create content. Part A: the tool itself is accessible. Part B: the tool helps authors make accessible content. |
+| **Accessibility statement** | An honest public description of what is targeted, what has been tested, and what is known to be incomplete. |
+| **ACR / VPAT** | A formal, tested report of how well a product meets accessibility standards. Needs real testing first. |
+| **Apache-2.0** | A relaxed open-source license: anyone may use, change, and share the code with few conditions. |
+| **GPL** | A "share-alike" license: anyone who hands out code that includes GPL parts must share their source and follow GPL's rules. |
+| **NOTICE file** | A file that credits other people's work that the project uses. |
+| **CI check** | An automatic test that runs every time the code changes, for example to catch a forbidden license. |
+| **Bundling / mirroring** | Bundling: packing a file inside the installer. Mirroring: hosting our own copy of a file for download. |

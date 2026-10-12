@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** v0.8 — Release 1 scope confirmed; OpenStage's publishing, timing, and reflow facts confirmed; ready to become a requirements document (PRD), with two items open (section 12)
+**Status:** v0.8 — Release 1 scope confirmed; OpenStage's publishing, timing, and reflow facts confirmed; ready to become a requirements document (PRD), with one decision open (section 12, item 5)
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage**, a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -312,7 +312,7 @@ A folder or zip of `project.json` (versioned schema) + media segments + `events.
 - A first-time user records a short tutorial and drops it, captioned, into a course in under 10 minutes.
 - **A user can complete record → trim → caption → insert with the keyboard alone, and separately with a screen reader alone (NVDA and Narrator), with no critical blockers found in manual testing on Windows.**
 - **A recording interrupted by a killed process recovers all but the last few seconds.**
-- **A recording-bearing course published as SCORM 1.2 reports completion correctly in a real LMS.**
+- **A recording-bearing course published as SCORM 1.2 reports completion correctly in a real LMS,** tested in both Brightspace and Moodle.
 - **A published course package contains no raw recordings, keystroke logs, or window logs** unless the author explicitly chose to include them.
 - **With the narration weights absent, projects still open, render, and publish; only audio generation is unavailable.**
 - **Zero serious or critical axe findings on generated HTML**, plus a passing manual keyboard and screen-reader review of the player (the reflow gap is a known, documented exception until OpenStage has responsive output).
@@ -328,7 +328,7 @@ A folder or zip of `project.json` (versioned schema) + media segments + `events.
 | **No real screen-reader testing of OpenStage exists yet** | The patterns this module reuses may not work as intended | Baseline NVDA/Narrator pass before building on them (6.3) |
 | **Multi-track timeline is hard to make keyboard- and screen-reader-operable** | Authors with disabilities locked out of the headline feature; ATAG Part A claim at risk | Structural model first; visual timeline is a view over it; does not ship until verified |
 | **One big first release** | A longer wait before anything ships; more to test at once; schedule risk | Build in the suggested order (section 8); freeze the Release 1 list; apply the speech-to-text fallback rule |
-| **OpenStage's SCORM 1.2 has never run in a real LMS** *(confirmed)* | Release 1's headline test could fail for reasons outside this module | Test OpenStage's current output in a real LMS (or a hosted SCORM test service) first, before building on it |
+| **OpenStage's SCORM 1.2 has never run in a real LMS** *(confirmed)* | Release 1's headline test could fail for reasons outside this module | Test OpenStage's current output in Brightspace and Moodle first (both available to the owner), before building on it |
 | Raw recordings or interaction logs shipped inside published packages | Learners receive keystrokes, window titles, and raw footage | Exclude by default; explicit opt-in; checked in the acceptance tests (section 10) |
 | Timeline scope collides with OpenStage's basic slide-timing spec *(confirmed)* | Pressure to change OpenStage's format | Keep the media timeline in OpenStage Capture's project format; render to assets (9.3) |
 | A GPL FFmpeg build enters via imported build configuration | Silently relicenses the combined work | CI guard on FFmpeg build flags before any integration (section 7) |
@@ -378,7 +378,7 @@ These are answered by reading files, not by deciding. They go to whoever can ope
    - **Option A (recommended): ship Release 1 with the gap, stated plainly** in the accessibility statement. *Good:* nothing waits, the statement is honest, and because the gap affects every OpenStage course (not just recordings) it can be fixed on its own schedule. *Not so good:* Release 1 cannot claim full WCAG 2.2 AA for published courses.
    - **Option B: make responsive output a requirement for Release 1.** *Good:* a stronger accessibility claim. *Not so good:* it is a large piece of OpenStage work outside this module, and it delays Release 1.
    - Either way the statement says so; the choice is about timing. If the accessibility claim matters more to you than the date, B is a legitimate choice.
-6. **A real LMS to test with.** Do you have access to a real LMS (the website where learners take courses), or a hosted SCORM test service? OpenStage's SCORM 1.2 output has only run against a stand-in, and Release 1's must-pass test needs a real one.
+6. ~~A real LMS to test with.~~ **Done:** the owner has access to Brightspace and Moodle, so OpenStage's SCORM 1.2 output and Release 1 can be tested in both. Use a test or sandbox course, not a live course with real learners.
 
 ### Revisit when…
 
@@ -407,7 +407,7 @@ These are answered by reading files, not by deciding. They go to whoever can ope
 1. ~~Confirm the Release 1 list.~~ **Done:** confirmed by the owner (section 8).
 2. **Baseline screen-reader pass** on OpenStage's existing editor patterns (NVDA and Narrator). It gates the whole approach.
 3. **Put the rule checks in place** from the first line of code: license checking and the FFmpeg build-flag guard (section 7).
-4. **Test OpenStage's current SCORM 1.2 output in a real LMS** (or a hosted SCORM test service). Release 1's must-pass test depends on it, and it has only been checked against a stand-in so far.
+4. **Test OpenStage's current SCORM 1.2 output in Brightspace and Moodle** (both available to the owner), using a test course rather than a live one. Release 1's must-pass test depends on it, and it has only been checked against a stand-in so far.
 5. **Confirm the remaining OpenStage facts** in section 12 (written WCAG bar, any FFmpeg configuration, sidecar fit).
 6. **Write the process protocol** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe segments, `recover`.
 7. **Windows capture spike:** screen + mic + system audio + cursor events + UI Automation element info, written to the draft project format; then kill the process mid-recording and recover.
@@ -429,7 +429,7 @@ These are answered by reading files, not by deciding. They go to whoever can ope
 | **Track / clip** | A track is one layer (for example the screen video, or the narration). A clip is one piece on a track. |
 | **Project format** | The way a recording and all its edits are saved in files, so other tools can read them. |
 | **Publisher** | The part of OpenStage that turns a finished course into a package a learning system can run. |
-| **LMS** | Learning management system: the website where learners take courses (for example Canvas or Moodle). |
+| **LMS** | Learning management system: the website where learners take courses (for example Brightspace or Moodle). |
 | **SCORM 1.2** | The long-standing standard a course uses to report to an LMS that a learner finished. Widest compatibility. |
 | **xAPI** | A newer reporting standard that also needs a separate "learning record store" to be useful. |
 | **Screen reader** | Software that reads the screen aloud for blind and low-vision users (NVDA, JAWS, Narrator, VoiceOver). |

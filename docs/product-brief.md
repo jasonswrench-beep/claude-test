@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** Draft v0.6 — for review
+**Status:** v0.7 — Release 1 scope confirmed by the owner; ready to become a requirements document (PRD)
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage**, a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -342,7 +342,7 @@ A folder or zip of `project.json` (versioned schema) + media segments + `events.
 
 ## 12. Open questions
 
-*Resolved: name (OpenStage Capture); the Camtasia-style timeline is in Release 1; one big first release; no code from the existing OpenScreen project; GPL helper tools: option 1; MP4 output; Windows only; no compliance deadline; no contribution rules; single publisher; SCORM 1.2 only; narration delivery; no VPAT yet, accessibility statement instead.*
+*Resolved: Release 1 scope (section 8) confirmed; name (OpenStage Capture); the Camtasia-style timeline is in Release 1; one big first release; no code from the existing OpenScreen project; GPL helper tools: option 1; MP4 output; Windows only; no compliance deadline; no contribution rules; single publisher; SCORM 1.2 only; narration delivery; no VPAT yet, accessibility statement instead.*
 
 ### Facts to confirm in the OpenStage repo (not decisions)
 
@@ -357,7 +357,7 @@ These are answered by reading files, not by deciding. They go to whoever has the
 
 ### Items still open
 
-1. **Confirm the Release 1 list.** Section 8 lists everything planned for the single big first release. Read it and say if anything should move to "after Release 1". *Default if you say nothing: it stands as written.*
+1. ~~Confirm the Release 1 list.~~ **Done:** confirmed by the owner. Section 8 stands as written.
 2. **Pick a speech-recognition tool.** This is research, not a decision for you: candidates will be checked for license and quality (the fallback rule in section 8 applies if none passes).
 3. **Legal check on MP4 patents** before anything ships. H.264 and AAC involve patent licensing; Windows's built-in encoder handles this on the platform side, but get it confirmed.
 4. **Trademark and search check on the names** ("OpenStage" and "OpenStage Capture") before they go public (section 13).
@@ -386,7 +386,7 @@ These are answered by reading files, not by deciding. They go to whoever has the
 
 ## 14. Proposed next steps
 
-1. **Confirm the Release 1 list** (section 8; open item 1).
+1. ~~Confirm the Release 1 list.~~ **Done:** confirmed by the owner (section 8).
 2. **Baseline screen-reader pass** on OpenStage's existing editor patterns (NVDA and Narrator). It gates the whole approach.
 3. **Put the rule checks in place** from the first line of code: license checking and the FFmpeg build-flag guard (section 7).
 4. **Confirm the repo facts** in section 12 by reading the files, starting with `publish.ts` and the format specification. This needs someone with access to the OpenStage repository.

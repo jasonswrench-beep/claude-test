@@ -21,8 +21,9 @@ use openstage_capture::{
 use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
-    compare_readback, run_audio_test, run_screen_test, run_video_test, system_platform, system_video_platform,
-    AudioTestOptions, Check, ScreenMedia, ScreenTestOptions, VideoTestOptions, SCREEN_FILE,
+    compare_readback, describe_devices, run_audio_test, run_screen_test, run_video_test, system_audio_platform,
+    system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check, DeviceKind, ScreenMedia,
+    ScreenTestOptions, VideoTestOptions, SCREEN_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -112,6 +113,13 @@ enum Cmd {
         #[arg(long)]
         plain: bool,
     },
+    /// List the microphones and sound outputs this computer has, and say which are the defaults.
+    /// Windows only.
+    AudioDevices {
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
     /// Try listening to the microphone and to what the computer is playing, for a few seconds, and
     /// save what was heard as sound files to listen to. Windows only. Does not make a project.
     AudioTest {
@@ -121,6 +129,12 @@ enum Cmd {
         /// The folder to save `mic.wav`, `system.wav`, and `both.wav` in (created if needed).
         #[arg(long, default_value = "audio-test-output")]
         out: PathBuf,
+        /// Which microphone: its number from `audio-devices`, part of its name, or `default`.
+        #[arg(long, default_value = "default")]
+        microphone: String,
+        /// Which sound output to listen to: its number from `audio-devices`, part of its name, or `default`.
+        #[arg(long, default_value = "default")]
+        output: String,
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
         plain: bool,
@@ -296,6 +310,24 @@ fn main() -> ExitCode {
                     });
                 }
             }
+            if let Ok(devices) = system_audio_platform().list_devices() {
+                for d in devices {
+                    let (id, what) = match d.kind {
+                        DeviceKind::Microphone => (format!("microphone:{}", d.number), "Microphone"),
+                        DeviceKind::SoundOutput => (format!("output:{}", d.number), "Sound output"),
+                    };
+                    sources.push(SourceInfo {
+                        id,
+                        available: false,
+                        note: format!(
+                            "{what} {}: {}{}. Found, but recording sound into a project is not built yet; audio-test can try it.",
+                            d.number,
+                            d.name,
+                            if d.is_default { ", the default" } else { "" }
+                        ),
+                    });
+                }
+            }
             sources.push(SourceInfo {
                 id: "windows".into(),
                 available: false,
@@ -441,11 +473,39 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Cmd::AudioTest { seconds, out, plain } => {
+        Cmd::AudioDevices { plain } => {
             if !plain {
                 hello();
             }
-            let opts = AudioTestOptions { seconds, out_dir: out };
+            let check = match system_audio_platform().list_devices() {
+                Ok(list) if !list.is_empty() => {
+                    Check { check: "audio-devices".into(), ok: true, message: describe_devices(&list) }
+                }
+                Ok(_) => Check {
+                    check: "audio-devices".into(),
+                    ok: false,
+                    message: "No microphone or sound output was found on this computer.".into(),
+                },
+                Err(e) => Check {
+                    check: "audio-devices".into(),
+                    ok: false,
+                    message: format!("Could not list the sound devices: {e}"),
+                },
+            };
+            let ok = check.ok;
+            emit_check(plain, check);
+            finish_checks(plain, ok)
+        }
+        Cmd::AudioTest { seconds, out, microphone, output, plain } => {
+            if !plain {
+                hello();
+            }
+            let opts = AudioTestOptions {
+                seconds,
+                out_dir: out,
+                microphone: AudioChoice::parse(&microphone),
+                output: AudioChoice::parse(&output),
+            };
             let all_fine = run_audio_test(&opts, &mut |c| emit_check(plain, c));
             finish_checks(plain, all_fine)
         }

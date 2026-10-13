@@ -42,12 +42,122 @@ pub trait AudioSource {
     fn failure(&self) -> Option<String>;
 }
 
+/// What kind of sound device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKind {
+    Microphone,
+    /// Something that plays sound (speakers, headphones, a monitor's speakers).
+    SoundOutput,
+}
+
+impl DeviceKind {
+    fn label(self) -> &'static str {
+        match self {
+            DeviceKind::Microphone => "microphone",
+            DeviceKind::SoundOutput => "sound output",
+        }
+    }
+}
+
+/// One microphone or sound output the computer has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioDevice {
+    pub kind: DeviceKind,
+    /// 1, 2, 3 ... within its kind, in the order Windows lists them.
+    pub number: u32,
+    /// What Windows calls it, such as "Speakers (Realtek(R) Audio)".
+    pub name: String,
+    /// Whether Windows uses it when nothing else is chosen.
+    pub is_default: bool,
+    /// What the platform needs to open exactly this device.
+    pub id: String,
+}
+
+/// Which device to use.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum AudioChoice {
+    /// The one Windows uses by default.
+    #[default]
+    Default,
+    /// A number from the list.
+    Number(u32),
+    /// Whichever one has this text in its name (capital letters do not matter).
+    NameContains(String),
+}
+
+impl AudioChoice {
+    /// From what a person typed: nothing or "default", a number from the list, or part of a name.
+    pub fn parse(text: &str) -> Self {
+        let text = text.trim();
+        if text.is_empty() || text.eq_ignore_ascii_case("default") {
+            return AudioChoice::Default;
+        }
+        match text.parse::<u32>() {
+            Ok(n) => AudioChoice::Number(n),
+            Err(_) => AudioChoice::NameContains(text.to_string()),
+        }
+    }
+}
+
+/// Pick the device a person asked for, or say why that cannot be done, in words.
+pub fn choose_device<'a>(
+    devices: &'a [AudioDevice],
+    kind: DeviceKind,
+    choice: &AudioChoice,
+) -> Result<&'a AudioDevice, String> {
+    let of_kind: Vec<&AudioDevice> = devices.iter().filter(|d| d.kind == kind).collect();
+    let label = kind.label();
+    let Some(first) = of_kind.first() else {
+        return Err(format!("No {label} was found on this computer."));
+    };
+    match choice {
+        AudioChoice::Default => Ok(of_kind.iter().find(|d| d.is_default).copied().unwrap_or(first)),
+        AudioChoice::Number(n) => of_kind.iter().find(|d| d.number == *n).copied().ok_or_else(|| {
+            format!(
+                "There is no {label} number {n}. Choose a number from 1 to {}, or leave it out to use the default.",
+                of_kind.len()
+            )
+        }),
+        AudioChoice::NameContains(text) => {
+            let wanted = text.to_lowercase();
+            let hits: Vec<&&AudioDevice> = of_kind.iter().filter(|d| d.name.to_lowercase().contains(&wanted)).collect();
+            match hits.as_slice() {
+                [] => Err(format!("No {label} has \"{text}\" in its name.")),
+                [one] => Ok(**one),
+                many => Err(format!(
+                    "More than one {label} has \"{text}\" in its name: {}. Use its number instead.",
+                    many.iter().map(|d| format!("{}, {}", d.number, d.name)).collect::<Vec<_>>().join("; ")
+                )),
+            }
+        }
+    }
+}
+
+/// The devices in words, with the default marked, for a person to choose from.
+pub fn describe_devices(devices: &[AudioDevice]) -> String {
+    let part = |kind: DeviceKind, title: &str| {
+        let list: Vec<String> = devices
+            .iter()
+            .filter(|d| d.kind == kind)
+            .map(|d| format!("{}, {}{}", d.number, d.name, if d.is_default { ", the default" } else { "" }))
+            .collect();
+        if list.is_empty() {
+            format!("{title}: none found.")
+        } else {
+            format!("{title}: {}.", list.join("; "))
+        }
+    };
+    format!("{} {}", part(DeviceKind::Microphone, "Microphones"), part(DeviceKind::SoundOutput, "Sound outputs"))
+}
+
 /// Everything the sound checks need from the operating system.
 pub trait AudioPlatform {
-    /// Start listening to the default microphone.
-    fn start_microphone(&self) -> Result<Box<dyn AudioSource>, ScreenError>;
-    /// Start listening to what the computer is playing (the default sound output).
-    fn start_system_audio(&self) -> Result<Box<dyn AudioSource>, ScreenError>;
+    /// Every microphone and sound output the computer has, numbered.
+    fn list_devices(&self) -> Result<Vec<AudioDevice>, ScreenError>;
+    /// Start listening to a microphone: the given one, or the default if `None`.
+    fn start_microphone(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError>;
+    /// Start listening to what a sound output is playing: the given one, or the default if `None`.
+    fn start_system_audio(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError>;
 }
 
 /// The real thing on Windows; on any other system a stand-in that says so.
@@ -67,10 +177,13 @@ struct NoAudio;
 
 #[cfg(not(windows))]
 impl AudioPlatform for NoAudio {
-    fn start_microphone(&self) -> Result<Box<dyn AudioSource>, ScreenError> {
+    fn list_devices(&self) -> Result<Vec<AudioDevice>, ScreenError> {
         Err(ScreenError::NotWindows)
     }
-    fn start_system_audio(&self) -> Result<Box<dyn AudioSource>, ScreenError> {
+    fn start_microphone(&self, _: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
+        Err(ScreenError::NotWindows)
+    }
+    fn start_system_audio(&self, _: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
         Err(ScreenError::NotWindows)
     }
 }
@@ -221,6 +334,10 @@ pub struct AudioTestOptions {
     pub seconds: f64,
     /// Where to save `mic.wav`, `system.wav`, and `both.wav`.
     pub out_dir: PathBuf,
+    /// Which microphone to listen to.
+    pub microphone: AudioChoice,
+    /// Which sound output to listen to.
+    pub output: AudioChoice,
 }
 
 /// One stream being listened to during the test.
@@ -228,6 +345,8 @@ struct Listening {
     label: &'static str,
     check: &'static str,
     advice: &'static str,
+    /// More to say if it hears nothing, such as which other devices there are.
+    hint: String,
     source: Box<dyn AudioSource>,
     aligner: AudioAligner,
     /// Everything the aligner handed out: what a recording would hold.
@@ -255,24 +374,77 @@ pub fn run_audio_test_with(
         report(c);
     };
 
+    // What devices there are, so the person can see which one is used and choose another.
+    let devices = match platform.list_devices() {
+        Ok(list) if list.is_empty() => {
+            say(check("audio-devices", false, "No microphone or sound output was found on this computer."));
+            Some(list)
+        }
+        Ok(list) => {
+            say(check("audio-devices", true, describe_devices(&list)));
+            Some(list)
+        }
+        Err(e) => {
+            say(check("audio-devices", false, format!("Could not list the sound devices: {e}")));
+            None
+        }
+    };
+    let pick = |kind: DeviceKind, choice: &AudioChoice| -> Result<Option<AudioDevice>, String> {
+        match &devices {
+            Some(list) => choose_device(list, kind, choice).map(|d| Some(d.clone())),
+            None if *choice == AudioChoice::Default => Ok(None),
+            None => Err("The sound devices could not be listed, so a particular one cannot be chosen.".to_string()),
+        }
+    };
+    let other_outputs = |chosen: &Option<AudioDevice>| -> String {
+        let Some(list) = &devices else { return String::new() };
+        let others: Vec<String> = list
+            .iter()
+            .filter(|d| d.kind == DeviceKind::SoundOutput && Some(&d.id) != chosen.as_ref().map(|c| &c.id))
+            .map(|d| format!("{}, {}", d.number, d.name))
+            .collect();
+        if others.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Windows listens to one sound output at a time, the one chosen above. If the sound was playing through another one, run the test again with that one chosen. The other outputs are: {}.",
+                others.join("; ")
+            )
+        }
+    };
+
     let mut streams: Vec<Listening> = Vec::new();
-    /// A stream to try: how to say it, its check name, advice if it is silent, and whether it started.
-    type Candidate = (&'static str, &'static str, &'static str, Result<Box<dyn AudioSource>, ScreenError>);
+    /// A stream to try: how to say it, its check name, advice and hint if it is silent, and whether it started.
+    type Candidate = (&'static str, &'static str, &'static str, String, Result<Box<dyn AudioSource>, ScreenError>);
+    let mic_pick = pick(DeviceKind::Microphone, &opts.microphone);
+    let out_pick = pick(DeviceKind::SoundOutput, &opts.output);
+    let out_hint = match &out_pick {
+        Ok(chosen) => other_outputs(chosen),
+        Err(_) => String::new(),
+    };
     let candidates: [Candidate; 2] = [
         (
             "microphone",
             "microphone",
             "Speak during the test, and check that the microphone is not muted. Windows can also hand over silence when its privacy setting blocks desktop programs: open Settings, Privacy and security, Microphone, and turn on \"Let desktop apps access your microphone\".",
-            platform.start_microphone(),
+            String::new(),
+            match mic_pick {
+                Ok(device) => platform.start_microphone(device.as_ref()),
+                Err(why) => Err(ScreenError::Failed(why)),
+            },
         ),
         (
             "system sound",
             "system-audio",
             "Play something on the computer during the test, such as a video or a sound.",
-            platform.start_system_audio(),
+            out_hint,
+            match out_pick {
+                Ok(device) => platform.start_system_audio(device.as_ref()),
+                Err(why) => Err(ScreenError::Failed(why)),
+            },
         ),
     ];
-    for (label, name, advice, started) in candidates {
+    for (label, name, advice, hint, started) in candidates {
         match started {
             Ok(source) => {
                 let info = source.info().clone();
@@ -288,6 +460,7 @@ pub fn run_audio_test_with(
                     label,
                     check: name,
                     advice,
+                    hint,
                     aligner: AudioAligner::new(info.sample_rate, info.channels),
                     source,
                     track: Vec::new(),
@@ -336,8 +509,8 @@ pub fn run_audio_test_with(
                 s.check,
                 false,
                 format!(
-                    "Heard nothing from the {} ({:.1} seconds of sound arrived, all silent). {}{loss}",
-                    s.label, heard_seconds, s.advice
+                    "Heard nothing from the {} ({:.1} seconds of sound arrived, all silent). {}{}{loss}",
+                    s.label, heard_seconds, s.advice, s.hint
                 ),
             ));
         } else {
@@ -605,6 +778,7 @@ mod tests {
         mic_fails: bool,
         system_fails: bool,
         lost: Rc<Cell<u64>>,
+        devices: Vec<AudioDevice>,
     }
 
     fn fake(level: i16, sends_silence: bool, lost: u64, name: &str) -> Box<dyn AudioSource> {
@@ -619,18 +793,36 @@ mod tests {
         })
     }
 
+    fn device(kind: DeviceKind, number: u32, name: &str, is_default: bool) -> AudioDevice {
+        AudioDevice { kind, number, name: name.into(), is_default, id: format!("{kind:?}-{number}") }
+    }
+
+    fn two_of_each() -> Vec<AudioDevice> {
+        vec![
+            device(DeviceKind::Microphone, 1, "Microphone (Webcam Audio)", true),
+            device(DeviceKind::Microphone, 2, "Headset Microphone (USB)", false),
+            device(DeviceKind::SoundOutput, 1, "Speakers (Realtek)", true),
+            device(DeviceKind::SoundOutput, 2, "Headphones (USB)", false),
+        ]
+    }
+
     impl AudioPlatform for FakeAudio {
-        fn start_microphone(&self) -> Result<Box<dyn AudioSource>, ScreenError> {
+        fn list_devices(&self) -> Result<Vec<AudioDevice>, ScreenError> {
+            Ok(self.devices.clone())
+        }
+        fn start_microphone(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
             if self.mic_fails {
                 return Err(ScreenError::Failed("no microphone is connected".into()));
             }
-            Ok(fake(self.mic_level, true, self.lost.get(), "Fake Microphone"))
+            let name = device.map(|d| d.name.as_str()).unwrap_or("The Windows default microphone");
+            Ok(fake(self.mic_level, true, self.lost.get(), name))
         }
-        fn start_system_audio(&self) -> Result<Box<dyn AudioSource>, ScreenError> {
+        fn start_system_audio(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
             if self.system_fails {
                 return Err(ScreenError::Failed("no sound output".into()));
             }
-            Ok(fake(self.system_level, false, 0, "Fake Speakers"))
+            let name = device.map(|d| d.name.as_str()).unwrap_or("The Windows default output");
+            Ok(fake(self.system_level, false, 0, name))
         }
     }
 
@@ -641,12 +833,18 @@ mod tests {
             mic_fails: false,
             system_fails: false,
             lost: Rc::new(Cell::new(0)),
+            devices: two_of_each(),
         }
     }
 
     fn run(p: &FakeAudio) -> (bool, Vec<Check>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let opts = AudioTestOptions { seconds: 1.0, out_dir: dir.path().join("a") };
+        let opts = AudioTestOptions {
+            seconds: 1.0,
+            out_dir: dir.path().join("a"),
+            microphone: AudioChoice::Default,
+            output: AudioChoice::Default,
+        };
         let mut checks = Vec::new();
         let ok = run_audio_test_with(p, &opts, &mut |c| checks.push(c));
         (ok, checks, dir)
@@ -663,11 +861,19 @@ mod tests {
         let names: Vec<_> = checks.iter().map(|c| c.check.as_str()).collect();
         assert_eq!(
             names,
-            ["microphone-start", "system-audio-start", "microphone", "system-audio", "audio-clock", "audio-saved"]
+            [
+                "audio-devices",
+                "microphone-start",
+                "system-audio-start",
+                "microphone",
+                "system-audio",
+                "audio-clock",
+                "audio-saved"
+            ]
         );
         assert!(find(&checks, "microphone-start")
             .message
-            .contains("Fake Microphone (48000 samples per second, 2 channels)"));
+            .contains("Microphone (Webcam Audio) (48000 samples per second, 2 channels)"));
         assert!(find(&checks, "microphone").message.contains("Heard the microphone"));
         for name in ["mic.wav", "system.wav", "both.wav"] {
             let bytes = fs::read(dir.path().join("a").join(name)).unwrap();
@@ -715,7 +921,7 @@ mod tests {
         p.system_fails = true;
         let (ok, checks, _dir) = run(&p);
         assert!(!ok);
-        assert_eq!(checks.len(), 2);
+        assert_eq!(checks.len(), 3, "the device list, then the two that could not start");
     }
 
     #[test]
@@ -726,11 +932,113 @@ mod tests {
         assert!(find(&checks, "microphone").message.contains("3 moments where some sound was lost"));
     }
 
+    // ---- choosing devices ----
+
+    #[test]
+    fn what_a_person_types_becomes_a_choice() {
+        assert_eq!(AudioChoice::parse(""), AudioChoice::Default);
+        assert_eq!(AudioChoice::parse("  Default "), AudioChoice::Default);
+        assert_eq!(AudioChoice::parse("2"), AudioChoice::Number(2));
+        assert_eq!(AudioChoice::parse("headset"), AudioChoice::NameContains("headset".into()));
+    }
+
+    #[test]
+    fn the_right_device_is_found_by_default_number_or_part_of_its_name() {
+        let d = two_of_each();
+        let name = |kind, choice| choose_device(&d, kind, &choice).map(|x| x.name.clone());
+        assert_eq!(name(DeviceKind::Microphone, AudioChoice::Default).unwrap(), "Microphone (Webcam Audio)");
+        assert_eq!(name(DeviceKind::SoundOutput, AudioChoice::Number(2)).unwrap(), "Headphones (USB)");
+        assert_eq!(
+            name(DeviceKind::Microphone, AudioChoice::NameContains("HEADSET".into())).unwrap(),
+            "Headset Microphone (USB)"
+        );
+    }
+
+    #[test]
+    fn a_choice_that_cannot_be_met_is_explained_in_words() {
+        let d = two_of_each();
+        let why = |kind, choice| choose_device(&d, kind, &choice).unwrap_err();
+        assert!(why(DeviceKind::Microphone, AudioChoice::Number(5))
+            .contains("There is no microphone number 5. Choose a number from 1 to 2"));
+        assert!(why(DeviceKind::SoundOutput, AudioChoice::NameContains("hdmi".into()))
+            .contains("No sound output has \"hdmi\" in its name"));
+        let many = why(DeviceKind::SoundOutput, AudioChoice::NameContains("(".into()));
+        assert!(
+            many.contains("More than one sound output") && many.contains("1, Speakers (Realtek); 2, Headphones (USB)"),
+            "{many}"
+        );
+        assert!(choose_device(&[], DeviceKind::Microphone, &AudioChoice::Default)
+            .unwrap_err()
+            .contains("No microphone was found"));
+    }
+
+    #[test]
+    fn the_list_of_devices_reads_as_sentences_with_the_default_marked() {
+        assert_eq!(
+            describe_devices(&two_of_each()),
+            "Microphones: 1, Microphone (Webcam Audio), the default; 2, Headset Microphone (USB). Sound outputs: 1, Speakers (Realtek), the default; 2, Headphones (USB)."
+        );
+        assert_eq!(describe_devices(&[]), "Microphones: none found. Sound outputs: none found.");
+    }
+
+    #[test]
+    fn the_test_uses_the_devices_chosen_and_says_which() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = AudioTestOptions {
+            seconds: 1.0,
+            out_dir: dir.path().join("a"),
+            microphone: AudioChoice::Number(2),
+            output: AudioChoice::NameContains("headphones".into()),
+        };
+        let mut checks = Vec::new();
+        let ok = run_audio_test_with(&platform(), &opts, &mut |c| checks.push(c));
+        assert!(ok, "{checks:?}");
+        assert!(find(&checks, "microphone-start").message.contains("Headset Microphone (USB)"));
+        assert!(find(&checks, "system-audio-start").message.contains("Headphones (USB)"));
+        assert!(find(&checks, "audio-devices")
+            .message
+            .contains("Microphones: 1, Microphone (Webcam Audio), the default"));
+    }
+
+    #[test]
+    fn a_choice_that_does_not_exist_stops_only_that_stream_with_a_clear_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = AudioTestOptions {
+            seconds: 1.0,
+            out_dir: dir.path().join("a"),
+            microphone: AudioChoice::Number(9),
+            output: AudioChoice::Default,
+        };
+        let mut checks = Vec::new();
+        let ok = run_audio_test_with(&platform(), &opts, &mut |c| checks.push(c));
+        assert!(!ok);
+        let c = find(&checks, "microphone-start");
+        assert!(!c.ok && c.message.contains("There is no microphone number 9"));
+        assert!(find(&checks, "system-audio").ok, "the other stream was still tested");
+    }
+
+    #[test]
+    fn a_silent_output_names_the_other_outputs_so_the_right_one_can_be_chosen() {
+        let mut p = platform();
+        p.system_level = 0;
+        let (ok, checks, _dir) = run(&p);
+        assert!(!ok);
+        let c = find(&checks, "system-audio");
+        assert!(c.message.contains("Heard nothing from the system sound"));
+        assert!(c.message.contains("The other outputs are: 2, Headphones (USB)"), "{}", c.message);
+        assert!(c.message.contains("run the test again with that one chosen"));
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn on_other_systems_the_sound_test_says_it_needs_windows() {
         let dir = tempfile::tempdir().unwrap();
-        let opts = AudioTestOptions { seconds: 1.0, out_dir: dir.path().join("a") };
+        let opts = AudioTestOptions {
+            seconds: 1.0,
+            out_dir: dir.path().join("a"),
+            microphone: AudioChoice::Default,
+            output: AudioChoice::Default,
+        };
         let mut checks = Vec::new();
         assert!(!run_audio_test(&opts, &mut |c| checks.push(c)));
         assert!(checks[0].message.contains("only works on Windows"));

@@ -23,8 +23,9 @@ mod win_audio;
 mod win_video;
 
 pub use audio::{
-    mix, peak, run_audio_test, run_audio_test_with, system_audio_platform, write_wav, AudioAligner, AudioInfo,
-    AudioPlatform, AudioSource, AudioTestOptions, CHANNELS as AUDIO_CHANNELS, SAMPLE_RATE as AUDIO_SAMPLE_RATE,
+    choose_device, describe_devices, mix, peak, run_audio_test, run_audio_test_with, system_audio_platform, write_wav,
+    AudioAligner, AudioChoice, AudioDevice, AudioInfo, AudioPlatform, AudioSource, AudioTestOptions, DeviceKind,
+    CHANNELS as AUDIO_CHANNELS, SAMPLE_RATE as AUDIO_SAMPLE_RATE,
 };
 pub use bmp::write_bmp;
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};

@@ -8,7 +8,7 @@
 //! Windows for 48,000 samples per second, stereo, 16 bits (Windows converts from whatever the
 //! device really uses), and collects whatever arrives. The recorder takes it from there.
 
-use crate::audio::{AudioInfo, AudioPlatform, AudioSource, CHANNELS, SAMPLE_RATE};
+use crate::audio::{AudioDevice, AudioInfo, AudioPlatform, AudioSource, DeviceKind, CHANNELS, SAMPLE_RATE};
 use crate::ScreenError;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::channel;
@@ -16,13 +16,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use windows::core::PWSTR;
+use windows::core::{HSTRING, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-    WAVEFORMATEX, WAVE_FORMAT_PCM,
+    DEVICE_STATE_ACTIVE, WAVEFORMATEX, WAVE_FORMAT_PCM,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
@@ -37,6 +37,13 @@ enum Kind {
 }
 
 impl Kind {
+    fn device_kind(self) -> DeviceKind {
+        match self {
+            Kind::Microphone => DeviceKind::Microphone,
+            Kind::SystemSound => DeviceKind::SoundOutput,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Kind::Microphone => "microphone",
@@ -48,12 +55,20 @@ impl Kind {
 pub struct WindowsAudio;
 
 impl AudioPlatform for WindowsAudio {
-    fn start_microphone(&self) -> Result<Box<dyn AudioSource>, ScreenError> {
-        start(Kind::Microphone)
+    fn list_devices(&self) -> Result<Vec<AudioDevice>, ScreenError> {
+        // Windows' components must be started on every thread that uses them.
+        crate::win::prepare();
+        let mut all = unsafe { list(Kind::Microphone) }.map_err(ScreenError::Failed)?;
+        all.extend(unsafe { list(Kind::SystemSound) }.map_err(ScreenError::Failed)?);
+        Ok(all)
     }
 
-    fn start_system_audio(&self) -> Result<Box<dyn AudioSource>, ScreenError> {
-        start(Kind::SystemSound)
+    fn start_microphone(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
+        start(Kind::Microphone, device.cloned())
+    }
+
+    fn start_system_audio(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
+        start(Kind::SystemSound, device.cloned())
     }
 }
 
@@ -98,7 +113,7 @@ impl Drop for Wasapi {
     }
 }
 
-fn start(kind: Kind) -> Result<Box<dyn AudioSource>, ScreenError> {
+fn start(kind: Kind, device: Option<AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
     let shared = Arc::new(Shared {
         samples: Mutex::new(Vec::new()),
         lost: AtomicU64::new(0),
@@ -107,7 +122,7 @@ fn start(kind: Kind) -> Result<Box<dyn AudioSource>, ScreenError> {
     });
     let (tx, rx) = channel::<Result<AudioInfo, String>>();
     let for_thread = Arc::clone(&shared);
-    let handle = thread::spawn(move || capture_thread(kind, for_thread, tx));
+    let handle = thread::spawn(move || capture_thread(kind, device, for_thread, tx));
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok(info)) => Ok(Box::new(Wasapi { info, shared, thread: Some(handle) })),
         Ok(Err(why)) => {
@@ -152,13 +167,53 @@ fn friendly_name(device: &IMMDevice) -> Option<String> {
     }
 }
 
+fn device_id(device: &IMMDevice) -> Option<String> {
+    unsafe {
+        let id = device.GetId().ok()?;
+        let text = id.to_string().ok();
+        CoTaskMemFree(Some(id.0 as *const _));
+        text
+    }
+}
+
+/// Every active device of one kind, numbered in the order Windows lists them, with the default marked.
+unsafe fn list(kind: Kind) -> Result<Vec<AudioDevice>, String> {
+    let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        .map_err(|e| describe(kind, "Windows' sound service could not be reached", &e))?;
+    let flow = match kind {
+        Kind::Microphone => eCapture,
+        Kind::SystemSound => eRender,
+    };
+    let default_id = enumerator.GetDefaultAudioEndpoint(flow, eConsole).ok().and_then(|d| device_id(&d));
+    let collection = enumerator
+        .EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)
+        .map_err(|e| describe(kind, &format!("Windows would not list its {}s", kind.label()), &e))?;
+    let count = collection.GetCount().map_err(|e| describe(kind, "Windows would not count its devices", &e))?;
+    let mut devices = Vec::new();
+    for i in 0..count {
+        let Ok(device) = collection.Item(i) else { continue };
+        let Some(id) = device_id(&device) else { continue };
+        let name = friendly_name(&device)
+            .map(|n| crate::plain_name(&n))
+            .unwrap_or_else(|| format!("{} {}", kind.label(), i + 1));
+        devices.push(AudioDevice {
+            kind: kind.device_kind(),
+            number: i + 1,
+            name,
+            is_default: default_id.as_deref() == Some(id.as_str()),
+            id,
+        });
+    }
+    Ok(devices)
+}
+
 struct Opened {
     client: IAudioClient,
     capture: IAudioCaptureClient,
     info: AudioInfo,
 }
 
-unsafe fn open(kind: Kind) -> Result<Opened, String> {
+unsafe fn open(kind: Kind, chosen: Option<AudioDevice>) -> Result<Opened, String> {
     let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
         .map_err(|e| describe(kind, "Windows' sound service could not be reached", &e))?;
     let (flow, extra_flags) = match kind {
@@ -166,10 +221,18 @@ unsafe fn open(kind: Kind) -> Result<Opened, String> {
         // "Loopback": listen to what a sound output is playing.
         Kind::SystemSound => (eRender, AUDCLNT_STREAMFLAGS_LOOPBACK),
     };
-    let device = enumerator
-        .GetDefaultAudioEndpoint(flow, eConsole)
-        .map_err(|e| describe(kind, &format!("Windows has no default {} to listen to", kind.label()), &e))?;
-    let name = friendly_name(&device).unwrap_or_else(|| format!("the default {}", kind.label()));
+    let device = match &chosen {
+        // A device the person chose: open exactly that one.
+        Some(c) => enumerator
+            .GetDevice(&HSTRING::from(c.id.as_str()))
+            .map_err(|e| describe(kind, &format!("Could not open {}", c.name), &e))?,
+        None => enumerator
+            .GetDefaultAudioEndpoint(flow, eConsole)
+            .map_err(|e| describe(kind, &format!("Windows has no default {} to listen to", kind.label()), &e))?,
+    };
+    let name = friendly_name(&device)
+        .map(|n| crate::plain_name(&n))
+        .unwrap_or_else(|| format!("the default {}", kind.label()));
     let client: IAudioClient =
         device.Activate(CLSCTX_ALL, None).map_err(|e| describe(kind, &format!("Could not open {name}"), &e))?;
 
@@ -199,10 +262,15 @@ unsafe fn open(kind: Kind) -> Result<Opened, String> {
     Ok(Opened { client, capture, info: AudioInfo { device: name, sample_rate: SAMPLE_RATE, channels: CHANNELS } })
 }
 
-fn capture_thread(kind: Kind, shared: Arc<Shared>, started: std::sync::mpsc::Sender<Result<AudioInfo, String>>) {
+fn capture_thread(
+    kind: Kind,
+    device: Option<AudioDevice>,
+    shared: Arc<Shared>,
+    started: std::sync::mpsc::Sender<Result<AudioInfo, String>>,
+) {
     // Windows' components must be started on every thread that uses them.
     crate::win::prepare();
-    let opened = match unsafe { open(kind) } {
+    let opened = match unsafe { open(kind, device) } {
         Ok(o) => o,
         Err(why) => {
             let _ = started.send(Err(why));
@@ -264,13 +332,14 @@ mod tests {
         let results = std::thread::spawn(|| {
             let audio = WindowsAudio;
             (
-                audio.start_microphone().err().map(|e| e.to_string()),
-                audio.start_system_audio().err().map(|e| e.to_string()),
+                audio.start_microphone(None).err().map(|e| e.to_string()),
+                audio.start_system_audio(None).err().map(|e| e.to_string()),
+                audio.list_devices().err().map(|e| e.to_string()),
             )
         })
         .join()
         .unwrap();
-        for text in [results.0, results.1].into_iter().flatten() {
+        for text in [results.0, results.1, results.2].into_iter().flatten() {
             assert!(!text.contains("CoInitialize has not been called"), "the thread was not prepared: {text}");
         }
     }

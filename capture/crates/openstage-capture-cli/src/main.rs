@@ -21,9 +21,10 @@ use openstage_capture::{
 use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
-    compare_readback, describe_devices, run_audio_test, run_find_output, run_screen_test, run_video_test,
-    system_audio_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check, DeviceKind,
-    FindOutputOptions, ScreenMedia, ScreenTestOptions, VideoTestOptions, SCREEN_FILE,
+    check_sound_files, compare_audio_readback, compare_readback, describe_devices, plan_sound, run_audio_test,
+    run_find_output, run_screen_test, run_video_test, system_audio_platform, system_platform, system_video_platform,
+    AudioChoice, AudioTestOptions, Check, DeviceKind, FindOutputOptions, ScreenMedia, ScreenTestOptions, SoundPlan,
+    VideoTestOptions, SCREEN_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -61,6 +62,15 @@ enum Cmd {
         /// With `--source screen`: video quality in kilobits per second.
         #[arg(long, default_value_t = 8000)]
         bitrate_kbps: u32,
+        /// With `--source screen`: which microphone to record. Its number from `audio-devices`, part of
+        /// its name, `default`, or `none` to record no microphone.
+        #[arg(long, default_value = "default")]
+        microphone: String,
+        /// With `--source screen`: which sound output's sound to record (the computer's own sound,
+        /// including a screen reader's speech). Its number from `audio-devices`, part of its name,
+        /// `default`, or `none` to record none of it.
+        #[arg(long, default_value = "default")]
+        output: String,
         /// Milliseconds of countdown before recording starts. 0 turns it off.
         #[arg(long, default_value_t = 3000)]
         countdown_ms: u64,
@@ -292,6 +302,16 @@ fn fatal(code: &str, message: String) {
     say(Event::Error { code: code.to_string(), message, fatal: true });
 }
 
+/// What a person typed for a sound device: nothing to record (`none`), or a choice to resolve later.
+fn sound_choice(text: &str) -> Option<AudioChoice> {
+    let t = text.trim();
+    if t.eq_ignore_ascii_case("none") || t.eq_ignore_ascii_case("off") {
+        None
+    } else {
+        Some(AudioChoice::parse(t))
+    }
+}
+
 fn path_text(path: &Path) -> String {
     path.display().to_string()
 }
@@ -322,18 +342,21 @@ fn main() -> ExitCode {
             }
             if let Ok(devices) = system_audio_platform().list_devices() {
                 for d in devices {
-                    let (id, what) = match d.kind {
-                        DeviceKind::Microphone => (format!("microphone:{}", d.number), "Microphone"),
-                        DeviceKind::SoundOutput => (format!("output:{}", d.number), "Sound output"),
+                    let (id, what, option) = match d.kind {
+                        DeviceKind::Microphone => (format!("microphone:{}", d.number), "Microphone", "--microphone"),
+                        DeviceKind::SoundOutput => {
+                            (format!("output:{}", d.number), "Sound output (records the sound it plays)", "--output")
+                        }
                     };
                     sources.push(SourceInfo {
                         id,
-                        available: false,
+                        available: true,
                         note: format!(
-                            "{what} {}: {}{}. Found, but recording sound into a project is not built yet; audio-test can try it.",
+                            "{what} {}: {}{}. Record it with: record --source screen {option} {}.",
                             d.number,
                             d.name,
-                            if d.is_default { ", the default" } else { "" }
+                            if d.is_default { ", the default" } else { "" },
+                            d.number
                         ),
                     });
                 }
@@ -341,8 +364,7 @@ fn main() -> ExitCode {
             sources.push(SourceInfo {
                 id: "windows".into(),
                 available: false,
-                note: "Recording a single window or a region, the microphone, system sound, and the webcam is not built yet."
-                    .into(),
+                note: "Recording a single window or a region, and the webcam, is not built yet.".into(),
             });
             say(Event::Probe { platform: std::env::consts::OS.to_string(), sources });
             ExitCode::SUCCESS
@@ -361,6 +383,8 @@ fn main() -> ExitCode {
             display,
             fps,
             bitrate_kbps,
+            microphone,
+            output,
             countdown_ms,
             segment_ms,
             flush_ms,
@@ -375,9 +399,29 @@ fn main() -> ExitCode {
             if !plain {
                 hello();
             }
+            let mut sound_plan = SoundPlan::default();
             let factory: Box<dyn MediaFactory> = match source.as_str() {
                 "synthetic" => Box::new(|| -> Box<dyn Source> { Box::new(SyntheticSource::new()) }),
-                "screen" if cfg!(windows) => Box::new(ScreenMedia::for_this_computer(display, fps, bitrate_kbps)),
+                "screen" if cfg!(windows) => {
+                    // Choose the sound devices now, so a wrong choice is explained before the countdown.
+                    let platform = system_audio_platform();
+                    sound_plan = match plan_sound(
+                        platform.as_ref(),
+                        sound_choice(&microphone).as_ref(),
+                        sound_choice(&output).as_ref(),
+                    ) {
+                        Ok(plan) => plan,
+                        Err(message) => {
+                            sink.emit(Event::Error { code: "source-unavailable".into(), message, fatal: true });
+                            return ExitCode::from(2);
+                        }
+                    };
+                    sink.emit(Event::Check { check: "sound-devices".into(), ok: true, message: sound_plan.describe() });
+                    Box::new(
+                        ScreenMedia::for_this_computer(display, fps, bitrate_kbps)
+                            .with_sound(platform, sound_plan.clone()),
+                    )
+                }
                 "screen" => {
                     sink.emit(Event::Error {
                         code: "source-unavailable".into(),
@@ -425,11 +469,23 @@ fn main() -> ExitCode {
                     // A real screen recording is read back through Windows, the way a player would.
                     let mut readback_ok = true;
                     if source == "screen" && outcome.ok && outcome.take > 0 {
-                        let file = take_dir(&project, outcome.take).join(SCREEN_FILE);
-                        let check: Check =
-                            compare_readback(system_video_platform().inspect_video(&file), outcome.duration_ms);
-                        readback_ok = check.ok;
-                        sink.emit(Event::Check { check: check.check, ok: check.ok, message: check.message });
+                        let dir = take_dir(&project, outcome.take);
+                        let inspection = system_video_platform().inspect_video(&dir.join(SCREEN_FILE));
+                        let mut findings: Vec<Check> = Vec::new();
+                        if !sound_plan.is_empty() {
+                            findings.push(compare_audio_readback(&inspection, outcome.duration_ms));
+                        }
+                        findings.insert(0, compare_readback(inspection, outcome.duration_ms));
+                        // The separate sound files are looked at too: what was really saved.
+                        let files = check_sound_files(&dir, &sound_plan, outcome.duration_ms);
+                        findings.extend(files.checks);
+                        for check in findings {
+                            readback_ok &= check.ok;
+                            sink.emit(Event::Check { check: check.check, ok: check.ok, message: check.message });
+                        }
+                        for (code, message) in files.warnings {
+                            sink.emit(Event::Warning { code, message });
+                        }
                     }
                     sink.emit(Event::Result {
                         ok: outcome.ok,

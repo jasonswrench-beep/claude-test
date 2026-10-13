@@ -63,7 +63,7 @@ The checks, in order: `audio-devices` (every microphone and sound output, number
 
 ### `audio-devices`
 
-Lists the microphones and sound outputs the computer has, numbered within their kind in the order Windows lists them, with the default marked, as one `check` named `audio-devices`. The numbers are what `--microphone` and `--output` take. Exit codes are as for `screen-test`. `probe` also lists them, as `microphone:N` and `output:N`, with `available` false until recording sound into a project is built.
+Lists the microphones and sound outputs the computer has, numbered within their kind in the order Windows lists them, with the default marked, as one `check` named `audio-devices`. The numbers are what `--microphone` and `--output` take. Exit codes are as for `screen-test`. `probe` also lists them, as `microphone:N` and `output:N`, with `available` true on Windows and a note giving the options to record them (`record --source screen --microphone N`).
 
 A name Windows will not give is not hidden: it is shown as `microphone 1 (its name could not be read: <reason>)` (or `sound output N`), so the numbering and the choice still work. Windows is asked for three different name properties before giving up.
 
@@ -125,10 +125,12 @@ The checks, in order: `crash-test` (the recording ran and was killed), `crash-sc
 | Option | Default | Meaning |
 |---|---|---|
 | `--project` | required | The capture project folder. Created if it does not exist. |
-| `--source` | `synthetic` | Where picture and sound come from: `screen` (your real screen, Windows only; picture only, no sound yet) or `synthetic` (a built-in test source that makes fake picture and sound and works anywhere). |
+| `--source` | `synthetic` | Where picture and sound come from: `screen` (your real screen, with sound, Windows only) or `synthetic` (a built-in test source that makes fake picture and sound and works anywhere). |
 | `--display` | 1 | With `--source screen`: which display (1 is the main display). |
 | `--fps` | 30 | With `--source screen`: pictures per second in the video. |
 | `--bitrate-kbps` | 8000 | With `--source screen`: video quality, in kilobits per second. |
+| `--microphone` | `default` | With `--source screen`: which microphone to record: its number from `audio-devices`, part of its name (capital letters do not matter), `default`, or `none` to record no microphone. |
+| `--output` | `default` | With `--source screen`: whose sound to record: the sound that a sound output is playing (the computer's own sound, including a screen reader's speech). Chosen the same way; `none` records none of it. Windows listens to one output at a time. |
 | `--plain` | off | Print sentences for a person instead of JSON events. No `hello` line is printed in this mode. |
 | `--demo-script` | none | Instead of reading commands on standard input, follow a script such as `pause@7000;resume@9000;marker:look here@11000;stop@13000`: commands with times in milliseconds from the start of the session (the countdown included). For demos and tests. |
 | `--countdown-ms` | 3000 | Countdown before recording starts. 0 turns it off. |
@@ -163,7 +165,7 @@ The recorder changed state, or is repeating its state (about once a second, so a
 `state` is one of `idle`, `countdown`, `recording`, `paused`, `stopping`, `stopped`, `error`. `elapsedMs` counts recording time only: **time spent paused is not counted**. During the countdown it is 0. `take` is the take number (starting at 1) that the report belongs to: during a countdown it is the take about to begin, and in `stopped` and `error` it is the take just finished. It is 0 only if the program stopped before any take began.
 
 ### `level`
-A sound level, sent while recording. `source` is `mic` or `system`. `peak` runs from 0.0 (silence) to 1.0 (loudest). `text` is a plain-language description for people who cannot see a meter: `silent`, `quiet`, `good`, `loud`, or `too loud`.
+A sound level, sent while recording about twice a second: the loudest moment since the last one. `source` is `mic` (the microphone) or `system` (the computer's own sound). `peak` runs from 0.0 (silence) to 1.0 (loudest). `text` is a plain-language description for people who cannot see a meter: `silent`, `quiet`, `good`, `loud`, or `too loud`.
 ```json
 {"event":"level","source":"mic","peak":0.5,"text":"good","elapsedMs":10}
 ```
@@ -173,7 +175,7 @@ Something worth knowing that did not stop the recording.
 ```json
 {"event":"warning","code":"not-paused","message":"Resume only works while paused."}
 ```
-Codes in use: `bad-command`, `not-recording`, `not-paused`, `recover-problem`.
+Codes in use: `bad-command`, `not-recording`, `not-paused`, `recover-problem`, and `track-silent` (a sound track of a finished recording holds only silence: sent after the recording, with advice that fits the microphone or the computer's sound).
 
 ### `error`
 Something went wrong. If `fatal` is true, the program is stopping, and it still tries to leave every file complete.
@@ -201,7 +203,7 @@ The author started again. The old take is **set aside, not erased**, and a new o
 ```
 
 ### `check`
-One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, `audio-test`, `find-output`, and `video-info`; and by `record --source screen`, which sends `video-readback` just before `result`: Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds. The setup checks of the recorder will use it too.
+One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, `audio-test`, `find-output`, and `video-info`; and by `record --source screen`, which sends `sound-devices` before the countdown (which microphone and which sound output were chosen, in words) and, just before `result`, the readback checks: `video-readback` (Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds), `audio-readback` (the same for the video's sound track, sent only when sound was recorded), and `microphone-file` and `system-sound-file` (the separate sound files hold sound as long as the recording, to within 0.3 seconds, and the loudest moment is said in words). The setup checks of the recorder will use it too.
 ```json
 {"event":"check","check":"screen-capture","ok":true,"message":"Received 151 pictures in 5.0 seconds from Display 1, 1920 by 1080, main display. Each picture is 1920 by 1080 pixels."}
 ```

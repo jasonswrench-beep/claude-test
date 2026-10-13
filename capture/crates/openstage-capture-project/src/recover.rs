@@ -6,6 +6,7 @@ use crate::fsutil::utc_now_iso;
 use crate::manifest::open_project;
 use crate::segment::{final_path, salvage_part, scan};
 use crate::take::{list_takes, take_dir, write_take, Take, TakeState};
+use crate::wav::{repair_wav, wav_info};
 use std::fs;
 use std::path::Path;
 
@@ -71,6 +72,29 @@ fn recover_mp4_take(project: &Path, mut take: Take, report: &mut RecoverReport) 
         repair_file(&path)?;
         usable_files += 1;
         longest_ms = longest_ms.max(scan.fragments as u64 * FRAGMENT_MS);
+    }
+
+    // The sound tracks beside the video: cut each back to a whole sound frame and correct its header.
+    for media in take.media.clone().iter().filter(|m| m.container == "wav") {
+        let path = dir.join(&media.file);
+        if !path.is_file() {
+            report.problems.push(format!(
+                "Take {}: the sound file {} was never created, so there was nothing to recover from it.",
+                take.id, media.file
+            ));
+            continue;
+        }
+        match repair_wav(&path).and_then(|_| wav_info(&path)) {
+            Ok(info) => {
+                if info.frames == 0 {
+                    report.problems.push(format!("Take {}: the sound file {} holds no sound.", take.id, media.file));
+                }
+            }
+            Err(e) => report.problems.push(format!(
+                "Take {}: the sound file {} could not be repaired and was left as it is ({e})",
+                take.id, media.file
+            )),
+        }
     }
 
     let log = dir.join("events.jsonl");
@@ -323,6 +347,46 @@ mod tests {
         let report = recover_project(dir.path()).unwrap();
         assert!(report.problems.iter().any(|p| p.contains("no usable start")));
         assert_eq!(fs::read(&path).unwrap(), vec![7u8; 40], "nothing is ever erased");
+    }
+
+    #[test]
+    fn the_sound_tracks_of_a_crashed_take_are_repaired_beside_the_video() {
+        use crate::take::{create_take_with, MediaFile};
+        let dir = tempfile::tempdir().unwrap();
+        create_project(dir.path(), "t", "en-US").unwrap();
+        let media = vec![
+            MediaFile { file: "screen.mp4".into(), kind: "screen".into(), container: "fragmented-mp4".into() },
+            MediaFile { file: "mic.wav".into(), kind: "microphone".into(), container: "wav".into() },
+            MediaFile { file: "system.wav".into(), kind: "system-audio".into(), container: "wav".into() },
+        ];
+        create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media).unwrap();
+        let take = take_dir(dir.path(), 1);
+        let mut good = boxed("ftyp", 16);
+        good.extend(boxed("moov", 300));
+        good.extend(boxed("moof", 60));
+        good.extend(boxed("mdat", 4000));
+        fs::write(take.join("screen.mp4"), &good).unwrap();
+        // The microphone track: header still says empty, 500 whole frames and half a frame after it.
+        let mut w = crate::wav::WavWriter::create(&take.join("mic.wav"), 48_000, 2).unwrap();
+        w.append(&[3i16; 1000]).unwrap();
+        w.finish().unwrap();
+        let mut raw = fs::read(take.join("mic.wav")).unwrap();
+        raw[40..44].copy_from_slice(&0u32.to_le_bytes());
+        raw.extend_from_slice(&[1, 2]);
+        fs::write(take.join("mic.wav"), &raw).unwrap();
+        // The computer's sound track was never created.
+
+        let report = recover_project(dir.path()).unwrap();
+        assert_eq!(report.recovered.len(), 1);
+        let info = crate::wav::wav_info(&take.join("mic.wav")).unwrap();
+        assert_eq!(info.frames, 500, "the half frame is cut, the whole frames are kept");
+        let fixed = fs::read(take.join("mic.wav")).unwrap();
+        assert_eq!(u32::from_le_bytes([fixed[40], fixed[41], fixed[42], fixed[43]]), 2000, "the header is corrected");
+        assert!(
+            report.problems.iter().any(|p| p.contains("system.wav") && p.contains("never created")),
+            "{:?}",
+            report.problems
+        );
     }
 
     #[test]

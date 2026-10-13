@@ -1,8 +1,8 @@
 # OpenStage Capture: Project Format
 
-**Status:** v0.2 (matches the code in `capture/crates/openstage-capture-project`)
+**Status:** v0.3 (matches the code in `capture/crates/openstage-capture-project`)
 **Format name:** `openstage-capture-project`
-**Schema version:** `0.2.0` (projects at `0.1.x` still open unchanged: see section 7)
+**Schema version:** `0.2.1` (projects at `0.1.x` and `0.2.0` still open unchanged: see section 7)
 
 A recording lives in its own folder, named `something.capture`, **beside** the course (the `.osproj`), never inside it. This matters: OpenStage's publisher zips the project into `source/`, and raw footage and the interaction log (which can contain private information) must never ship to learners. Only the exported, edited video becomes part of the course.
 
@@ -15,7 +15,9 @@ lesson.capture/
     take-001/                   a real screen recording
       take.json                 the only record of this take's state; lists its media files
       events.jsonl              what the author did while recording (append-only)
-      screen.mp4                the picture, as one crash-safe fragmented MP4
+      screen.mp4                the picture and the mixed sound, as one crash-safe fragmented MP4
+      mic.wav                   the microphone alone (when a microphone was recorded)
+      system.wav                the computer's own sound alone (when it was recorded)
     take-002/                   a take of the built-in test source (used by the tests)
       take.json
       events.jsonl
@@ -25,7 +27,7 @@ lesson.capture/
         seg-000003.part         a piece still being written (or left by a crash)
 ```
 
-A take holds its media in **one of two ways**. A real screen recording is one `screen.mp4` file written by Windows' own video tools. The built-in test source (which makes fake picture and sound so the recorder can be tested anywhere) uses the segment files described in section 4. `take.json` says which: a take with a `media` list is a file take; a take without one is a segment take.
+A take holds its media in **one of two ways**. A real screen recording is one `screen.mp4` file written by Windows' own video tools, plus one separate `.wav` sound file for each sound that was recorded. The built-in test source (which makes fake picture and sound so the recorder can be tested anywhere) uses the segment files described in section 4. `take.json` says which: a take with a `media` list is a file take; a take without one is a segment take.
 
 ## 2. The manifest: `capture.json`
 
@@ -73,9 +75,11 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
   "flushMs": 2000,
   "durationMs": 12000,
   "maxLossMs": null,
-  "segments": 1,
+  "segments": 3,
   "media": [
-    { "file": "screen.mp4", "kind": "screen", "container": "fragmented-mp4" }
+    { "file": "screen.mp4", "kind": "screen", "container": "fragmented-mp4" },
+    { "file": "mic.wav", "kind": "microphone", "container": "wav" },
+    { "file": "system.wav", "kind": "system-audio", "container": "wav" }
   ]
 }
 ```
@@ -93,7 +97,7 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
 | `flushMs` | The most recording a crash can cost with this kind of media. Segment takes force data to disk this often (1000 by default). For `fragmented-mp4` takes it is 2000: Windows closes a fragment about every second, and a measured crash on Windows 11 lost 1.1 seconds. |
 | `durationMs` | How long the recording ran, not counting time spent paused. For a recovered file take it is an **estimate** (about one second per whole fragment); the exact length is read when the video is opened. |
 | `segments` | How many media files the take holds (segment files, or video files). |
-| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` (`screen`) and a `container` (`fragmented-mp4`: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment). Absent in older projects. |
+| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4). Absent in older projects. A reader ignores kinds it does not know. |
 
 `take.json` is written atomically (to a temporary file, then renamed), so a crash never leaves half a file. It is the **only** place a take's state is recorded. Take folders are numbered `take-001`, `take-002`, and so on; numbers are never reused.
 
@@ -103,7 +107,20 @@ A real screen recording is one file, `screen.mp4`, written by Windows' Media Fou
 
 The picture is H.264 at a steady 30 pictures per second (the newest picture of the screen repeats while the screen does not change). The video's clock is **recording time**: pausing stops it, so the video has no gap where a pause was.
 
-There is no sound yet; microphone and system sound will be added to the same file.
+### Sound
+
+Sound is recorded as 16-bit stereo at 48,000 samples per second and is stored **twice**:
+
+1. **Mixed, inside `screen.mp4`**, as one AAC sound track (128 kilobits per second) beside the picture. This is what every player plays. It is the microphone and the computer's sound added together.
+2. **Separately, as WAV files**: `mic.wav` (the microphone alone) and `system.wav` (the computer's own sound alone, including a screen reader's speech). The editor needs them apart, for example to remove an echo when the microphone also heard the speakers. A take lists a WAV file only if that sound was recorded.
+
+Every sound track is as long as the recording, to within a few hundredths of a second. The recording clock stands still while paused, so sound heard during a pause is thrown away, and so is any sound heard while the recorder was still starting up. If the computer plays nothing, Windows sends no sound at all for that time; the recorder fills the gap with silence so the track keeps its length.
+
+A WAV file normally records its length only when it is finished, so one cut off by a crash would claim to be empty. These are written differently: about once a second the recorder writes the sound, forces it to disk, and only then updates the length in the file's header. So the header is never ahead of the sound, and a crash costs at most about a second of it. `recover` also cuts a half-written sound frame off the end and corrects the header, and leaves a file that is already fine byte for byte as it was.
+
+A WAV file counts its length in 32 bits, which is a little under 4 GiB: about 6 hours of this sound. The recorder stops with a plain message rather than writing a file it could not describe.
+
+If a sound device stops in the middle of a recording (a microphone is unplugged, a headset is switched), the take ends with a plain message and everything recorded until then is kept.
 
 ### Recovery
 
@@ -112,8 +129,9 @@ There is no sound yet; microphone and system sound will be added to the same fil
 1. Look at the outermost boxes of the file. Find the last safe point: after the setup box, or after a whole fragment (`moof` and its complete `mdat`).
 2. Cut the file back to that point. Only an unfinished last fragment, or a few stray bytes, are ever removed. A file that is already clean is left alone.
 3. A file that does not exist is reported. A file with no usable start (not even the setup box) is **left exactly as it is** and reported.
-4. Trim a half-written final line from `events.jsonl`.
-5. Write `take.json` with state `recovered`, an estimated `durationMs`, and `maxLossMs`.
+4. Repair each `wav` sound file the take lists: cut a half-written sound frame off the end and correct the header's lengths. A file that is already fine is left byte for byte as it was; one that is missing or not a sound file this program wrote is reported and left alone.
+5. Trim a half-written final line from `events.jsonl`.
+6. Write `take.json` with state `recovered`, an estimated `durationMs`, and `maxLossMs`.
 
 It is safe to run again. In a real test on Windows 11 the recording ran 8.1 seconds, the program was killed without warning, and 7.0 seconds survived and played without any repair.
 
@@ -179,12 +197,12 @@ Interaction capture is **off unless the author turns it on** (this is a requirem
 
 ## 7. Versions
 
-`0.2.0` only **adds** one optional field (`media` in `take.json`). Projects at `0.1.x` open unchanged, so no migration is needed; the version is bumped so that a program that does not know about `media` can tell. A project with any other version is refused with a plain message.
+`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. Projects at `0.1.x` and `0.2.0` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
 
 ## 8. Rules this format keeps
 
 - Nothing the author recorded is erased by the software. Start again sets a take aside.
-- A crash costs at most `flushMs` of recording (1 second for segment takes, 2 for screen recordings).
+- A crash costs at most `flushMs` of recording (1 second for segment takes, 2 for screen recordings, sound files included).
 - A newer, unknown schema is refused with a plain message, never half-read.
 - Raw footage and the interaction log stay out of published courses.
 - Narration is text. Nothing in this format stores narration as audio only.

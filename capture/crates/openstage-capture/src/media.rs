@@ -24,6 +24,12 @@ pub trait TakeMedia {
     fn flush(&mut self) -> Result<(), SessionError>;
     /// Current sound levels, from 0.0 (silence) to 1.0, by name. Empty if nothing is being listened to.
     fn levels(&self, media_ms: u64) -> Vec<(&'static str, f32)>;
+    /// Recording has just been paused. Sources that keep running (a microphone does) should stop
+    /// keeping what they hear, because recording time stands still and that sound has no place in it.
+    fn paused(&mut self) {}
+    /// Recording is about to carry on after a pause. Anything heard during the pause must be thrown
+    /// away, so that the sound and the picture carry on from the same moment.
+    fn resumed(&mut self) {}
     /// Make every file complete. Returns how many media files the take holds.
     fn finish(self: Box<Self>, media_ms: u64) -> Result<u32, SessionError>;
 }

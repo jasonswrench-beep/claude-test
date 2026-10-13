@@ -30,8 +30,22 @@ pub trait VideoSink {
     }
     /// Add one picture, shown from `pts_100ns` for `duration_100ns` (in units of 100 nanoseconds).
     fn write(&mut self, frame: &Frame, pts_100ns: i64, duration_100ns: i64) -> Result<(), ScreenError>;
+    /// Add sound to the file's sound track: interleaved 16-bit samples that start at `pts_100ns`.
+    /// Only files made with [`SinkSpec::audio`] have a sound track.
+    fn write_audio(&mut self, _samples: &[i16], _pts_100ns: i64) -> Result<(), ScreenError> {
+        Err(ScreenError::Failed("This video file has no sound track.".into()))
+    }
     /// Complete the file so that it can be played.
     fn finish(self: Box<Self>) -> Result<(), ScreenError>;
+}
+
+/// A sound track for the video file: AAC, the sound that every player plays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioSpec {
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// Quality in kilobits per second. Windows' AAC encoder accepts 96, 128, 160, and 192 for stereo.
+    pub bitrate_kbps: u32,
 }
 
 /// How to make the video file.
@@ -45,12 +59,24 @@ pub struct SinkSpec {
     /// Write a fragmented MP4: a setup box and then many short, self-contained fragments, so that a
     /// file cut off by a crash still plays up to the last whole fragment.
     pub fragmented: bool,
+    /// Give the file a sound track too (its sound is added with [`VideoSink::write_audio`]).
+    pub audio: Option<AudioSpec>,
 }
 
 /// What Windows finds when it reads a video file back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoInspection {
     pub frames: u64,
+    pub duration_ms: u64,
+    /// The sound track, if the file has one.
+    pub audio: Option<AudioInspection>,
+}
+
+/// What Windows finds when it reads a file's sound track back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioInspection {
+    /// Pieces of sound (each a fraction of a second of compressed sound).
+    pub samples: u64,
     pub duration_ms: u64,
 }
 
@@ -332,6 +358,7 @@ pub fn run_video_test_with(
         fps: opts.fps,
         bitrate_kbps: opts.bitrate_kbps,
         fragmented: opts.fragmented,
+        audio: None,
     };
     let mut sink = match video.create_sink(&spec) {
         Ok(s) => s,
@@ -512,6 +539,36 @@ pub fn compare_readback(read: Result<VideoInspection, ScreenError>, recorded_ms:
             ),
         ),
         Err(e) => check("video-readback", false, format!("Windows could not read the saved video back: {e}")),
+    }
+}
+
+/// Compare the sound track Windows reads back from a saved recording with how long the recording ran.
+/// Reports only on the sound; [`compare_readback`] reports on the picture. A recording made with
+/// sound must have a sound track about as long as the recording (up to 0.7 seconds apart is fine).
+pub fn compare_audio_readback(read: &Result<VideoInspection, ScreenError>, recorded_ms: u64) -> Check {
+    match read {
+        Ok(VideoInspection { audio: Some(a), .. }) if a.samples > 0 && a.duration_ms.abs_diff(recorded_ms) <= 700 => {
+            check(
+                "audio-readback",
+                true,
+                format!(
+                    "Windows read the sound track of the saved video back: {:.1} seconds long. The recording time was {:.1} seconds.",
+                    a.duration_ms as f64 / 1000.0,
+                    recorded_ms as f64 / 1000.0
+                ),
+            )
+        }
+        Ok(VideoInspection { audio: Some(a), .. }) => check(
+            "audio-readback",
+            false,
+            format!(
+                "The sound track of the saved video is {:.1} seconds long, but the recording time was {:.1} seconds. Sound and picture would not stay together.",
+                a.duration_ms as f64 / 1000.0,
+                recorded_ms as f64 / 1000.0
+            ),
+        ),
+        Ok(_) => check("audio-readback", false, "The saved video has no sound track, although sound was being recorded."),
+        Err(e) => check("audio-readback", false, format!("Windows could not read the sound track back: {e}")),
     }
 }
 
@@ -860,7 +917,7 @@ mod tests {
             match &self.inspect {
                 Inspect::WhatWasWritten => {
                     let frames = self.written.borrow().beats.len() as u64;
-                    Ok(VideoInspection { frames, duration_ms: frames * 1000 / 30 })
+                    Ok(VideoInspection { frames, duration_ms: frames * 1000 / 30, audio: None })
                 }
                 Inspect::Fragments { tolerant } => {
                     let scan = scan_file(path).map_err(|e| ScreenError::Failed(e.to_string()))?;
@@ -870,6 +927,7 @@ mod tests {
                     Ok(VideoInspection {
                         frames: scan.fragments as u64 * 30,
                         duration_ms: scan.fragments as u64 * 1000,
+                        audio: None,
                     })
                 }
                 Inspect::Nothing => Err(ScreenError::Failed("not a video file".into())),
@@ -1063,7 +1121,7 @@ mod tests {
 
     #[test]
     fn a_saved_video_that_matches_the_recording_time_passes_and_a_mismatch_does_not() {
-        let info = |frames, duration_ms| Ok(VideoInspection { frames, duration_ms });
+        let info = |frames, duration_ms| Ok(VideoInspection { frames, duration_ms, audio: None });
         let c = compare_readback(info(222, 7400), 7480);
         assert!(
             c.ok && c.message.contains("222 pictures, 7.4 seconds long")

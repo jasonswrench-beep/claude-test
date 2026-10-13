@@ -82,6 +82,8 @@ struct Shared {
     lost: AtomicU64,
     failure: Mutex<Option<String>>,
     stop: AtomicBool,
+    /// While set, what is heard is thrown away (recording is paused).
+    paused: AtomicBool,
 }
 
 struct Wasapi {
@@ -106,6 +108,10 @@ impl AudioSource for Wasapi {
     fn failure(&self) -> Option<String> {
         self.shared.failure.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
+
+    fn set_paused(&mut self, paused: bool) {
+        self.shared.paused.store(paused, Ordering::Relaxed);
+    }
 }
 
 impl Drop for Wasapi {
@@ -123,6 +129,7 @@ fn start(kind: Kind, device: Option<AudioDevice>) -> Result<Box<dyn AudioSource>
         lost: AtomicU64::new(0),
         failure: Mutex::new(None),
         stop: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
     });
     let (tx, rx) = channel::<Result<AudioInfo, String>>();
     let for_thread = Arc::clone(&shared);
@@ -346,7 +353,10 @@ fn capture_thread(
             if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
                 shared.lost.fetch_add(1, Ordering::Relaxed);
             }
-            shared.samples.lock().unwrap_or_else(|p| p.into_inner()).extend_from_slice(&block);
+            // Sound heard while paused is not part of the recording, so it is not kept.
+            if !shared.paused.load(Ordering::Relaxed) {
+                shared.samples.lock().unwrap_or_else(|p| p.into_inner()).extend_from_slice(&block);
+            }
             let _ = unsafe { opened.capture.ReleaseBuffer(frames) };
         }
     }

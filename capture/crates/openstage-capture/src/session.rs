@@ -266,6 +266,9 @@ impl<'a> Runner<'a> {
             Command::Pause => {
                 if self.state == State::Recording {
                     self.flush_now()?;
+                    if let Some(media) = self.run.as_mut().and_then(|r| r.media.as_mut()) {
+                        media.paused();
+                    }
                     self.state = State::Paused;
                     self.emit_state();
                 } else {
@@ -274,6 +277,9 @@ impl<'a> Runner<'a> {
             }
             Command::Resume => {
                 if self.state == State::Paused {
+                    if let Some(media) = self.run.as_mut().and_then(|r| r.media.as_mut()) {
+                        media.resumed();
+                    }
                     self.state = State::Recording;
                     self.emit_state();
                 } else {
@@ -647,6 +653,66 @@ mod tests {
         let seen = states(&sink);
         assert!(seen.contains(&State::Paused));
         assert_eq!(seen.last(), Some(&State::Stopped));
+    }
+
+    #[test]
+    fn the_media_is_told_when_recording_pauses_and_resumes() {
+        use crate::media::{MediaFactory, TakeMedia};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct Noting(Rc<RefCell<Vec<&'static str>>>);
+        impl TakeMedia for Noting {
+            fn pump(&mut self, _: u64) -> Result<(), SessionError> {
+                let mut calls = self.0.borrow_mut();
+                if calls.last() != Some(&"pump") {
+                    calls.push("pump");
+                }
+                Ok(())
+            }
+            fn flush(&mut self) -> Result<(), SessionError> {
+                Ok(())
+            }
+            fn levels(&self, _: u64) -> Vec<(&'static str, f32)> {
+                Vec::new()
+            }
+            fn paused(&mut self) {
+                self.0.borrow_mut().push("paused");
+            }
+            fn resumed(&mut self) {
+                self.0.borrow_mut().push("resumed");
+            }
+            fn finish(self: Box<Self>, _: u64) -> Result<u32, SessionError> {
+                Ok(1)
+            }
+        }
+        struct Factory(Rc<RefCell<Vec<&'static str>>>);
+        impl MediaFactory for Factory {
+            fn source_id(&self) -> String {
+                "noting".into()
+            }
+            fn begin(&self, _: &std::path::Path, _: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError> {
+                Ok(Box::new(Noting(Rc::clone(&self.0))))
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut input = ScriptedInput::new(vec![
+            (1000, Input::Command(Command::Pause)),
+            (2000, Input::Command(Command::Resume)),
+            (3000, Input::Command(Command::Stop)),
+        ]);
+        let out =
+            run_session(&cfg, &Factory(Rc::clone(&calls)), &mut input, &mut VecSink::default(), &ManualClock::new())
+                .unwrap();
+        assert!(out.ok);
+        assert_eq!(
+            *calls.borrow(),
+            vec!["pump", "paused", "resumed", "pump"],
+            "it is told about the pause once, and about the resume once, in order"
+        );
     }
 
     #[test]

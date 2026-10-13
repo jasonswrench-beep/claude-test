@@ -66,6 +66,8 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 - Level indicators have a text equivalent (for example "Microphone level: good"), not only a moving bar.
 - If a device is missing or in use, a plain message says so, and I can choose to record without it.
 - System audio includes screen reader speech when it is playing, so authors can demonstrate assistive technology workflows.
+- The microphone and the computer's own sound are always kept as **separate tracks** as well as mixed, so an echo (the microphone hearing the speakers) can be fixed in the editor afterwards.
+- When the microphone is hearing the computer's sound, a setup check says so in plain words and suggests headphones, before the author records a whole lesson that way. (Seen on the owner's computer on 2026-10-13: with speakers on, the mixed test file had an echo.)
 
 **Accessibility checks**
 - Device pickers are labeled native controls.

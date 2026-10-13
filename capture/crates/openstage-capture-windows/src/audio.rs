@@ -40,6 +40,10 @@ pub trait AudioSource {
     fn discontinuities(&self) -> u64;
     /// What stopped the capture, if something did, in plain words.
     fn failure(&self) -> Option<String>;
+    /// While paused, the source keeps listening (a microphone cannot be paused) but throws away what it
+    /// hears, so a long pause does not fill the computer's memory. Sources that stop by themselves
+    /// need not do anything.
+    fn set_paused(&mut self, _paused: bool) {}
 }
 
 /// What kind of sound device.

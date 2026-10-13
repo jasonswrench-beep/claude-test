@@ -1,29 +1,31 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title OpenStage Capture - record your screen
+title OpenStage Capture - record your screen and sound
 cd /d "%~dp0"
 
 echo.
 echo ============================================================
-echo   OpenStage Capture: a real recording, start to finish
+echo   OpenStage Capture: a real recording, with sound
 echo ============================================================
 echo.
-echo This is the first test of the real recorder, the same program that
-echo OpenStage will use. It follows a script, so you only watch:
+echo This is a test of the real recorder, the same program that OpenStage
+echo will use. It follows a script, so you only watch and talk:
 echo.
-echo   - a 3 second countdown, then it records your main screen
+echo   - a 3 second countdown, then it records your main screen,
+echo     your MICROPHONE, and the SOUND YOUR COMPUTER IS PLAYING
 echo   - a marker is added about 2 seconds in
 echo   - it PAUSES for about 2 seconds, then RESUMES
 echo   - a second marker is added
-echo   - it STOPS, finishes the video file, and checks it
+echo   - it STOPS, finishes the video file, and checks everything
 echo.
 echo Time spent paused is not recorded, so the finished video should be
-echo shorter than the 9 seconds this takes. There is NO SOUND yet.
+echo about 9 seconds long, not the 14 seconds this takes.
 echo.
-echo PRIVACY: the recording shows whatever was on your screen. It is saved
-echo only on this computer, in the folder record-test-output next to this
-echo file. Nothing is sent anywhere. You can delete the folder afterwards.
+echo PRIVACY: the recording shows your screen and holds your voice and
+echo whatever your computer played. It is saved only on this computer, in
+echo the folder record-test-output next to this file. Nothing is sent
+echo anywhere. You can delete the folder afterwards.
 echo.
 
 where cargo >nul 2>nul
@@ -34,13 +36,38 @@ cargo build --release -p openstage-capture-cli > record-test-log.txt 2>&1
 if errorlevel 1 goto build_failed
 
 echo.
-echo WHAT TO DO: keep something moving on your main screen the whole
-echo time, for example drag a window around. It starts in 5 seconds.
-timeout /t 5 /nobreak >nul
+echo These are the microphones and sound outputs on this computer:
+echo.
+"%~dp0target\release\openstage-capture.exe" audio-devices --plain
+echo.
+echo WHICH MICROPHONE? Type its number and press Enter, or just press Enter
+echo for the default.
+set "MIC="
+set /p MIC=Microphone number: 
+echo.
+echo WHICH SOUND OUTPUT? This is where the sound you want to record plays,
+echo for example your speakers or headphones. Type its number and press
+echo Enter, or just press Enter for the default. Not sure? Close this window
+echo and double-click FIND SOUND OUTPUT.bat first. To record no computer
+echo sound at all, type none.
+set "OUT="
+set /p OUT=Sound output number: 
+echo.
+echo WHAT TO DO:
+echo   - Keep something moving on your main screen the whole time, for
+echo     example drag a window around.
+echo   - Start some sound playing, for example a video or a song, and keep
+echo     it playing. If you can, wear headphones, so your microphone does not
+echo     also hear the speakers and make an echo.
+echo   - SAY a sentence out loud while it records, such as: Testing, one two
+echo     three, this is my voice.
+echo.
+echo It starts in 8 seconds.
+timeout /t 8 /nobreak >nul
 echo.
 
 if exist "%~dp0record-test-output" rmdir /s /q "%~dp0record-test-output"
-"%~dp0target\release\openstage-capture.exe" record --project "%~dp0record-test-output\lesson.capture" --source screen --countdown-ms 3000 --plain --demo-script "marker:first marker@5000;pause@7000;resume@9000;marker:after the pause@10000;stop@12000" > record-test-log.txt 2>&1
+"%~dp0target\release\openstage-capture.exe" record --project "%~dp0record-test-output\lesson.capture" --source screen --microphone "%MIC%" --output "%OUT%" --countdown-ms 3000 --plain --demo-script "marker:first marker@5000;pause@7000;resume@9000;marker:after the pause@10000;stop@14000" > record-test-log.txt 2>&1
 set RESULT=%errorlevel%
 
 echo ------------------------------------------------------------
@@ -52,7 +79,9 @@ echo.
 set VIDEO=%~dp0record-test-output\lesson.capture\takes\take-001\screen.mp4
 if exist "%VIDEO%" (
   echo Opening the video it made. It should show your screen, the right way
-  echo up, with no gap where the pause was. It has no sound, on purpose.
+  echo up, with no gap where the pause was, and you should hear yourself and
+  echo the computer's sound together. The folder next to it also holds
+  echo mic.wav with only you in it, and system.wav with only the computer.
   start "" "%VIDEO%"
   echo.
 )
@@ -71,7 +100,9 @@ echo ------------------------------------------------------------
 echo   PASS. The recorder made a real recording and Windows can play it.
 echo ------------------------------------------------------------
 echo.
-echo Please tell me it passed and what the video looked like.
+echo Please tell me it passed, what the video looked like, and what you
+echo heard: your voice, the computer's sound, and whether they stayed
+echo together with the picture all the way through.
 goto done
 
 :no_rust

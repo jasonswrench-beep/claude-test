@@ -4,7 +4,7 @@
 //! This file only builds on Windows. It has been type-checked for Windows but, until the owner
 //! runs `TEST VIDEO CAPTURE.bat`, it has never been run. Treat every line of it as unproven.
 
-use crate::video::{EncoderInfo, SinkSpec, VideoInspection, VideoPlatform, VideoSink};
+use crate::video::{AudioInspection, AudioSpec, EncoderInfo, SinkSpec, VideoInspection, VideoPlatform, VideoSink};
 use crate::{Frame, ScreenError};
 use std::path::Path;
 use std::sync::Once;
@@ -22,9 +22,12 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_DISABLE_THROTTLING, MF_VERSION,
 };
 use windows::Win32::Media::MediaFoundation::{
-    MFCreateSourceReaderFromURL, MFTranscodeContainerType_FMPEG4, MF_MPEG4SINK_MIN_FRAGMENT_DURATION,
-    MF_MT_MAX_KEYFRAME_SPACING, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-    MF_TRANSCODE_CONTAINERTYPE,
+    IMFSourceReader, MFAudioFormat_AAC, MFAudioFormat_PCM, MFCreateSourceReaderFromURL, MFMediaType_Audio,
+    MFTranscodeContainerType_FMPEG4, MF_E_INVALIDSTREAMNUMBER, MF_MPEG4SINK_MIN_FRAGMENT_DURATION,
+    MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+    MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
+    MF_MT_MAX_KEYFRAME_SPACING, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_TRANSCODE_CONTAINERTYPE,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
@@ -65,22 +68,29 @@ impl VideoPlatform for WindowsVideo {
     fn create_sink(&self, spec: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError> {
         crate::win::prepare();
         let (width, height) = (spec.width, spec.height);
+        let sink = |(writer, audio_stream): (IMFSinkWriter, Option<u32>), note| {
+            Box::new(Mp4Sink {
+                writer: Some(writer),
+                stream: 0,
+                audio: spec.audio.clone().zip(audio_stream),
+                width,
+                height,
+                note,
+            }) as Box<dyn VideoSink>
+        };
         // First let Windows use the graphics card's encoder. If that setup is refused, try the processor's.
         match unsafe { build_writer(spec, true) } {
-            Ok(writer) => Ok(Box::new(Mp4Sink { writer: Some(writer), stream: 0, width, height, note: None })),
+            Ok(built) => Ok(sink(built, None)),
             Err(first) => {
-                let writer = unsafe { build_writer(spec, false) }.map_err(|second| {
+                let built = unsafe { build_writer(spec, false) }.map_err(|second| {
                     ScreenError::Failed(format!("{first} Trying the processor's encoder instead also failed: {second}"))
                 })?;
-                Ok(Box::new(Mp4Sink {
-                    writer: Some(writer),
-                    stream: 0,
-                    width,
-                    height,
-                    note: Some(format!(
+                Ok(sink(
+                    built,
+                    Some(format!(
                         "The graphics card's encoder could not be used ({first}), so the processor's encoder was used instead."
                     )),
-                }))
+                ))
             }
         }
     }
@@ -108,7 +118,8 @@ impl VideoPlatform for WindowsVideo {
                 break;
             }
         }
-        Ok(VideoInspection { frames, duration_ms: (end_100ns.max(0) / 10_000) as u64 })
+        let audio = unsafe { inspect_sound(&reader) }?;
+        Ok(VideoInspection { frames, duration_ms: (end_100ns.max(0) / 10_000) as u64, audio })
     }
 
     fn process_cpu_time(&self) -> Option<Duration> {
@@ -169,7 +180,7 @@ fn friendly_name(activate: &IMFActivate) -> Option<String> {
     Some(String::from_utf16_lossy(&buffer[..length as usize]))
 }
 
-unsafe fn build_writer(spec: &SinkSpec, allow_hardware: bool) -> Result<IMFSinkWriter, ScreenError> {
+unsafe fn build_writer(spec: &SinkSpec, allow_hardware: bool) -> Result<(IMFSinkWriter, Option<u32>), ScreenError> {
     let (path, width, height, fps, bitrate_kbps) = (&spec.path, spec.width, spec.height, spec.fps, spec.bitrate_kbps);
     let mut attributes: Option<IMFAttributes> = None;
     MFCreateAttributes(&mut attributes, 4).map_err(|e| failed("Could not prepare the video writer", e))?;
@@ -223,9 +234,77 @@ unsafe fn build_writer(spec: &SinkSpec, allow_hardware: bool) -> Result<IMFSinkW
     writer
         .SetInputMediaType(stream, &in_type, None)
         .map_err(|e| failed("Windows could not connect the pictures to the H.264 encoder", e))?;
-    writer.BeginWriting().map_err(|e| failed("Windows would not start writing the video", e))?;
     debug_assert_eq!(stream, 0);
-    Ok(writer)
+
+    // The sound track, if there is one: AAC in the file, plain 16-bit sound handed in.
+    let audio_stream = match &spec.audio {
+        Some(audio) => Some(add_sound_track(&writer, audio)?),
+        None => None,
+    };
+    writer.BeginWriting().map_err(|e| failed("Windows would not start writing the video", e))?;
+    Ok((writer, audio_stream))
+}
+
+unsafe fn add_sound_track(writer: &IMFSinkWriter, audio: &AudioSpec) -> Result<u32, ScreenError> {
+    let ctx = |e| failed("Could not describe the sound", e);
+    let channels = audio.channels as u32;
+
+    // What goes into the file: AAC, the sound every player can play.
+    let out_type: IMFMediaType = MFCreateMediaType().map_err(ctx)?;
+    out_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio).map_err(ctx)?;
+    out_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC).map_err(ctx)?;
+    out_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16).map_err(ctx)?;
+    out_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, audio.sample_rate).map_err(ctx)?;
+    out_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, channels).map_err(ctx)?;
+    out_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, audio.bitrate_kbps * 1000 / 8).map_err(ctx)?;
+    out_type.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 1).map_err(ctx)?;
+    // AAC Low Complexity, level 2: the common setting every player understands.
+    out_type.SetUINT32(&MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, 0x29).map_err(ctx)?;
+    let stream = writer.AddStream(&out_type).map_err(|e| failed("Windows would not accept the AAC sound format", e))?;
+
+    // What the program hands in: plain 16-bit sound.
+    let in_type: IMFMediaType = MFCreateMediaType().map_err(ctx)?;
+    in_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio).map_err(ctx)?;
+    in_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM).map_err(ctx)?;
+    in_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16).map_err(ctx)?;
+    in_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, audio.sample_rate).map_err(ctx)?;
+    in_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, channels).map_err(ctx)?;
+    in_type.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, channels * 2).map_err(ctx)?;
+    in_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, audio.sample_rate * channels * 2).map_err(ctx)?;
+    in_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1).map_err(ctx)?;
+    writer
+        .SetInputMediaType(stream, &in_type, None)
+        .map_err(|e| failed("Windows could not connect the sound to the AAC encoder", e))?;
+    Ok(stream)
+}
+
+/// Read a file's sound track back without decoding it. `None` if the file has no sound track.
+unsafe fn inspect_sound(reader: &IMFSourceReader) -> Result<Option<AudioInspection>, ScreenError> {
+    let stream = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
+    // A file with no sound track has no first audio stream.
+    if reader.GetNativeMediaType(stream, 0).is_err() {
+        return Ok(None);
+    }
+    let (mut samples, mut end_100ns) = (0u64, 0i64);
+    loop {
+        let mut flags = 0u32;
+        let mut timestamp = 0i64;
+        let mut sample = None;
+        match reader.ReadSample(stream, 0, None, Some(&mut flags), Some(&mut timestamp), Some(&mut sample)) {
+            Ok(()) => {}
+            Err(e) if e.code() == MF_E_INVALIDSTREAMNUMBER => return Ok(None),
+            Err(e) => return Err(failed("Windows could not read the sound track all the way through", e)),
+        }
+        if let Some(sample) = sample {
+            samples += 1;
+            let duration = sample.GetSampleDuration().unwrap_or(0);
+            end_100ns = end_100ns.max(timestamp + duration);
+        }
+        if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+            break;
+        }
+    }
+    Ok(Some(AudioInspection { samples, duration_ms: (end_100ns.max(0) / 10_000) as u64 }))
 }
 
 unsafe fn set_common(t: &IMFMediaType, subtype: &GUID, width: u32, height: u32, fps: u32) -> Result<(), ScreenError> {
@@ -242,6 +321,8 @@ unsafe fn set_common(t: &IMFMediaType, subtype: &GUID, width: u32, height: u32, 
 struct Mp4Sink {
     writer: Option<IMFSinkWriter>,
     stream: u32,
+    /// The sound track's stream number and format, if the file has one.
+    audio: Option<(AudioSpec, u32)>,
     width: u32,
     height: u32,
     note: Option<String>,
@@ -277,6 +358,35 @@ impl VideoSink for Mp4Sink {
             writer
                 .WriteSample(self.stream, &sample)
                 .map_err(|e| failed("Windows would not take a picture for the video", e))?;
+        }
+        Ok(())
+    }
+
+    fn write_audio(&mut self, samples: &[i16], pts_100ns: i64) -> Result<(), ScreenError> {
+        let writer =
+            self.writer.as_ref().ok_or_else(|| ScreenError::Failed("The video file is already closed.".into()))?;
+        let (spec, stream) = self
+            .audio
+            .as_ref()
+            .ok_or_else(|| ScreenError::Failed("This video file was made without a sound track.".into()))?;
+        let bytes = samples.len() * 2;
+        let frames = samples.len() as i64 / spec.channels as i64;
+        let duration = frames * 10_000_000 / spec.sample_rate as i64;
+        unsafe {
+            let buffer = MFCreateMemoryBuffer(bytes as u32).map_err(|e| failed("Could not make room for sound", e))?;
+            let mut data: *mut u8 = std::ptr::null_mut();
+            buffer.Lock(&mut data, None, None).map_err(|e| failed("Could not fill a piece of sound", e))?;
+            std::ptr::copy_nonoverlapping(samples.as_ptr() as *const u8, data, bytes);
+            buffer.Unlock().map_err(|e| failed("Could not finish filling a piece of sound", e))?;
+            buffer.SetCurrentLength(bytes as u32).map_err(|e| failed("Could not size a piece of sound", e))?;
+
+            let sample = MFCreateSample().map_err(|e| failed("Could not make a sound sample", e))?;
+            sample.AddBuffer(&buffer).map_err(|e| failed("Could not attach sound", e))?;
+            sample.SetSampleTime(pts_100ns).map_err(|e| failed("Could not time a piece of sound", e))?;
+            sample.SetSampleDuration(duration).map_err(|e| failed("Could not time a piece of sound", e))?;
+            writer
+                .WriteSample(*stream, &sample)
+                .map_err(|e| failed("Windows would not take a piece of sound for the video", e))?;
         }
         Ok(())
     }

@@ -9,17 +9,22 @@
 //! command that has not been built yet).
 
 mod checks;
+mod demo;
+mod plain;
 
 use checks::{emit_check, finish_checks, run_video_crash_test};
 use clap::{Parser, Subcommand};
 use openstage_capture::{
-    run_session, EventSink, Input, InputSource, SessionConfig, Source, SyntheticSource, SystemClock,
+    run_session, EventSink, Input, InputSource, MediaFactory, ScriptedInput, SessionConfig, Source, SyntheticSource,
+    SystemClock,
 };
-use openstage_capture_project::recover_project;
+use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
-    run_screen_test, run_video_test, system_platform, ScreenTestOptions, VideoTestOptions,
+    compare_readback, run_screen_test, run_video_test, system_platform, system_video_platform, Check, ScreenMedia,
+    ScreenTestOptions, VideoTestOptions, SCREEN_FILE,
 };
+use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -42,9 +47,19 @@ enum Cmd {
         /// The capture project folder (created if it does not exist).
         #[arg(long)]
         project: PathBuf,
-        /// Where picture and sound come from. Only `synthetic` (a test source) exists so far.
+        /// Where picture and sound come from: `screen` (your real screen, Windows only) or `synthetic`
+        /// (a built-in test source that makes fake picture and sound and works anywhere).
         #[arg(long, default_value = "synthetic")]
         source: String,
+        /// With `--source screen`: which display to record (1 is the main display).
+        #[arg(long, default_value_t = 1)]
+        display: u32,
+        /// With `--source screen`: pictures per second in the video.
+        #[arg(long, default_value_t = 30)]
+        fps: u32,
+        /// With `--source screen`: video quality in kilobits per second.
+        #[arg(long, default_value_t = 8000)]
+        bitrate_kbps: u32,
         /// Milliseconds of countdown before recording starts. 0 turns it off.
         #[arg(long, default_value_t = 3000)]
         countdown_ms: u64,
@@ -64,6 +79,14 @@ enum Cmd {
         title: String,
         #[arg(long, default_value = "en-US")]
         language: String,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+        /// Instead of reading commands on standard input, follow a script such as
+        /// `pause@7000;resume@9000;marker:look here@11000;stop@13000` (times in milliseconds from the
+        /// start of the session, countdown included). For demos and tests.
+        #[arg(long)]
+        demo_script: Option<String>,
     },
     /// Repair a recording that was interrupted.
     Recover {
@@ -114,6 +137,16 @@ enum Cmd {
         /// The folder to save the video in (created if needed).
         #[arg(long, default_value = "video-test-output")]
         out: PathBuf,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// Open a saved video the way a player would and say how many pictures and seconds it holds.
+    /// Windows only.
+    VideoInfo {
+        /// The video file.
+        #[arg(long)]
+        file: PathBuf,
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
         plain: bool,
@@ -236,15 +269,16 @@ fn main() -> ExitCode {
                 note: "A built-in test source. It makes fake picture and sound so the recorder can be tested anywhere."
                     .into(),
             }];
-            // Real displays, found on Windows only. Found does not mean recordable yet.
+            // Real displays, found on Windows only.
             if let Ok(displays) = system_platform().list_displays() {
                 for d in displays {
                     sources.push(SourceInfo {
                         id: format!("display:{}", d.number),
-                        available: false,
+                        available: true,
                         note: format!(
-                            "{}. Found, but recording it into a project is not built yet. The screen-test command can try capturing it.",
-                            d.describe()
+                            "{}. Record it with: record --source screen --display {}. Picture only: no sound yet.",
+                            d.describe(),
+                            d.number
                         ),
                     });
                 }
@@ -252,7 +286,8 @@ fn main() -> ExitCode {
             sources.push(SourceInfo {
                 id: "windows".into(),
                 available: false,
-                note: "Recording the screen, windows, microphone, and system sound into a project is not built yet. Screen capture itself can be tried with the screen-test command.".into(),
+                note: "Recording a single window or a region, the microphone, system sound, and the webcam is not built yet."
+                    .into(),
             });
             say(Event::Probe { platform: std::env::consts::OS.to_string(), sources });
             ExitCode::SUCCESS
@@ -268,6 +303,9 @@ fn main() -> ExitCode {
         Cmd::Record {
             project,
             source,
+            display,
+            fps,
+            bitrate_kbps,
             countdown_ms,
             segment_ms,
             flush_ms,
@@ -275,15 +313,35 @@ fn main() -> ExitCode {
             ignore_stdin_eof,
             title,
             language,
+            plain,
+            demo_script,
         } => {
-            hello();
-            if source != "synthetic" {
-                fatal(
-                    "source-unavailable",
-                    format!("The source \"{source}\" is not available. Use \"synthetic\" for now."),
-                );
-                return ExitCode::from(2);
+            let mut sink: Box<dyn EventSink> = if plain { Box::new(PlainSink::new()) } else { Box::new(StdoutSink) };
+            if !plain {
+                hello();
             }
+            let factory: Box<dyn MediaFactory> = match source.as_str() {
+                "synthetic" => Box::new(|| -> Box<dyn Source> { Box::new(SyntheticSource::new()) }),
+                "screen" if cfg!(windows) => Box::new(ScreenMedia::for_this_computer(display, fps, bitrate_kbps)),
+                "screen" => {
+                    sink.emit(Event::Error {
+                        code: "source-unavailable".into(),
+                        message:
+                            "Recording the screen only works on Windows. Use \"synthetic\" to try the recorder here."
+                                .into(),
+                        fatal: true,
+                    });
+                    return ExitCode::from(2);
+                }
+                other => {
+                    sink.emit(Event::Error {
+                        code: "source-unavailable".into(),
+                        message: format!("The source \"{other}\" is not available. Use \"screen\" or \"synthetic\"."),
+                        fatal: true,
+                    });
+                    return ExitCode::from(2);
+                }
+            };
             let mut cfg = SessionConfig::new(&project);
             cfg.title = title;
             cfg.language = language;
@@ -293,14 +351,32 @@ fn main() -> ExitCode {
             cfg.max_duration_ms = duration_ms;
             cfg.stop_when_input_closes = !ignore_stdin_eof;
 
-            let (tx, rx) = mpsc::channel();
-            read_commands(tx);
-            let make_source = || -> Box<dyn Source> { Box::new(SyntheticSource::new()) };
-            let result =
-                run_session(&cfg, &make_source, &mut ChannelInput { rx }, &mut StdoutSink, &SystemClock::new());
-            match result {
+            let mut input: Box<dyn InputSource> = match demo_script {
+                Some(script) => match demo::parse(&script) {
+                    Ok(items) => Box::new(ScriptedInput::new(items)),
+                    Err(message) => {
+                        sink.emit(Event::Error { code: "bad-demo-script".into(), message, fatal: true });
+                        return ExitCode::FAILURE;
+                    }
+                },
+                None => {
+                    let (tx, rx) = mpsc::channel();
+                    read_commands(tx);
+                    Box::new(ChannelInput { rx })
+                }
+            };
+            match run_session(&cfg, factory.as_ref(), input.as_mut(), sink.as_mut(), &SystemClock::new()) {
                 Ok(outcome) => {
-                    say(Event::Result {
+                    // A real screen recording is read back through Windows, the way a player would.
+                    let mut readback_ok = true;
+                    if source == "screen" && outcome.ok && outcome.take > 0 {
+                        let file = take_dir(&project, outcome.take).join(SCREEN_FILE);
+                        let check: Check =
+                            compare_readback(system_video_platform().inspect_video(&file), outcome.duration_ms);
+                        readback_ok = check.ok;
+                        sink.emit(Event::Check { check: check.check, ok: check.ok, message: check.message });
+                    }
+                    sink.emit(Event::Result {
                         ok: outcome.ok,
                         project: path_text(&project),
                         take: outcome.take,
@@ -308,14 +384,14 @@ fn main() -> ExitCode {
                         duration_ms: outcome.duration_ms,
                         segments: outcome.segments,
                     });
-                    if outcome.ok {
+                    if outcome.ok && readback_ok {
                         ExitCode::SUCCESS
                     } else {
                         ExitCode::FAILURE
                     }
                 }
                 Err(e) => {
-                    fatal("project", e.to_string());
+                    sink.emit(Event::Error { code: "project".into(), message: e.to_string(), fatal: true });
                     ExitCode::FAILURE
                 }
             }
@@ -359,6 +435,36 @@ fn main() -> ExitCode {
             let opts = VideoTestOptions { display, seconds, fps, bitrate_kbps, out_dir: out, fragmented, start_marker };
             let all_fine = run_video_test(&opts, &mut |c| emit_check(plain, c));
             finish_checks(plain, all_fine)
+        }
+        Cmd::VideoInfo { file, plain } => {
+            if !plain {
+                hello();
+            }
+            let check = match system_video_platform().inspect_video(&file) {
+                Ok(info) if info.frames > 0 => Check {
+                    check: "video-info".into(),
+                    ok: true,
+                    message: format!(
+                        "{} holds {} pictures and is {:.1} seconds long.",
+                        file.display(),
+                        info.frames,
+                        info.duration_ms as f64 / 1000.0
+                    ),
+                },
+                Ok(_) => Check {
+                    check: "video-info".into(),
+                    ok: false,
+                    message: format!("{} opened, but holds no pictures.", file.display()),
+                },
+                Err(e) => Check {
+                    check: "video-info".into(),
+                    ok: false,
+                    message: format!("{} could not be read as a video: {e}", file.display()),
+                },
+            };
+            let ok = check.ok;
+            emit_check(plain, check);
+            finish_checks(plain, ok)
         }
         Cmd::VideoCrashTest { display, seconds_before_kill, out, plain } => {
             if !plain {

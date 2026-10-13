@@ -8,6 +8,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+openstage-capture = { path = "../openstage-capture" }
+openstage-capture-project = { path = "../openstage-capture-project" }
 thiserror.workspace = true
 
 # Only built on Windows. Microsoft's own Rust bindings, MIT OR Apache-2.0.
@@ -36,4 +38,5 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
+openstage-capture-protocol = { path = "../openstage-capture-protocol" }
 tempfile.workspace = true

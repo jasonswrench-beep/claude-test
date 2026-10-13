@@ -17,14 +17,13 @@
 //!   running on with nobody watching.
 
 use crate::clock::Clock;
-use crate::source::Source;
+use crate::media::{MediaFactory, TakeMedia};
 use openstage_capture_project::{
-    create_project, create_take, finish_take, next_take_id, open_project, set_aside_take, take_dir, EventLogWriter,
-    LogEvent, ProjectError, SegmentWriter,
+    create_project, create_take_with, finish_take, next_take_id, open_project, set_aside_take, take_dir,
+    EventLogWriter, LogEvent, ProjectError,
 };
 use openstage_capture_protocol::{Command, Event, State};
 use std::collections::VecDeque;
-use std::fs;
 use std::io;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -106,6 +105,9 @@ pub enum SessionError {
     Project(#[from] ProjectError),
     #[error("file problem: {0}")]
     Io(#[from] io::Error),
+    /// Capturing or encoding failed; the text says why, in plain language.
+    #[error("{0}")]
+    Media(String),
 }
 
 /// A plain-language description of a sound level, for people who cannot see a meter.
@@ -125,22 +127,17 @@ pub fn describe_level(peak: f32) -> &'static str {
 
 struct TakeRun {
     id: u32,
-    segments_dir: PathBuf,
-    writer: Option<SegmentWriter>,
-    seg_index: u32,
-    seg_start_ms: u64,
-    finished_segments: u32,
+    media: Option<Box<dyn TakeMedia>>,
     events: EventLogWriter,
     last_flush_wall: u64,
 }
 
 struct Runner<'a> {
     cfg: &'a SessionConfig,
-    make_source: &'a dyn Fn() -> Box<dyn Source>,
+    factory: &'a dyn MediaFactory,
     sink: &'a mut dyn EventSink,
     clock: &'a dyn Clock,
     state: State,
-    source: Box<dyn Source>,
     run: Option<TakeRun>,
     next_take: u32,
     last_take: u32,
@@ -195,47 +192,40 @@ impl<'a> Runner<'a> {
     }
 
     fn begin_take(&mut self) -> Result<(), SessionError> {
-        self.source = (self.make_source)();
         let id = self.next_take;
         self.next_take += 1;
-        create_take(&self.cfg.project, id, vec![self.source.id().to_string()], None, self.cfg.flush_ms)?;
-        let dir = take_dir(&self.cfg.project, id);
-        let segments_dir = dir.join("segments");
-        let writer = SegmentWriter::create(&segments_dir, 1)?;
-        let events = EventLogWriter::create(&dir.join("events.jsonl"))?;
-        self.run = Some(TakeRun {
+        create_take_with(
+            &self.cfg.project,
             id,
-            segments_dir,
-            writer: Some(writer),
-            seg_index: 1,
-            seg_start_ms: 0,
-            finished_segments: 0,
-            events,
-            last_flush_wall: self.clock.now_ms(),
-        });
+            vec![self.factory.source_id()],
+            None,
+            self.factory.declared_flush_ms(self.cfg),
+            self.factory.media_files(),
+        )?;
+        let dir = take_dir(&self.cfg.project, id);
+        let media = self.factory.begin(&dir, self.cfg)?;
+        let events = EventLogWriter::create(&dir.join("events.jsonl"))?;
+        self.run = Some(TakeRun { id, media: Some(media), events, last_flush_wall: self.clock.now_ms() });
         self.last_take = id;
         self.media_ms = 0;
+        // Recording time starts when the media is ready, not before: starting a real screen capture
+        // and video encoder can take a moment, and that moment is not part of the recording.
+        self.last_tick = self.clock.now_ms();
         self.state = State::Recording;
         self.emit_state();
         Ok(())
     }
 
-    /// Make every file of the current take complete. Returns the duration and segment count.
+    /// Make every file of the current take complete. Returns the duration and the number of media files.
     fn close_run(&mut self) -> Result<(u64, u32), SessionError> {
         let mut run = self.run.take().expect("a take is open");
-        if let Some(writer) = run.writer.take() {
-            if writer.records() == 0 {
-                // Nothing was written to this piece, so there is nothing to keep.
-                let part = openstage_capture_project::part_path(&run.segments_dir, run.seg_index);
-                drop(writer);
-                fs::remove_file(part)?;
-            } else {
-                writer.finish()?;
-                run.finished_segments += 1;
-            }
-        }
+        let media_ms = self.media_ms;
+        let files = match run.media.take() {
+            Some(media) => media.finish(media_ms)?,
+            None => 0,
+        };
         run.events.flush_sync()?;
-        Ok((self.media_ms, run.finished_segments))
+        Ok((media_ms, files))
     }
 
     fn finish_current(&mut self) -> Result<(), SessionError> {
@@ -336,8 +326,8 @@ impl<'a> Runner<'a> {
     fn flush_now(&mut self) -> Result<(), SessionError> {
         let now = self.clock.now_ms();
         if let Some(run) = self.run.as_mut() {
-            if let Some(writer) = run.writer.as_mut() {
-                writer.flush_sync()?;
+            if let Some(media) = run.media.as_mut() {
+                media.flush()?;
             }
             run.events.flush_sync()?;
             run.last_flush_wall = now;
@@ -346,24 +336,10 @@ impl<'a> Runner<'a> {
     }
 
     fn write_recording(&mut self) -> Result<(), SessionError> {
-        let chunks = self.source.poll(self.media_ms);
         let media_ms = self.media_ms;
-        let segment_ms = self.cfg.segment_ms;
         let run = self.run.as_mut().expect("recording has a take");
-        let writer = run.writer.as_mut().expect("recording has a segment");
-        for chunk in &chunks {
-            writer.append(chunk.t_ms, &chunk.to_record_payload())?;
-        }
-        if media_ms.saturating_sub(run.seg_start_ms) >= segment_ms {
-            if let Some(full) = run.writer.take() {
-                full.finish()?;
-                run.finished_segments += 1;
-            }
-            run.seg_index += 1;
-            run.writer = Some(SegmentWriter::create(&run.segments_dir, run.seg_index)?);
-            run.seg_start_ms = media_ms;
-        }
-        Ok(())
+        let media = run.media.as_mut().expect("recording has media");
+        media.pump(media_ms)
     }
 
     fn step(&mut self, input: &mut dyn InputSource) -> Result<bool, SessionError> {
@@ -416,7 +392,13 @@ impl<'a> Runner<'a> {
                 if now.saturating_sub(self.last_level_emit) >= 500 {
                     self.last_level_emit = now;
                     let media_ms = self.media_ms;
-                    for (source, peak) in self.source.levels(media_ms) {
+                    let levels = self
+                        .run
+                        .as_ref()
+                        .and_then(|r| r.media.as_ref())
+                        .map(|m| m.levels(media_ms))
+                        .unwrap_or_default();
+                    for (source, peak) in levels {
                         self.emit(Event::Level {
                             source: source.to_string(),
                             peak,
@@ -446,7 +428,8 @@ impl<'a> Runner<'a> {
     /// Something went wrong that cannot be worked around: say so, finish what can be finished.
     fn fail(&mut self, error: SessionError) {
         let message = error.to_string();
-        self.emit(Event::Error { code: "write-failed".into(), message, fatal: true });
+        let code = if matches!(error, SessionError::Media(_)) { "media-failed" } else { "write-failed" };
+        self.emit(Event::Error { code: code.into(), message, fatal: true });
         let mut duration_ms = self.media_ms;
         let mut segments = 0;
         if self.run.is_some() {
@@ -465,10 +448,11 @@ impl<'a> Runner<'a> {
 
 /// Run a recording session to the end.
 ///
-/// `make_source` builds a fresh source for every take, so starting again begins from the start.
+/// `factory` starts the media for every take, so starting again begins from the start. Any function
+/// that builds a test source works as a factory.
 pub fn run_session(
     cfg: &SessionConfig,
-    make_source: &dyn Fn() -> Box<dyn Source>,
+    factory: &dyn MediaFactory,
     input: &mut dyn InputSource,
     sink: &mut dyn EventSink,
     clock: &dyn Clock,
@@ -482,11 +466,10 @@ pub fn run_session(
     let next_take = next_take_id(&cfg.project)?;
     let mut runner = Runner {
         cfg,
-        make_source,
+        factory,
         sink,
         clock,
         state: State::Idle,
-        source: make_source(),
         run: None,
         next_take,
         last_take: next_take - 1,
@@ -559,8 +542,9 @@ impl EventSink for VecSink {
 mod tests {
     use super::*;
     use crate::clock::ManualClock;
-    use crate::source::{Chunk, SyntheticSource};
+    use crate::source::{Chunk, Source, SyntheticSource};
     use openstage_capture_project::{final_path, list_takes, read_log, read_records, read_take, take_dir, TakeState};
+    use std::fs;
 
     fn synthetic() -> Box<dyn Source> {
         Box::new(SyntheticSource::new())

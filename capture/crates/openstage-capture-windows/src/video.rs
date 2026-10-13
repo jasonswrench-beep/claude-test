@@ -8,8 +8,8 @@
 //! As with the screen test, the real Windows parts sit behind a trait ([`VideoPlatform`]) so the
 //! whole flow, and every message a person will read, is tested here with a fake.
 
-use crate::fmp4::{repair_file, scan_file};
 use crate::{check, Check, Frame, Platform, ScreenError};
+use openstage_capture_project::fmp4::{repair_file, scan_file};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -485,6 +485,34 @@ pub fn run_video_test_with(
     }
 
     all_ok
+}
+
+/// Compare what Windows reads back from a saved recording with how long the recording ran.
+/// The length may differ a little (a video is cut into frames and fragments), so up to 0.7 seconds is fine.
+pub fn compare_readback(read: Result<VideoInspection, ScreenError>, recorded_ms: u64) -> Check {
+    match read {
+        Ok(info) if info.frames > 0 && info.duration_ms.abs_diff(recorded_ms) <= 700 => check(
+            "video-readback",
+            true,
+            format!(
+                "Windows read the saved video back: {} pictures, {:.1} seconds long. The recording time was {:.1} seconds.",
+                info.frames,
+                info.duration_ms as f64 / 1000.0,
+                recorded_ms as f64 / 1000.0
+            ),
+        ),
+        Ok(info) => check(
+            "video-readback",
+            false,
+            format!(
+                "Windows read back {} pictures ({:.1} seconds) from the saved video, but the recording time was {:.1} seconds.",
+                info.frames,
+                info.duration_ms as f64 / 1000.0,
+                recorded_ms as f64 / 1000.0
+            ),
+        ),
+        Err(e) => check("video-readback", false, format!("Windows could not read the saved video back: {e}")),
+    }
 }
 
 /// After a recording was killed in the middle, find out what survived. Reports each finding as a
@@ -1031,6 +1059,20 @@ mod tests {
         let opts2 = VideoTestOptions { start_marker: Some(marker2.clone()), ..opts };
         assert!(!run_video_test_with(&FakeScreen, &video, &opts2, &mut |_| {}));
         assert!(!marker2.exists());
+    }
+
+    #[test]
+    fn a_saved_video_that_matches_the_recording_time_passes_and_a_mismatch_does_not() {
+        let info = |frames, duration_ms| Ok(VideoInspection { frames, duration_ms });
+        let c = compare_readback(info(222, 7400), 7480);
+        assert!(
+            c.ok && c.message.contains("222 pictures, 7.4 seconds long")
+                && c.message.contains("recording time was 7.5")
+        );
+        assert!(!compare_readback(info(222, 5000), 7400).ok, "the video is much shorter than the recording");
+        assert!(!compare_readback(info(0, 7400), 7400).ok, "no pictures at all");
+        let c = compare_readback(Err(ScreenError::Failed("not a video".into())), 1000);
+        assert!(!c.ok && c.message.contains("could not read the saved video back"));
     }
 
     #[test]

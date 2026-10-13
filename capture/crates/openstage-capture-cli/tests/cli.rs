@@ -354,6 +354,82 @@ fn video_crash_test_says_it_needs_windows_and_exits_with_2() {
     assert!(text.starts_with("PROBLEM: Screen capture and video only work on Windows."), "{text}");
 }
 
+#[cfg(not(windows))]
+#[test]
+fn recording_the_screen_says_it_needs_windows_and_exits_with_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, events) =
+        run_once(&["record", "--project", dir.path().join("p.capture").to_str().unwrap(), "--source", "screen"]);
+    assert_eq!(status.code(), Some(2));
+    assert!(events.iter().any(|e| matches!(e, Event::Error { code, message, fatal: true }
+        if code == "source-unavailable" && message.contains("only works on Windows"))));
+}
+
+#[test]
+fn plain_mode_speaks_in_sentences_follows_a_demo_script_and_leaves_no_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("p.capture");
+    let out = Command::new(BIN)
+        .args([
+            "record",
+            "--project",
+            project.to_str().unwrap(),
+            "--countdown-ms",
+            "0",
+            "--plain",
+            "--demo-script",
+            "marker:look here@500;pause@800;resume@1100;stop@1600",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stdout));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(!text.contains('{'), "no JSON in plain mode: {text}");
+    for sentence in [
+        "Recording take 1.",
+        "Marker added at",
+        "look here",
+        "Paused at",
+        "Stopped. Take 1 is finished.",
+        "Finished. Take 1 is complete",
+    ] {
+        assert!(text.contains(sentence), "missing \"{sentence}\" in:\n{text}");
+    }
+    // The pause is recorded as time not spent: about 1.6 s of wall time minus 0.3 s paused.
+    let take = openstage_capture_project::read_take(&project, 1).unwrap();
+    let ms = take.duration_ms.unwrap();
+    assert!((1100..=1500).contains(&ms), "the recording is about 1.3 seconds long, got {ms}");
+    assert_eq!(take.sources, vec!["synthetic".to_string()]);
+}
+
+#[test]
+fn a_demo_script_that_makes_no_sense_is_explained_and_nothing_is_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("p.capture");
+    let (status, events) = run_once(&[
+        "record",
+        "--project",
+        project.to_str().unwrap(),
+        "--countdown-ms",
+        "0",
+        "--demo-script",
+        "explode@100",
+    ]);
+    assert_eq!(status.code(), Some(1));
+    assert!(events.iter().any(|e| matches!(e, Event::Error { code, message, fatal: true }
+        if code == "bad-demo-script" && message.contains("is not a command"))));
+    assert!(!events.iter().any(|e| matches!(e, Event::State { .. })), "no recording began");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn video_info_says_it_needs_windows_and_exits_with_2() {
+    let out = Command::new(BIN).args(["video-info", "--plain", "--file", "nothing.mp4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("PROBLEM: nothing.mp4 could not be read as a video"), "{text}");
+}
+
 #[test]
 fn render_says_it_is_not_built_yet_and_exits_with_2() {
     let dir = tempfile::tempdir().unwrap();

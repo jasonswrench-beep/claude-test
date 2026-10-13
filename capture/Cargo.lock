@@ -255,6 +255,9 @@ dependencies = [
 name = "openstage-capture-windows"
 version = "0.1.0"
 dependencies = [
+ "openstage-capture",
+ "openstage-capture-project",
+ "openstage-capture-protocol",
  "tempfile",
  "thiserror",
  "windows",

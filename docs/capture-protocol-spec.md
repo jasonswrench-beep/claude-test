@@ -29,6 +29,7 @@ This page describes how OpenStage talks to the recording program, `openstage-cap
 openstage-capture probe
 openstage-capture record --project <folder> [options]
 openstage-capture recover --project <folder>
+openstage-capture video-info --file <video>                          (Windows only; says how long a saved video is)
 openstage-capture screen-test [options]                          (Windows only; tries screen capture)
 openstage-capture video-test [options]                           (Windows only; tries making an MP4 of the screen)
 openstage-capture video-crash-test [options]                     (Windows only; records, kills the program, checks what survived)
@@ -42,6 +43,10 @@ openstage-capture render --project <folder> --out <file>        (not built yet)
 | 0 | It worked. |
 | 1 | Something went wrong (a `fatal` error event was printed first). |
 | 2 | Not available: an unknown source, a command not built yet (`render`), or `screen-test` on a computer that is not running Windows. |
+
+### `video-info`
+
+Opens a saved video the way a player would and reports how many pictures and seconds it holds, as one `check` named `video-info`. Exit codes are as for `screen-test`.
 
 ### Options for `screen-test`
 
@@ -93,7 +98,12 @@ The checks, in order: `crash-test` (the recording ran and was killed), `crash-sc
 | Option | Default | Meaning |
 |---|---|---|
 | `--project` | required | The capture project folder. Created if it does not exist. |
-| `--source` | `synthetic` | Where picture and sound come from. Only `synthetic` (a test source) exists so far. |
+| `--source` | `synthetic` | Where picture and sound come from: `screen` (your real screen, Windows only; picture only, no sound yet) or `synthetic` (a built-in test source that makes fake picture and sound and works anywhere). |
+| `--display` | 1 | With `--source screen`: which display (1 is the main display). |
+| `--fps` | 30 | With `--source screen`: pictures per second in the video. |
+| `--bitrate-kbps` | 8000 | With `--source screen`: video quality, in kilobits per second. |
+| `--plain` | off | Print sentences for a person instead of JSON events. No `hello` line is printed in this mode. |
+| `--demo-script` | none | Instead of reading commands on standard input, follow a script such as `pause@7000;resume@9000;marker:look here@11000;stop@13000`: commands with times in milliseconds from the start of the session (the countdown included). For demos and tests. |
 | `--countdown-ms` | 3000 | Countdown before recording starts. 0 turns it off. |
 | `--segment-ms` | 2000 | Recording time per segment file. |
 | `--flush-ms` | 1000 | How often data is forced to disk. A crash loses at most this much. |
@@ -113,7 +123,7 @@ Always the first line.
 ```
 
 ### `probe`
-The answer to the `probe` command. Lists each source and whether it can be used on this computer. `note` is plain language for people. On Windows, each real display is listed as `display:1`, `display:2`, and so on. Until recording real screens is built, they are listed with `available` set to false and a note saying they were found but cannot be recorded into a project yet.
+The answer to the `probe` command. Lists each source and whether it can be used on this computer. `note` is plain language for people. On Windows, each real display is listed as `display:1`, `display:2`, and so on, with `available` true and a note giving the command to record it (`record --source screen --display N`).
 ```json
 {"event":"probe","platform":"windows","sources":[{"id":"synthetic","available":true,"note":"A built-in test source."}]}
 ```
@@ -143,7 +153,7 @@ Something went wrong. If `fatal` is true, the program is stopping, and it still 
 ```json
 {"event":"error","code":"write-failed","message":"The disk is full.","fatal":true}
 ```
-Codes in use: `write-failed`, `source-unavailable`, `project`, `not-implemented`.
+Codes in use: `write-failed` (a file could not be written), `media-failed` (the screen or the video encoder failed; the message says why), `source-unavailable`, `bad-demo-script`, `project`, `not-implemented`.
 
 ### `marker`
 A marker was added at this point of the recording.
@@ -164,7 +174,7 @@ The author started again. The old take is **set aside, not erased**, and a new o
 ```
 
 ### `check`
-One finding from a test or setup check, in plain language. Sent by `screen-test` and `video-test`, and later by the setup checks of the recorder.
+One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, and `video-info`; and by `record --source screen`, which sends `video-readback` just before `result`: Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds. The setup checks of the recorder will use it too.
 ```json
 {"event":"check","check":"screen-capture","ok":true,"message":"Received 151 pictures in 5.0 seconds from Display 1, 1920 by 1080, main display. Each picture is 1920 by 1080 pixels."}
 ```
@@ -175,7 +185,7 @@ The last line of a `record` or `recover` run.
 ```json
 {"event":"result","ok":true,"project":"C:\\Courses\\lesson.capture","take":1,"state":"complete","durationMs":12000,"segments":6}
 ```
-`state` is the final state of the take: `complete`, `recovered`, `error` (then `ok` is false), or `none` (the program stopped before any take was started, or `recover` found nothing to repair).
+`segments` is how many media files the take holds. `state` is the final state of the take: `complete`, `recovered`, `error` (then `ok` is false), or `none` (the program stopped before any take was started, or `recover` found nothing to repair).
 
 ## 4. Commands (OpenStage to program)
 

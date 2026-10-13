@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** v0.17, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
+**Status:** v0.18, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage Author** ("OpenStage" for short), a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface) at [github.com/jasonswrench-beep/openstage-author](https://github.com/jasonswrench-beep/openstage-author). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -413,7 +413,7 @@ If a capture folder were ever placed inside a project, the publisher would need 
 | Timeline scope collides with OpenStage's basic slide-timing spec *(confirmed)* | Pressure to change OpenStage's format | Keep the media timeline in OpenStage Capture's project format; render to assets (9.3) |
 | A GPL FFmpeg build enters via imported build configuration | Silently relicenses the combined work | CI guard on FFmpeg build flags before any integration (section 7) |
 | The host name "OpenStage" is also an existing phone product line | Search noise; possible trademark friction | Trademark and search check before the name goes public (section 13) |
-| Cancel kills the process tree mid-recording | Lost or corrupt recordings | Crash-safe segments, append-only events, `recover` command |
+| Cancel kills the process tree mid-recording | Lost or corrupt recordings | Crash-safe recording (a fragmented MP4 that Windows closes about once a second; a real test lost 1.1 seconds), append-only events, `recover` command |
 | Global hotkeys collide with screen-reader keys | Authors can't start or stop recording | Configurable hotkeys; test against NVDA, JAWS, Narrator defaults |
 | Live-region announcements may not fire while another app has focus | Screen-reader users don't know recording state | Audio cues from the capture process; verify with real AT |
 | Player fails reflow (1.4.10); responsive output is a Release 1 prerequisite *(owner decision)* | Release 1 cannot ship before OpenStage has responsive output, and it may be much larger than expected | Track it on OpenStage's roadmap; keep the checkpoint in section 8 so the owner can revisit the decision; list the gap in the accessibility statement until it is fixed |
@@ -500,7 +500,7 @@ Read by the author of this brief from `jasonswrench-beep/openstage-author` (read
 6. **Put the rule checks in place** from the first line of code: license checking and the FFmpeg build-flag guard (section 7).
 7. **Test OpenStage's current SCORM 1.2 output in Brightspace and Moodle** (available now), then in Canvas when access arrives, using test courses rather than live ones. Release 1's must-pass test depends on it, and it has only been checked against a stand-in so far.
 8. **Design the streaming launch path** in OpenStage's Rust shell (section 9.1), agreed with the owner first.
-9. **Write the process protocol** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe segments, `recover`.
+9. **Write the process protocol** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe recording, `recover`.
 10. **Windows capture spike:** screen + mic + system audio + cursor events + UI Automation element info, written to a capture project folder; then kill the process mid-recording and recover.
 11. **MP4 render spike:** render that project to MP4 through Media Foundation, confirm the license checks pass, and check which Windows editions have the needed media components.
 12. **Audit speech-recognition candidates** (start with Whisper) for license and quality, to decide whether they fit Release 1 or trigger the fallback rule.

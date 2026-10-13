@@ -1,11 +1,11 @@
 # OpenStage Capture: Requirements (PRD)
 
-**Status:** Draft v0.1, for review
+**Status:** Draft v0.2, with the owner's answers on the proposed details recorded (section 9), for review
 **Source:** the [product brief](product-brief.md) (v0.13). The brief records the reasoning and the decisions. This document turns them into requirements that a person can test.
 **Scope:** Release 1, Windows only
 **License:** Apache-2.0
 
-> **Plain-language guide.** A *user story* says who wants what and why. Under each story, **Done when** is the checklist a tester uses, and **Accessibility checks** are extra tests that are never optional. Details marked **[P]** are *proposals*: sensible starting values that still need your confirmation. Section 9 collects them.
+> **Plain-language guide.** A *user story* says who wants what and why. Under each story, **Done when** is the checklist a tester uses, and **Accessibility checks** are extra tests that are never optional. Details marked **[P]** are *proposals*: sensible starting values that still need your confirmation. Details marked *(confirmed)* have been answered by the owner. Section 9 shows which is which.
 
 ## 1. Purpose
 
@@ -76,9 +76,10 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **As an** author, **I want** to control recording with hotkeys that work in any program, **so that** I can record software without switching windows or using the mouse.
 
 **Done when**
-- Start, pause, resume, and stop each have a hotkey that works while another program has focus.
+- Start, pause and resume, and stop each have a hotkey that works while another program has focus. Pause and resume share one key, which announces the new state.
 - Hotkeys are configurable. The settings screen warns if a choice uses a screen reader's modifier key (Insert or Caps Lock).
-- An optional countdown runs before recording starts **[P: 3 seconds, adjustable, can be off]**.
+- **Default hotkeys [P]:** Ctrl+Shift+F9 to start, Ctrl+Shift+F10 to pause or resume, and Ctrl+Shift+F11 to stop. During the capture spike they are tested against the default keys of NVDA, JAWS, and Narrator, Windows itself, and common programs, and changed if any collide.
+- An optional countdown runs before recording starts: 3 seconds by default, adjustable, and it can be turned off *(confirmed)*.
 - Stop finishes cleanly: every file is finalized and I am told where the recording was saved.
 - The same four actions are also buttons in the recorder panel.
 
@@ -90,7 +91,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **As an** author who cannot see the screen, **I want** clear sounds and text for what the recorder is doing, **so that** I always know whether I am recording.
 
 **Done when**
-- Countdown, start, pause, resume, stop, and error each have a distinct sound **[P: short, adjustable volume, on by default, can be turned off]**.
+- Countdown, start, pause, resume, stop, and error each have a distinct sound. The sounds are short, have adjustable volume, are on by default, and can be turned off *(confirmed)*.
 - The state is also shown as text in the recorder panel, announced to assistive technology when OpenStage has focus, and shown again when OpenStage regains focus.
 - Elapsed time can be asked for and read; it is not announced constantly.
 - Errors (disk full, device lost) are both sounded and written as text.
@@ -129,7 +130,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Done when**
 - I can choose windows to exclude. Excluded windows appear blank or blurred in the recording.
-- Notification pop-ups can be kept out of the recording **[P: on by default]**.
+- Notification pop-ups are kept out of the recording by default, and I can change that *(confirmed)*.
 - A short privacy checklist appears before the first recording and can be reopened.
 - Afterward, any region can still be blurred or blacked out (see C8).
 
@@ -141,7 +142,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Done when**
 - The recording is saved in small pieces as it goes.
-- If the capture program or the computer stops mid-recording, the next time I open the project I am offered recovery and get back everything except the last few seconds **[P: at most 5 seconds]**.
+- If the capture program or the computer stops mid-recording, the next time I open the project I am offered recovery and get back everything except the last few seconds (at most 10 seconds) *(confirmed)*.
 - OpenStage's existing Cancel (which stops the program abruptly) never leaves a broken file: the result is either recoverable or cleanly discarded.
 - Discarding a recording is a separate, explicit action with a confirmation.
 - Test: end the program during a recording and recover it.
@@ -154,7 +155,8 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Done when**
 - Before Windows asks for screen, microphone, or camera access, a plain explanation says what is coming and why.
-- Setup checks whether this Windows edition has the media components MP4 export needs, and says what to install if not. (Some "N" editions of Windows may lack them; verify.)
+- Setup checks whether this Windows installation has the media components MP4 export needs, and says what to install if not. (Some "N" editions of Windows may lack them; verify.)
+- Windows 11 and later are supported. Earlier versions are not *(confirmed)*.
 - Optional parts (such as the webcam) never block recording if unavailable.
 
 **Accessibility checks**
@@ -166,7 +168,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **As a** maintainer, **I want** each recording stored in its own documented folder, **so that** other tools can read it and edits stay non-destructive.
 
 **Done when**
-- Each recording has its own folder beside the course **[P: `name.capture`]**, holding the raw media in pieces, the interaction log, the edit decisions (the media timeline), and tracks for captions, transcript, audio description, alt text, and language.
+- Each recording has its own folder beside the course (named `name.capture`, *confirmed*), holding the raw media in pieces, the interaction log, the edit decisions (the media timeline), and tracks for captions, transcript, audio description, alt text, and language.
 - The format is open (JSON plus media files, no proprietary container), documented, and versioned. Every change bumps the version and ships a migration.
 - Media are referenced, not embedded.
 
@@ -219,7 +221,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Done when**
 - I can split at the playhead, trim a clip's start or end, delete a clip, join adjacent clips, and reorder clips.
-- Deleting can either leave a gap or close it **[P: author chooses]**.
+- Deleting can either leave a gap or close it, and the author chooses *(confirmed)*.
 - Results are announced in words, for example "Clip split at 1 minute 12.4 seconds, now two clips".
 - Every action can be undone and redone (see C11).
 
@@ -253,11 +255,11 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **As an** author, **I want** to zoom into the part that matters, **so that** learners can see small details.
 
 **Done when**
-- I can add a zoom to a region for a span of time, with a smooth transition **[P: half a second by default]**.
+- I can add a zoom to a region for a span of time, with a smooth transition, half a second by default *(confirmed)*.
 - Capture can suggest zooms from where I clicked. I accept, edit, or reject each one.
 - A zoom region can be set with numbers as well as by dragging.
 - Zoom animations never flash more than three times a second.
-- Because a learner cannot turn off motion that is part of a video, export offers a **reduce motion** choice that uses cuts instead of animated zooms **[P]**.
+- Because a learner cannot turn off motion that is part of a video, export offers a **reduce motion** choice that uses cuts instead of animated zooms *(confirmed)*.
 - What the zoom shows is also available as text (see D4 and D5).
 
 **Accessibility checks**
@@ -311,7 +313,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **As an** author, **I want** to add images, music, voice-overs, and short video clips, **so that** I can build a complete tutorial.
 
 **Done when**
-- I can add images, audio, and short video clips from the course's asset library onto the timeline **[P: "short" gets a size limit]**.
+- I can add images, audio, and short video clips from the course's asset library onto the timeline. "Short" means 30 seconds or less *(confirmed)*.
 - Each file keeps its source, creator, and licence in the course's asset record and appears on the credits page.
 - At import, I am prompted for what OpenStage's rules require: an image needs alt text or must be marked decorative; a video needs a caption file or a narration script; an audio clip needs captions, a script, or a transcript. For wordless background music, a short description counts as the transcript (confirm when built).
 - No filters or professional effects are added.
@@ -347,7 +349,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **Done when**
 - Captions have their own track, with editable text and timing by fields.
 - WebVTT and SRT files can be imported and exported. Each track has a language.
-- A warning appears for lines that are too long or too fast to read **[P]**.
+- Warnings (never blockers) appear for captions that are hard to read **[P: based on common caption guidance]**: more than 2 lines; more than 42 characters on a line; faster than about 160 words per minute (roughly 20 characters per second); or on screen for less than 1 second. The numbers are adjustable. WCAG sets no numbers for this. These come from published caption guides (DCMP, Netflix, and BBC) as summarized by secondary sources, so the official guides should be checked before the numbers are finalized.
 - A caption I edited by hand is marked, and regenerating never overwrites it without asking.
 
 #### D3. Captions from a recorded voice
@@ -357,6 +359,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 - Captions can be generated locally from recorded audio, with nothing sent off the computer.
 - The result is labeled "auto-generated, unreviewed" until I approve it.
 - It plugs in through OpenStage's planned "captions from media" contract. No model-specific code enters the format or the renderer.
+- The first tool audited is Whisper, which is already on OpenStage's roadmap. Its license is believed to be MIT and must be verified *(confirmed order)*.
 - **Fallback rule:** if no speech recognition tool passes the license and quality audit, this story leaves Release 1. D1 and D2 stay.
 
 **Accessibility checks**
@@ -375,11 +378,12 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Done when**
 - The author can write short descriptions at points in time. They are voiced through the same script-to-speech route as narration, or recorded.
-- Where the course player allows, description can pause the video to fit (extended description). Otherwise it fits into natural pauses.
-- How it reaches learners (for example a toggle) depends on what OpenStage's player offers. If the player has no such control yet, the description is also in the transcript **[P]**.
+- Not every video needs description. If everything important on screen is already said in the narration, no extra description is needed. The checker (F4) flags videos with important visual-only content so the author can add description where it matters.
+- **Delivery (owner: a pop-up when the learner asks for it).** A clearly labeled "Audio description" button sits by the video and opens an accessible pop-up that follows OpenStage's dialog rules: focus moves in, Escape closes it, focus returns, no keyboard trap. In the pop-up the learner can read the description, listen to it, and **[P]** play the video with the description voiced in time with it, pausing the video where needed (extended description).
+- That last option matters for the AA claim. WCAG 1.2.5 asks for audio description that is synchronized with prerecorded video, and a text-only alternative satisfies only the Level A criterion (1.2.3). Whether the play-with-description option is in Release 1 is open (section 9).
 
 **Accessibility checks**
-- Reviewed by someone who uses a screen reader.
+- Reviewed by someone who uses a screen reader. The pop-up passes the dialog checks (focus, Escape, no keyboard trap).
 
 #### D6. Alt text and required fields for everything Capture adds
 **As an** author, **I want** help filling the required accessibility fields, **so that** nothing is left empty.
@@ -501,7 +505,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Done when**
 - The shell can start the program while keeping its input open and reading its output as it arrives, and can show the state in the page.
-- A recording has its own slot, so it does not block (or get blocked by) preview and publish. What may run together is defined **[P]**.
+- A recording has its own slot, separate from preview and publish. While a recording is in progress, heavy jobs (publishing, previewing the course, making narration audio, and exporting video) wait until I pause or stop, with a plain message, because they would slow the recording and can cause dropped frames. Everything else, such as editing slides and saving, stays available **[P: the owner left this open; this is the recommended default]**.
 - Stop is graceful first. The abrupt kill is the fallback only after a wait **[P: 10 seconds]**.
 - The window's security policy allows previewing local video without opening it to other sources.
 - This change is agreed with the owner first, as CLAUDE.md requires.
@@ -577,7 +581,7 @@ Release 1 does not ship until these are done. Items 1, 2, and 4 are OpenStage wo
 |---|---|
 | **Performance** | Capture overhead below about 10% CPU on a mid-range laptop at 1080p30. Audio and video drift under 40 ms over a 60-minute recording. |
 | **Reliability** | A killed recording loses only the last few seconds (A8). A cancelled export never leaves a partial file. A failed edit never damages the original recording. |
-| **Compatibility** | Windows only. Supported Windows versions and editions are set by the capture spike and tested (A9). MP4 plays in current browsers. |
+| **Compatibility** | Windows 11 and later only *(confirmed)*. Editions are checked by the capture spike and tested (A9). MP4 plays in current browsers. |
 | **Privacy and security** | Everything stays on the computer. Interaction capture is opt-in. Raw material never ships (R6). The program reads only what the author chose to record. Inputs to the program are validated, as OpenStage already does for other tools. |
 | **Licensing** | As in R7 and the brief, section 7. Narration engine components that are under the GPL stay separate and user-installed, and are never bundled or mirrored. |
 | **Usability** | A first-time author records a short tutorial and puts it, captioned, into a course in under 10 minutes. |
@@ -587,24 +591,33 @@ Release 1 does not ship until these are done. Items 1, 2, and 4 are OpenStage wo
 
 macOS and Linux; JAWS and VoiceOver testing; SCORM 2004; xAPI and cmi5; WebM output; a sign-language video track; accessible PDF or HTML step guides; templates and themes; noise removal; localization; a plugin API; color correction, green screen, multi-camera editing, a large effects catalog, and motion graphics.
 
-## 9. Details to settle during design (proposals)
+## 9. Details: confirmed and still proposed
 
-These are the [P] items above, collected so you can confirm or change them in one pass.
+The owner answered the fourteen proposed details. This table shows where each stands.
 
-1. Countdown before recording: 3 seconds, adjustable or off (A3).
-2. Default hotkeys (A3).
-3. Sounds: short, adjustable volume, on by default, can be turned off (A4).
-4. Notification pop-ups excluded by default (A7).
-5. Maximum recovery loss: 5 seconds (A8).
-6. Capture folder name: `name.capture` (B1).
-7. Delete leaves a gap or closes it: author chooses (C2).
-8. What "short" means for outside video clips (C10).
-9. Default zoom transition: half a second; "reduce motion" export choice (C5).
-10. Line length and reading speed limits for captions (D2).
-11. How audio description reaches learners, given the player's current features (D5).
-12. What may run while a recording is in progress, and the stop wait of 10 seconds (G2).
-13. Supported Windows versions and editions (A9, section 7).
-14. Which speech recognition tool to audit first (D3). The brief suggests starting with Whisper, which is on OpenStage's roadmap.
+| # | Detail | Status |
+|---|---|---|
+| 1 | Countdown before recording (A3) | **Confirmed:** 3 seconds, adjustable, or off |
+| 2 | Default hotkeys (A3) | **Confirmed that defaults are needed. Values proposed:** Ctrl+Shift+F9 start, F10 pause or resume, F11 stop; tested for collisions in the capture spike |
+| 3 | Sounds (A4) | **Confirmed:** short, adjustable volume, on by default, can be turned off |
+| 4 | Notification pop-ups (A7) | **Confirmed:** excluded by default |
+| 5 | Maximum recovery loss (A8) | **Confirmed: 10 seconds** (changed from the proposed 5) |
+| 6 | Capture folder name (B1) | **Confirmed:** `name.capture` |
+| 7 | Delete leaves a gap or closes it (C2) | **Confirmed:** the author chooses |
+| 8 | What "short" means for outside video clips (C10) | **Confirmed:** 30 seconds or less |
+| 9 | Zoom transition and reduce-motion export (C5) | **Confirmed:** half a second; reduce-motion choice included |
+| 10 | Caption limits (D2) | **Proposed from best-practice research:** at most 2 lines; at most 42 characters a line; about 160 words per minute (roughly 20 characters per second); at least 1 second on screen; warnings only; adjustable. Check the official guides before finalizing |
+| 11 | How audio description reaches learners (D5) | **Confirmed:** a pop-up when the learner asks for it. **Proposed:** include a play-with-description option (needed to meet WCAG 1.2.5 at Level AA) |
+| 12 | What may run during a recording; the stop wait (G2) | **Left open by the owner.** Recommended default: heavy jobs wait until pause or stop; everything else stays available. The 10-second stop wait stands unless changed |
+| 13 | Supported Windows versions (A9, section 7) | **Confirmed:** Windows 11 and later |
+| 14 | Speech recognition tool to audit first (D3) | **Confirmed:** Whisper first (license to be verified) |
+
+**Still to settle**
+- The hotkey values, after collision testing (item 2).
+- The caption numbers, after checking the official guides (item 10).
+- Whether Release 1 includes the play-with-description option (item 11).
+- Whether the recommended default for jobs during a recording is right (item 12).
+- The editing performance target for 60-minute recordings (C3).
 
 ## 10. Traceability to the brief
 

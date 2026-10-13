@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** v0.14, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
+**Status:** v0.15, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage Author** ("OpenStage" for short), a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface) at [github.com/jasonswrench-beep/openstage-author](https://github.com/jasonswrench-beep/openstage-author). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -24,7 +24,7 @@
 | Engine language | Rust |
 | Process model | Separate process with **no interface of its own**. OpenStage's UI and global hotkeys drive it; JSON on stdout; the same launch pattern OpenStage already uses for `publish.ts`, `narrate.py`, and `validate.py`, extended so a live recording can be controlled (9.1) |
 | Interface | Native HTML controls inside OpenStage. No separate GUI toolkit |
-| Platforms | **Windows only for Release 1.** macOS and JAWS testing only if a Mac user and a JAWS license become available later; Linux is not planned |
+| Platforms | **Windows 11 and later only for Release 1.** macOS and JAWS testing only if a Mac user and a JAWS license become available later; Linux is not planned |
 | Editing | **A mid-level video editor** (owner: basic video editing, text overlays, and zooming into parts, like Camtasia), with a **Camtasia-style multi-track timeline, in Release 1**. Images, audio, and short video clips from outside the recording are accepted (owner: option B). Not a full or professional editor; section 5 lists what is in and out |
 | Publishing | **One publisher only: OpenStage's.** Any capture path hands assets to it; OpenStage Capture never ships its own exporter. Release 1 targets **SCORM 1.2 only**. Today the publisher produces a folder of plain web files and a SCORM 1.2 zip; SCORM 2004 and xAPI are on OpenStage's roadmap as later *(confirmed)* |
 | Narration | Text-first. Audio generation is **download on first use, never bundled** in the installer. Nothing breaks if it is never downloaded |
@@ -155,7 +155,7 @@ The recorder and editor are OpenStage HTML, so they inherit OpenStage's accessib
 - **Follow OpenStage's schema rules for everything Capture adds.** Every object carries `altText`, `role`, `tabOrder`, and `decorative`, never optional and never filled silently with empty defaults *(confirmed, CLAUDE.md)*. Auto-generated alt text is allowed because it is not empty, but it is flagged unreviewed.
 - **Text the learner reads needs an audio route.** OpenStage's rule: if it is text the learner is meant to read, audio should be available for it. Step text, callout text, and captions that Capture introduces must be narratable from a script, and the editor should make that easy; say so wherever a new kind of text has no audio route yet *(confirmed, CLAUDE.md)*.
 - **A video object must have a caption file or a narration script.** The format and validator already require it (`format-spec.md`, `schema/object.schema.json`), so a recording cannot be inserted without one *(confirmed)*.
-- **Audio description track** (WCAG 1.2.3 / 1.2.5): written as text and voiced through the same script-to-speech route; support extended description (pausing video) in interactive output.
+- **Audio description track** (WCAG 1.2.3 / 1.2.5): written as text and voiced through the same script-to-speech route; support extended description (pausing video) in interactive output. Delivery to learners is a pop-up that opens when the learner asks for it (owner decision; see the PRD, story D5).
 - **Alt text for non-text content** (callouts, shapes, images, hotspots), with a prompt rather than silent omission. Pre-fill from the Windows UI Automation tree where available, for example "Button: Save".
 - **Motion and flashing safeguards.** Zooms, click effects, and transitions must not exceed three flashes per second (WCAG 2.3.1); respect reduced motion in the player.
 - **Contrast and legibility checks** for callouts, captions, cursor highlights, and annotations (WCAG 1.4.3 / 1.4.11).

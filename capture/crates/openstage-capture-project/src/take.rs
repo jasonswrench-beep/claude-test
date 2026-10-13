@@ -19,6 +19,21 @@ pub enum TakeState {
     SetAside,
 }
 
+/// One media file of a take, named relative to the take's folder.
+///
+/// Takes of the test source keep their media in `segments/` and list nothing here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaFile {
+    /// For example `screen.mp4`.
+    pub file: String,
+    /// What it holds, for example `screen`.
+    pub kind: String,
+    /// How it is stored. `fragmented-mp4` is a crash-safe MP4: a setup box and then short,
+    /// self-contained fragments, so a file cut off by a crash plays up to the last whole fragment.
+    pub container: String,
+}
+
 /// `take.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +50,11 @@ pub struct Take {
     pub flush_ms: u64,
     pub duration_ms: Option<u64>,
     pub max_loss_ms: Option<u64>,
+    /// Files, or the number of segment files for the test source.
     pub segments: u32,
+    /// The take's media files (new in format 0.2). Absent in older projects.
+    #[serde(default)]
+    pub media: Vec<MediaFile>,
 }
 
 /// A take folder found on disk, readable or not.
@@ -85,7 +104,8 @@ pub fn read_take(project: &Path, id: u32) -> Result<Take, ProjectError> {
     Ok(serde_json::from_str(&text)?)
 }
 
-/// Make the folder for a new take and write its `take.json` in the `Recording` state.
+/// Make the folder for a new take (with a `segments` folder, for the test source) and write its
+/// `take.json` in the `Recording` state.
 pub fn create_take(
     project: &Path,
     id: u32,
@@ -93,8 +113,25 @@ pub fn create_take(
     target: Option<serde_json::Value>,
     flush_ms: u64,
 ) -> Result<Take, ProjectError> {
+    create_take_with(project, id, sources, target, flush_ms, Vec::new())
+}
+
+/// Like [`create_take`], naming the media files the take will hold. A take with named media files
+/// gets no `segments` folder.
+pub fn create_take_with(
+    project: &Path,
+    id: u32,
+    sources: Vec<String>,
+    target: Option<serde_json::Value>,
+    flush_ms: u64,
+    media: Vec<MediaFile>,
+) -> Result<Take, ProjectError> {
     let dir = take_dir(project, id);
-    fs::create_dir_all(dir.join("segments"))?;
+    if media.is_empty() {
+        fs::create_dir_all(dir.join("segments"))?;
+    } else {
+        fs::create_dir_all(&dir)?;
+    }
     let take = Take {
         id,
         state: TakeState::Recording,
@@ -107,6 +144,7 @@ pub fn create_take(
         duration_ms: None,
         max_loss_ms: None,
         segments: 0,
+        media,
     };
     write_take(project, &take)?;
     Ok(take)
@@ -188,6 +226,26 @@ mod tests {
         create_take(dir.path(), 1, vec![], None, 1000).unwrap();
         let t = finish_take(dir.path(), 1, 5000, 3).unwrap();
         assert_eq!((t.state, t.duration_ms, t.segments), (TakeState::Complete, Some(5000), 3));
+    }
+
+    #[test]
+    fn a_version_0_1_take_json_without_media_still_reads_and_a_media_take_has_no_segments_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        create_project(dir.path(), "t", "en-US").unwrap();
+        create_take(dir.path(), 1, vec![], None, 1000).unwrap();
+        // An old file: no "media" key at all.
+        let path = take_dir(dir.path(), 1).join("take.json");
+        let mut value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("media");
+        std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+        assert!(read_take(dir.path(), 1).unwrap().media.is_empty());
+
+        let media =
+            vec![MediaFile { file: "screen.mp4".into(), kind: "screen".into(), container: "fragmented-mp4".into() }];
+        let take = create_take_with(dir.path(), 2, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
+        assert_eq!(take.media, media);
+        assert!(!take_dir(dir.path(), 2).join("segments").exists());
+        assert_eq!(read_take(dir.path(), 2).unwrap().media, media);
     }
 
     #[test]

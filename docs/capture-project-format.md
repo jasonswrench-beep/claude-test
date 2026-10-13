@@ -1,8 +1,8 @@
 # OpenStage Capture: Project Format
 
-**Status:** v0.1 (matches the code in `capture/crates/openstage-capture-project`)
+**Status:** v0.2 (matches the code in `capture/crates/openstage-capture-project`)
 **Format name:** `openstage-capture-project`
-**Schema version:** `0.1.0`
+**Schema version:** `0.2.0` (projects at `0.1.x` still open unchanged: see section 7)
 
 A recording lives in its own folder, named `something.capture`, **beside** the course (the `.osproj`), never inside it. This matters: OpenStage's publisher zips the project into `source/`, and raw footage and the interaction log (which can contain private information) must never ship to learners. Only the exported, edited video becomes part of the course.
 
@@ -12,16 +12,20 @@ A recording lives in its own folder, named `something.capture`, **beside** the c
 lesson.capture/
   capture.json                  the manifest (small, rarely changes)
   takes/
-    take-001/
-      take.json                 the only record of this take's state
+    take-001/                   a real screen recording
+      take.json                 the only record of this take's state; lists its media files
       events.jsonl              what the author did while recording (append-only)
+      screen.mp4                the picture, as one crash-safe fragmented MP4
+    take-002/                   a take of the built-in test source (used by the tests)
+      take.json
+      events.jsonl
       segments/
-        seg-000001.seg          complete pieces of the recording
+        seg-000001.seg          complete, checksummed pieces of the recording
         seg-000002.seg
         seg-000003.part         a piece still being written (or left by a crash)
-    take-002/
-      ...
 ```
+
+A take holds its media in **one of two ways**. A real screen recording is one `screen.mp4` file written by Windows' own video tools. The built-in test source (which makes fake picture and sound so the recorder can be tested anywhere) uses the segment files described in section 4. `take.json` says which: a take with a `media` list is a file take; a take without one is a segment take.
 
 ## 2. The manifest: `capture.json`
 
@@ -64,12 +68,15 @@ lesson.capture/
   "startedAt": "2026-10-13T12:00:00Z",
   "endedAt": "2026-10-13T12:00:12Z",
   "setAsideAt": null,
-  "sources": ["synthetic"],
+  "sources": ["screen:1"],
   "target": null,
-  "flushMs": 1000,
+  "flushMs": 2000,
   "durationMs": 12000,
   "maxLossMs": null,
-  "segments": 6
+  "segments": 1,
+  "media": [
+    { "file": "screen.mp4", "kind": "screen", "container": "fragmented-mp4" }
+  ]
 }
 ```
 
@@ -80,11 +87,39 @@ lesson.capture/
 | `recovered` | Repaired after an interruption. `maxLossMs` says the most that could have been lost. |
 | `setAside` | The author chose Start again. The take is **kept, never erased**. |
 
+| Field | Meaning |
+|---|---|
+| `sources` | What was recorded: `screen:1` is Display 1; `synthetic` is the test source. |
+| `flushMs` | The most recording a crash can cost with this kind of media. Segment takes force data to disk this often (1000 by default). For `fragmented-mp4` takes it is 2000: Windows closes a fragment about every second, and a measured crash on Windows 11 lost 1.1 seconds. |
+| `durationMs` | How long the recording ran, not counting time spent paused. For a recovered file take it is an **estimate** (about one second per whole fragment); the exact length is read when the video is opened. |
+| `segments` | How many media files the take holds (segment files, or video files). |
+| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` (`screen`) and a `container` (`fragmented-mp4`: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment). Absent in older projects. |
+
 `take.json` is written atomically (to a temporary file, then renamed), so a crash never leaves half a file. It is the **only** place a take's state is recorded. Take folders are numbered `take-001`, `take-002`, and so on; numbers are never reused.
 
-## 4. Segments
+## 4. Screen recordings: one crash-safe MP4
 
-Recording is written in short pieces called segments (2 seconds each by default). Each piece is complete and checksummed on its own, so a crash costs seconds, not the take.
+A real screen recording is one file, `screen.mp4`, written by Windows' Media Foundation as a **fragmented MP4**: the setup box (`ftyp`, `moov`) is written first, then a short fragment (a `moof` box describing it and an `mdat` box holding the video) about once a second. Every fragment is complete on its own, so a file that stops in the middle of a fragment still plays up to the one before.
+
+The picture is H.264 at a steady 30 pictures per second (the newest picture of the screen repeats while the screen does not change). The video's clock is **recording time**: pausing stops it, so the video has no gap where a pause was.
+
+There is no sound yet; microphone and system sound will be added to the same file.
+
+### Recovery
+
+`openstage-capture recover --project <folder>` does this for every take in state `recording` that lists an MP4 file:
+
+1. Look at the outermost boxes of the file. Find the last safe point: after the setup box, or after a whole fragment (`moof` and its complete `mdat`).
+2. Cut the file back to that point. Only an unfinished last fragment, or a few stray bytes, are ever removed. A file that is already clean is left alone.
+3. A file that does not exist is reported. A file with no usable start (not even the setup box) is **left exactly as it is** and reported.
+4. Trim a half-written final line from `events.jsonl`.
+5. Write `take.json` with state `recovered`, an estimated `durationMs`, and `maxLossMs`.
+
+It is safe to run again. In a real test on Windows 11 the recording ran 8.1 seconds, the program was killed without warning, and 7.0 seconds survived and played without any repair.
+
+## 5. Segments (the test source)
+
+Segment takes are written in short pieces called segments (2 seconds each by default). Each piece is complete and checksummed on its own, so a crash costs seconds, not the take.
 
 ### Files
 
@@ -121,7 +156,7 @@ Data is forced to disk every `flushMs` (1000 ms by default). **A crash loses at 
 
 It is safe to run again: takes that are already fine are left alone. A take folder with a missing or unreadable `take.json` is rebuilt from the recording itself, with a plain-language note. **Nothing is ever deleted except a segment file that held no data at all.** The cut-off end of a damaged segment is the only recorded data that can be dropped, and `maxLossMs` states how much that can be.
 
-## 5. The interaction log: `events.jsonl`
+## 6. The interaction log: `events.jsonl`
 
 One JSON object per line, only ever appended to. `t` is milliseconds of recording time.
 
@@ -142,10 +177,14 @@ One JSON object per line, only ever appended to. `t` is milliseconds of recordin
 
 Interaction capture is **off unless the author turns it on** (this is a requirement for the real Windows capture, Phase 2; in version 0.1 the only thing written is `marker`). A line that cannot be read, such as one cut short by a crash, is skipped when reading and trimmed by `recover`. The log is the raw material for step lists, alt text, and interactive steps; it is not published.
 
-## 6. Rules this format keeps
+## 7. Versions
+
+`0.2.0` only **adds** one optional field (`media` in `take.json`). Projects at `0.1.x` open unchanged, so no migration is needed; the version is bumped so that a program that does not know about `media` can tell. A project with any other version is refused with a plain message.
+
+## 8. Rules this format keeps
 
 - Nothing the author recorded is erased by the software. Start again sets a take aside.
-- A crash costs at most `flushMs` of recording.
+- A crash costs at most `flushMs` of recording (1 second for segment takes, 2 for screen recordings).
 - A newer, unknown schema is refused with a plain message, never half-read.
 - Raw footage and the interaction log stay out of published courses.
 - Narration is text. Nothing in this format stores narration as audio only.

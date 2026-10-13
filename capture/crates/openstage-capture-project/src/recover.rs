@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::error::ProjectError;
 use crate::events_log::trim_incomplete_tail;
+use crate::fmp4::{repair_file, scan_file};
 use crate::fsutil::utc_now_iso;
 use crate::manifest::open_project;
 use crate::segment::{final_path, salvage_part, scan};
@@ -41,7 +42,61 @@ fn names_in(dir: &Path) -> Vec<String> {
     names
 }
 
+/// How long a fragment of a crash-safe MP4 is, as Windows' writer is asked to make them. Used to
+/// estimate how long a recovered video is without opening it; the exact length is read when it is played.
+const FRAGMENT_MS: u64 = 1000;
+
+/// Repair a take whose media is crash-safe MP4 files: cut each file back to its last whole fragment.
+fn recover_mp4_take(project: &Path, mut take: Take, report: &mut RecoverReport) -> Result<(), ProjectError> {
+    let dir = take_dir(project, take.id);
+    let mut longest_ms = 0u64;
+    let mut usable_files = 0u32;
+    for media in take.media.clone().iter().filter(|m| m.container == "fragmented-mp4") {
+        let path = dir.join(&media.file);
+        if !path.is_file() {
+            report.problems.push(format!(
+                "Take {}: the video file {} was never created, so there was nothing to recover from it.",
+                take.id, media.file
+            ));
+            continue;
+        }
+        let scan = scan_file(&path)?;
+        if scan.safe_len == 0 {
+            report.problems.push(format!(
+                "Take {}: the video file {} has no usable start, so it could not be repaired. It was left as it is.",
+                take.id, media.file
+            ));
+            continue;
+        }
+        repair_file(&path)?;
+        usable_files += 1;
+        longest_ms = longest_ms.max(scan.fragments as u64 * FRAGMENT_MS);
+    }
+
+    let log = dir.join("events.jsonl");
+    if log.exists() {
+        trim_incomplete_tail(&log)?;
+    }
+
+    take.state = TakeState::Recovered;
+    take.ended_at = Some(utc_now_iso());
+    take.duration_ms = Some(longest_ms);
+    take.max_loss_ms = Some(take.flush_ms);
+    take.segments = usable_files;
+    write_take(project, &take)?;
+    report.recovered.push(RecoveredTake {
+        take: take.id,
+        duration_ms: longest_ms,
+        max_loss_ms: take.flush_ms,
+        segments: usable_files,
+    });
+    Ok(())
+}
+
 fn recover_one(project: &Path, mut take: Take, report: &mut RecoverReport) -> Result<(), ProjectError> {
+    if take.media.iter().any(|m| m.container == "fragmented-mp4") {
+        return recover_mp4_take(project, take, report);
+    }
     let dir = take_dir(project, take.id);
     let segments = dir.join("segments");
 
@@ -118,6 +173,7 @@ pub fn recover_project(project: &Path) -> Result<RecoverReport, ProjectError> {
                         duration_ms: None,
                         max_loss_ms: None,
                         segments: 0,
+                        media: Vec::new(),
                     };
                     recover_one(project, rebuilt, &mut report)?;
                 } else {
@@ -187,6 +243,86 @@ mod tests {
         assert!(final_path(&segs, 3).exists() && !part_path(&segs, 3).exists());
         let log = fs::read_to_string(take_dir(dir.path(), 1).join("events.jsonl")).unwrap();
         assert_eq!(log.lines().count(), 1);
+    }
+
+    fn boxed(kind: &str, payload_len: usize) -> Vec<u8> {
+        let mut out = ((payload_len + 8) as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind.as_bytes());
+        out.extend(std::iter::repeat_n(0u8, payload_len));
+        out
+    }
+
+    /// A take whose video is a crash-safe MP4 that was cut off in the middle of its sixth fragment.
+    fn crashed_mp4_project() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>) {
+        use crate::take::{create_take_with, MediaFile};
+        let dir = tempfile::tempdir().unwrap();
+        create_project(dir.path(), "t", "en-US").unwrap();
+        let media =
+            vec![MediaFile { file: "screen.mp4".into(), kind: "screen".into(), container: "fragmented-mp4".into() }];
+        create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media).unwrap();
+        let mut good = boxed("ftyp", 16);
+        good.extend(boxed("moov", 300));
+        for _ in 0..5 {
+            good.extend(boxed("moof", 60));
+            good.extend(boxed("mdat", 4000));
+        }
+        let mut torn = good.clone();
+        torn.extend(boxed("moof", 60));
+        torn.extend_from_slice(&boxed("mdat", 4000)[..1234]);
+        let path = take_dir(dir.path(), 1).join("screen.mp4");
+        fs::write(&path, &torn).unwrap();
+        fs::write(
+            take_dir(dir.path(), 1).join("events.jsonl"),
+            "{\"t\":1,\"type\":\"marker\",\"label\":\"a\"}\n{\"t\":2,",
+        )
+        .unwrap();
+        (dir, path, good)
+    }
+
+    #[test]
+    fn a_crashed_mp4_take_is_cut_back_to_its_last_whole_fragment() {
+        let (dir, path, good) = crashed_mp4_project();
+        let report = recover_project(dir.path()).unwrap();
+        assert_eq!(report.recovered.len(), 1);
+        let r = &report.recovered[0];
+        assert_eq!((r.take, r.segments, r.max_loss_ms, r.duration_ms), (1, 1, 2000, 5000));
+        assert_eq!(fs::read(&path).unwrap(), good, "only the unfinished fragment was removed");
+
+        let take = read_take(dir.path(), 1).unwrap();
+        assert_eq!((take.state, take.duration_ms, take.max_loss_ms), (TakeState::Recovered, Some(5000), Some(2000)));
+        assert_eq!(take.media.len(), 1, "the take still names its video file");
+        let log = fs::read_to_string(take_dir(dir.path(), 1).join("events.jsonl")).unwrap();
+        assert_eq!(log.lines().count(), 1, "the half-written log line is trimmed too");
+        assert!(report.problems.is_empty());
+    }
+
+    #[test]
+    fn recovering_a_recovered_mp4_take_changes_nothing() {
+        let (dir, path, good) = crashed_mp4_project();
+        recover_project(dir.path()).unwrap();
+        let again = recover_project(dir.path()).unwrap();
+        assert!(again.recovered.is_empty());
+        assert_eq!(again.untouched, vec![1]);
+        assert_eq!(fs::read(&path).unwrap(), good);
+    }
+
+    #[test]
+    fn an_mp4_take_whose_video_was_never_written_is_reported_not_hidden() {
+        let (dir, path, _good) = crashed_mp4_project();
+        fs::remove_file(&path).unwrap();
+        let report = recover_project(dir.path()).unwrap();
+        assert_eq!(report.recovered.len(), 1);
+        assert_eq!(report.recovered[0].segments, 0);
+        assert!(report.problems.iter().any(|p| p.contains("was never created")), "{:?}", report.problems);
+    }
+
+    #[test]
+    fn an_mp4_file_with_no_usable_start_is_left_exactly_as_it_is() {
+        let (dir, path, _good) = crashed_mp4_project();
+        fs::write(&path, [7u8; 40]).unwrap();
+        let report = recover_project(dir.path()).unwrap();
+        assert!(report.problems.iter().any(|p| p.contains("no usable start")));
+        assert_eq!(fs::read(&path).unwrap(), vec![7u8; 40], "nothing is ever erased");
     }
 
     #[test]

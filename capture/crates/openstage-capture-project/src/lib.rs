@@ -3,8 +3,10 @@
 //!
 //! A recording lives in its own folder (named `something.capture`) beside the
 //! course, never inside it. The folder holds a small manifest (`capture.json`)
-//! and one folder per *take* under `takes/`. Each take holds its media in small
-//! pieces called segments, plus an append-only log of interactions.
+//! and one folder per *take* under `takes/`. A take holds its media either as
+//! one crash-safe fragmented MP4 written by Windows (`screen.mp4`, listed in
+//! `take.json`) or, for the test source, in small checksummed pieces called
+//! segments, plus an append-only log of interactions.
 //!
 //! Everything here is built so that a crash costs seconds, not the take:
 //!
@@ -19,6 +21,7 @@
 
 mod error;
 mod events_log;
+pub mod fmp4;
 mod fsutil;
 mod manifest;
 mod recover;
@@ -34,6 +37,6 @@ pub use segment::{
     final_path, part_path, read_records, salvage_part, scan, Record, Salvage, SegmentInfo, SegmentWriter,
 };
 pub use take::{
-    create_take, finish_take, list_takes, next_take_id, read_take, set_aside_take, take_dir, write_take, Take,
-    TakeEntry, TakeState,
+    create_take, create_take_with, finish_take, list_takes, next_take_id, read_take, set_aside_take, take_dir,
+    write_take, MediaFile, Take, TakeEntry, TakeState,
 };

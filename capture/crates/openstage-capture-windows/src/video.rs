@@ -87,6 +87,10 @@ pub trait VideoPlatform {
     /// Start Windows' video tools (Media Foundation).
     fn start_media(&self) -> Result<(), ScreenError>;
     fn h264_encoders(&self) -> Result<Vec<EncoderInfo>, ScreenError>;
+    /// Whether Windows has an AAC sound encoder, which the sound inside an MP4 needs.
+    fn aac_encoder_available(&self) -> Result<bool, ScreenError> {
+        Err(ScreenError::NotWindows)
+    }
     fn create_sink(&self, spec: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError>;
     /// Open a finished (or cut-off) video file the way a player would and count what can be read.
     fn inspect_video(&self, path: &Path) -> Result<VideoInspection, ScreenError>;

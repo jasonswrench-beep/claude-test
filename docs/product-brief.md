@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** v0.13, checked against the OpenStage Author repository; ready to become a requirements document (PRD), with open items in section 12
+**Status:** v0.14, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage Author** ("OpenStage" for short), a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface) at [github.com/jasonswrench-beep/openstage-author](https://github.com/jasonswrench-beep/openstage-author). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -501,7 +501,7 @@ Read by the author of this brief from `jasonswrench-beep/openstage-author` (read
 12. **Audit speech-recognition candidates** (start with Whisper) for license and quality, to decide whether they fit Release 1 or trigger the fallback rule.
 13. **Draft the accessibility statement,** including the reflow gap until it is fixed.
 14. **When the brief moves into the OpenStage repository,** apply that project's writing rules and working style (for example, no em dashes in prose).
-15. **Convert this brief into a PRD** with user stories, each carrying accessibility acceptance criteria.
+15. ~~Convert this brief into a PRD.~~ **Done:** first draft in [prd.md](prd.md), with user stories, "done when" checklists, and accessibility checks.
 
 ## 15. Plain-language glossary
 

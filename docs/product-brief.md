@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** v0.12, checked against the OpenStage Author repository; ready to become a requirements document (PRD), with open items in section 12
+**Status:** v0.13, checked against the OpenStage Author repository; ready to become a requirements document (PRD), with open items in section 12
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage Author** ("OpenStage" for short), a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface) at [github.com/jasonswrench-beep/openstage-author](https://github.com/jasonswrench-beep/openstage-author). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -25,7 +25,7 @@
 | Process model | Separate process with **no interface of its own**. OpenStage's UI and global hotkeys drive it; JSON on stdout; the same launch pattern OpenStage already uses for `publish.ts`, `narrate.py`, and `validate.py`, extended so a live recording can be controlled (9.1) |
 | Interface | Native HTML controls inside OpenStage. No separate GUI toolkit |
 | Platforms | **Windows only for Release 1.** macOS and JAWS testing only if a Mac user and a JAWS license become available later; Linux is not planned |
-| Editing | **A mid-level video editor** (owner: basic video editing, text overlays, and zooming into parts, like Camtasia), with a **Camtasia-style multi-track timeline, in Release 1**. Not a full or professional editor; section 5 lists what is in and out |
+| Editing | **A mid-level video editor** (owner: basic video editing, text overlays, and zooming into parts, like Camtasia), with a **Camtasia-style multi-track timeline, in Release 1**. Images, audio, and short video clips from outside the recording are accepted (owner: option B). Not a full or professional editor; section 5 lists what is in and out |
 | Publishing | **One publisher only: OpenStage's.** Any capture path hands assets to it; OpenStage Capture never ships its own exporter. Release 1 targets **SCORM 1.2 only**. Today the publisher produces a folder of plain web files and a SCORM 1.2 zip; SCORM 2004 and xAPI are on OpenStage's roadmap as later *(confirmed)* |
 | Narration | Text-first. Audio generation is **download on first use, never bundled** in the installer. Nothing breaks if it is never downloaded |
 | Speech | Local only, permissive licenses only |
@@ -33,6 +33,7 @@
 | Name | **OpenStage Capture** (confirmed by owner; crate prefix `openstage-capture`). Replaces the working title "OpenScreen" |
 | Release plan | **One big first release (Release 1)** with everything major; section 8 says what is in and out |
 | Prerequisite | **Responsive output in OpenStage's player is fixed first** (owner: "ideally, fix responsive output first"). Release 1 does not ship until it is done. It is OpenStage Author work, outside this module (section 8) |
+| Rule exceptions | **Accepted (owner)** for the Capture module: Windows first, a mid-level video editor, and a Rust capture program. To be recorded in OpenStage's CLAUDE.md by the owner or the OpenStage session (section 12, item 7) |
 | Video output | **MP4** (H.264 video, AAC audio) using Windows's built-in encoders. WebM is not in Release 1. A legal check on patents is still advised before shipping |
 | Narration helper tools (GPL) | **Option 1, for now:** they stay separate and the user installs them; OpenStage never includes or hosts them |
 | Code from other projects | **None** copied from the existing OpenScreen project (owner: cleaner). Rules for any future outside code stay in section 7 |
@@ -121,10 +122,11 @@ The owner's words: "a middle-video editor. Some basic video editing and text ove
 - **Shapes, arrows, and blur or redact regions.**
 - **Audio basics:** volume, mute, and fade in and out.
 - **Captions:** edited on their own track alongside the audio.
+- **Media from outside the recording:** images, audio (such as music or a voice-over), and short video clips on the timeline, the way Camtasia's media bin works.
 
 **Not planned for now,** so the scope stays mid-level: color correction and filters, green screen, multi-camera editing, a large effects and transitions catalog, motion graphics and animation curves beyond zoom and pan, and advanced audio mixing or noise removal. Small additions such as playback speed changes, freeze frames, or simple fades between clips can be added later if wanted.
 
-**Open question:** whether the editor also accepts media from outside (images, music, and short video clips) the way Camtasia's media bin does, or only recordings made with OpenStage Capture. See open item 10 in section 12.
+**Decided (owner): media from outside the recording is accepted** (option B). Imports should come from the course's existing asset library where possible, which already records each file's source, creator, and licence and feeds the credits page *(confirmed)*. OpenStage's validator rules then apply to imported media *(confirmed, `validator-spec.md` and `tools/validate.py`)*: an image needs alt text or must be marked decorative; a video needs a caption file or a narration script; and an audio clip needs captions, a script, or a transcript. That last rule applies to any audio object, so wordless background music still needs a transcript, and a short description of the music should satisfy it (to be confirmed when built).
 
 ## 6. Accessibility requirements
 
@@ -264,6 +266,7 @@ Not prerequisites: timing that follows a video (a roadmap request only, open ite
 - Track/clip model with a keyboard-operable table view
 - **Camtasia-style multi-track timeline**, extending OpenStage's existing Timeline panel pattern (6.1), keyboard-complete and screen-reader-verified before it ships
 - Trim, split, delete, reorder, multi-track
+- Images, audio, and short video clips from outside the recording on the timeline, drawn from the course's asset library; each keeps its source and licence record and carries the alt text, captions, or transcript the validator requires
 - Cursor re-styling and click highlights at render time (with flash safeguards)
 - Zoom and pan into parts of the screen (by hand, or suggested from clicks); text overlays, callouts, arrows, blur/redact
 
@@ -396,8 +399,9 @@ If a capture folder were ever placed inside a project, the publisher would need 
 |---|---|---|
 | **No real screen-reader testing of OpenStage exists yet** | The patterns this module reuses may not work as intended | Baseline NVDA/Narrator pass before building on them (6.3) |
 | **Multi-track timeline is hard to make keyboard- and screen-reader-operable** | Authors with disabilities locked out of the headline feature; ATAG Part A claim at risk | Structural model first; visual timeline is a view over it; does not ship until verified |
-| **Capture departs from OpenStage Author's own rules** ("Not a video editor," cross-platform, TypeScript throughout) *(confirmed)* | Work done against the host project's stated scope | Settle open item 7 and record the exceptions in CLAUDE.md before building |
+| **Capture departs from OpenStage Author's own rules** (video editor, cross-platform, TypeScript) *(confirmed)* | Work done against the host project's stated scope until CLAUDE.md says otherwise | The owner has accepted all three exceptions; record them in CLAUDE.md before building |
 | **The existing launcher can't run a live recording** *(confirmed)* | No pause/stop control or live state; a recording would block preview and publish | Add a streaming launch path with its own slot and a graceful stop (9.1) |
+| Media from outside the recording brings licensing and accessibility obligations | Unlicensed music or images; uncaptioned video; missing alt text | Draw imports from the course asset library (source, creator, and licence recorded); the validator's rules apply; prompt for missing alt text, captions, or transcripts |
 | **One big first release** | A longer wait before anything ships; more to test at once; schedule risk | Build in the suggested order (section 8); freeze the Release 1 list; apply the speech-to-text fallback rule |
 | **OpenStage's SCORM 1.2 has never run in a real LMS** *(confirmed)* | Release 1's headline test could fail for reasons outside this module | Test OpenStage's current output in Brightspace and Moodle first (Canvas when access arrives), before building on it |
 | Raw recordings or interaction logs shipped inside published packages | Learners receive keystrokes, window titles, and raw footage | Exclude by default; explicit opt-in; checked in the acceptance tests (section 10) |
@@ -421,7 +425,7 @@ If a capture folder were ever placed inside a project, the publisher would need 
 
 ## 12. Open questions
 
-*Resolved: the editor is mid-level (basic editing, text overlays, zoom, like Camtasia); reflow (fix responsive output first, as a Release 1 prerequisite); Windows only for now; the owner will add the timing-follows-video request to OpenStage's roadmap; name (OpenStage Capture); the Camtasia-style timeline is in Release 1; one big first release; Release 1 scope confirmed; no code from the existing OpenScreen project; GPL helper tools: option 1; MP4 output; no compliance deadline; no contribution rules; Brightspace and Moodle as real-LMS test targets, with Canvas access on the way; no VPAT yet (accessibility statement instead); and every fact previously listed to confirm in OpenStage's files (below).*
+*Resolved: all three differences from CLAUDE.md are accepted as exceptions (Windows first, a mid-level video editor, a Rust capture program); media from outside the recording is accepted (option B); the editor is mid-level (basic editing, text overlays, zoom, like Camtasia); reflow (fix responsive output first, as a Release 1 prerequisite); the owner will add the timing-follows-video request to OpenStage's roadmap; name (OpenStage Capture); the Camtasia-style timeline is in Release 1; one big first release; Release 1 scope confirmed; no code from the existing OpenScreen project; GPL helper tools: option 1; MP4 output; no compliance deadline; no contribution rules; Brightspace and Moodle as real-LMS test targets, with Canvas access on the way; no VPAT yet (accessibility statement instead); and every fact previously listed to confirm in OpenStage's files (below).*
 
 ### Confirmed from the OpenStage Author repository
 
@@ -448,17 +452,14 @@ Read by the author of this brief from `jasonswrench-beep/openstage-author` (read
 4. **Trademark and search check on the names** ("OpenStage" and "OpenStage Capture") before they go public (section 13).
 5. ~~The reflow gap in OpenStage's player: ship with it, or pull the fix forward?~~ **Decided (owner):** fix responsive output first. It is now a Release 1 prerequisite (section 8), with a checkpoint if it proves much larger than expected. Moving "Responsive output" from Later into OpenStage's active roadmap is an OpenStage edit for you or your OpenStage session.
 6. ~~A real LMS to test with.~~ **Done:** the owner has access to Brightspace and Moodle, so OpenStage's SCORM 1.2 output and Release 1 can be tested in both. Use a test or sandbox course, not a live course with real learners.
-7. **Where this module departs from OpenStage Author's own rules.** CLAUDE.md says three things this brief does not follow. They are your rules, so it is your call:
-   - ~~Cross-platform from the start.~~ **Resolved (owner):** Windows only for now. *Recommendation:* record "Windows first" as an explicit exception for the capture module in CLAUDE.md, since each platform needs its own capture code.
-   - ~~"Not a video editor."~~ **Resolved (owner):** the Capture module includes a mid-level video editor (section 5). The "Not a video editor" line in CLAUDE.md needs to change to match.
-   - **"TypeScript throughout."** *Still needs your answer.* The capture program is Rust, because screen capture needs native Windows code. *Recommendation:* record it as an explicit exception; the repository already uses Rust (the shell) and Python (the tools).
+7. ~~Where this module departs from OpenStage Author's own rules.~~ **Resolved (owner):** all three are accepted as exceptions for the Capture module.
+   - **Cross-platform from the start:** Windows only for now.
+   - **"Not a video editor":** the Capture module includes a mid-level video editor (section 5).
+   - **"TypeScript throughout":** the capture program is Rust, because screen capture needs native Windows code. The repository already uses Rust (the shell) and Python (the tools).
    - Each is a one-line edit to CLAUDE.md in the OpenStage repository, which only you or your OpenStage session should make (this session has read-only access). Suggested wording: *"Not a full or professional video editor. The Capture module includes a mid-level editor for recordings: trimming, splitting, text overlays, and zoom, in the manner of Camtasia."* / *"Cross-platform from the start, except the Capture module, which is Windows first."* / *"TypeScript throughout, except the Capture program, which is Rust because screen capture needs native code."*
 8. ~~Ask for timing that follows a video.~~ **Done:** the owner will add it to OpenStage's roadmap as a request. It is not a Release 1 requirement; Capture works without it (effects rendered in, with text equivalents).
 9. ~~Canvas.~~ **In progress:** the owner is getting access to Canvas. OpenStage's release gate names Moodle, Canvas, and Brightspace, so Canvas joins Brightspace and Moodle as a test target once access arrives. Until then, the accessibility statement and release notes say Canvas was not tested.
-10. **Media from outside the recording.** Camtasia lets you drop images, music, and video clips onto the timeline. Should OpenStage Capture's editor do that too, or only work with recordings made with it?
-   - **Option A: only Capture recordings.** *Good:* smaller scope, and every clip already has a caption and alt-text route. *Not so good:* no intro or outro clips, no background music, no logos, unless they are added in the course instead.
-   - **Option B (recommended): also accept images and audio, and short video clips.** *Good:* it covers how real tutorials are made. *Not so good:* more to build and test, and every imported video still needs a caption file or script (the validator already requires it), and every image needs alt text.
-   - Either way this stays mid-level; it is about what can go on the timeline, not about adding professional features.
+10. ~~Media from outside the recording.~~ **Decided (owner): option B.** The editor also accepts images, audio, and short video clips, drawn from the course's asset library, with the validator's rules applying to each (section 5).
 
 ### Revisit when…
 
@@ -488,7 +489,7 @@ Read by the author of this brief from `jasonswrench-beep/openstage-author` (read
 
 1. ~~Confirm the Release 1 list.~~ **Done:** confirmed by the owner (section 8).
 2. **Baseline screen-reader pass** on OpenStage Author's existing editor patterns (NVDA and Narrator), including its Timeline panel, since the multi-track timeline will extend it. It gates the whole approach.
-3. **Settle the open part of item 7** ("TypeScript throughout") and item 10 (media from outside the recording), then have the OpenStage session record the three CLAUDE.md changes: Windows first, a mid-level video editor, and a Rust capture program.
+3. **Record the three CLAUDE.md changes** the owner has accepted (Windows first, a mid-level video editor, a Rust capture program) by having the OpenStage session make the edits (suggested wording in item 7).
 4. **Plan responsive output** in OpenStage Author (prerequisite 1, section 8): move it from Later into the active roadmap and scope it (format change, shared renderer, editor stage), with the checkpoint in mind. The owner and the OpenStage session lead this.
 5. **Add the roadmap request** for timing that follows a video (item 8).
 6. **Put the rule checks in place** from the first line of code: license checking and the FFmpeg build-flag guard (section 7).

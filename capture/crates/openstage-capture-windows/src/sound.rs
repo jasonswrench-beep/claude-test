@@ -15,6 +15,7 @@
 
 use crate::audio::{choose_device, mix, peak, AudioAligner, AudioChoice, AudioDevice, AudioPlatform, AudioSource};
 use crate::audio::{CHANNELS, SAMPLE_RATE};
+use crate::report::TrackReport;
 use crate::video::VideoSink;
 use crate::{check, Check};
 use openstage_capture::{describe_level, SessionError};
@@ -248,6 +249,7 @@ impl OpenSound {
                 wav,
                 ready: Vec::new(),
                 recent_peak: Cell::new(0.0),
+                captured_frames: 0,
             });
         }
         Ok(SoundTake { tracks, mixed_frames: 0 })
@@ -265,6 +267,8 @@ struct Track {
     ready: Vec<i16>,
     /// The loudest moment since the level was last asked for.
     recent_peak: Cell<f32>,
+    /// How many frames of sound the device really delivered (before any silence was filled in).
+    captured_frames: u64,
 }
 
 /// One sample made louder or quieter, never wrapped around into noise.
@@ -290,6 +294,7 @@ impl SoundTake {
                 )));
             }
             let got = t.source.read();
+            t.captured_frames += (got.len() / CHANNELS as usize) as u64;
             t.recent_peak.set(t.recent_peak.get().max(peak(&got)));
             t.aligner.push(&got);
             let due = t.aligner.take_until(media_ms);
@@ -359,6 +364,22 @@ impl SoundTake {
         }
     }
 
+    /// How each sound behaved, for the summary after a recording.
+    pub(crate) fn reports(&self) -> Vec<TrackReport> {
+        self.tracks
+            .iter()
+            .map(|t| TrackReport {
+                microphone: t.kind == Kind::Microphone,
+                heard_ms: t.captured_frames * 1000 / SAMPLE_RATE as u64,
+                padded_ms: t.aligner.padded_ms(),
+                trimmed_ms: t.aligner.trimmed_ms(),
+                worst_later_ms: t.aligner.worst_ahead_ms(),
+                worst_earlier_ms: t.aligner.worst_late_ms(),
+                lost_moments: t.source.discontinuities(),
+            })
+            .collect()
+    }
+
     /// How many separate sound files this take holds.
     pub(crate) fn track_count(&self) -> u32 {
         self.tracks.len() as u32
@@ -370,12 +391,13 @@ impl SoundTake {
     }
 
     /// Write the last sound up to `media_ms` and complete the sound files.
-    pub(crate) fn finish(mut self, media_ms: u64, sink: &mut dyn VideoSink) -> Result<(), SessionError> {
+    pub(crate) fn finish(mut self, media_ms: u64, sink: &mut dyn VideoSink) -> Result<Vec<TrackReport>, SessionError> {
         self.pump(media_ms, sink)?;
+        let reports = self.reports();
         for t in self.tracks {
             t.wav.finish().map_err(|e| media_error(format!("Completing the {} file failed: {e}", t.kind.label())))?;
         }
-        Ok(())
+        Ok(reports)
     }
 }
 
@@ -633,7 +655,7 @@ mod tests {
             }
         }
         if result.is_ok() {
-            result = take.finish(media_ms, &mut sink);
+            result = take.finish(media_ms, &mut sink).map(|_| ());
         }
         let chunks = sink_log.borrow().clone();
         (chunks, result)

@@ -92,6 +92,10 @@ pub trait VideoPlatform {
     fn process_cpu_time(&self) -> Option<Duration>;
     /// How many logical processors the computer has.
     fn logical_cores(&self) -> u32;
+    /// Memory this program is using right now, in megabytes, if the system can say.
+    fn process_memory_mb(&self) -> Option<f64> {
+        None
+    }
 }
 
 /// The real thing on Windows; on any other system a stand-in that says so.
@@ -788,7 +792,14 @@ mod tests {
         fn next_frame(&mut self, timeout: Duration) -> Option<Frame> {
             if !self.given {
                 self.given = true;
-                Some(Frame { width: 8, height: 4, t_ms: 0, bgra: vec![7; 8 * 4 * 4] })
+                Some(Frame {
+                    width: 8,
+                    height: 4,
+                    t_ms: 0,
+                    captured_100ns: None,
+                    arrived_100ns: None,
+                    bgra: vec![7; 8 * 4 * 4],
+                })
             } else {
                 sleep(timeout.min(Duration::from_millis(2)));
                 None
@@ -1073,7 +1084,14 @@ mod tests {
                         0
                     }
                 }
-                Ok(Box::new(Odd(VecDeque::from([Frame { width: 7, height: 4, t_ms: 0, bgra: vec![0; 7 * 4 * 4] }]))))
+                Ok(Box::new(Odd(VecDeque::from([Frame {
+                    width: 7,
+                    height: 4,
+                    t_ms: 0,
+                    captured_100ns: None,
+                    arrived_100ns: None,
+                    bgra: vec![0; 7 * 4 * 4],
+                }]))))
             }
         }
         let dir = tempfile::tempdir().unwrap();

@@ -185,6 +185,9 @@ impl<'a> Runner<'a> {
             self.state = State::Countdown;
             self.countdown_started = self.clock.now_ms();
             self.emit_state();
+            // The countdown is time to get ready in. The time warming up takes is part of the countdown,
+            // not added to it.
+            self.factory.warm_up(self.cfg)?;
             Ok(())
         } else {
             self.begin_take()
@@ -713,6 +716,93 @@ mod tests {
             vec!["pump", "paused", "resumed", "pump"],
             "it is told about the pause once, and about the resume once, in order"
         );
+    }
+
+    /// A factory that notes when it is warmed up and when a take begins.
+    struct Warm {
+        notes: std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
+        fail_warm_up: bool,
+    }
+    impl crate::media::MediaFactory for Warm {
+        fn source_id(&self) -> String {
+            "warm".into()
+        }
+        fn warm_up(&self, _: &SessionConfig) -> Result<(), SessionError> {
+            self.notes.borrow_mut().push("warm");
+            if self.fail_warm_up {
+                Err(SessionError::Media("The screen would not start.".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn begin(
+            &self,
+            take_dir: &std::path::Path,
+            cfg: &SessionConfig,
+        ) -> Result<Box<dyn crate::media::TakeMedia>, SessionError> {
+            self.notes.borrow_mut().push("begin");
+            Ok(Box::new(crate::media::SegmentMedia::start(
+                Box::new(SyntheticSource::new()),
+                take_dir.join("segments"),
+                cfg.segment_ms,
+            )?))
+        }
+    }
+
+    #[test]
+    fn the_media_is_warmed_up_as_each_countdown_starts_and_not_when_there_is_none() {
+        let notes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 1000;
+        let factory = Warm { notes: std::rc::Rc::clone(&notes), fail_warm_up: false };
+        // Record a take, start again (a second countdown), and stop.
+        let mut input =
+            ScriptedInput::new(vec![(2500, Input::Command(Command::Restart)), (6000, Input::Command(Command::Stop))]);
+        let out = run_session(&cfg, &factory, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert!(out.ok && out.take == 2);
+        assert_eq!(
+            *notes.borrow(),
+            vec!["warm", "begin", "warm", "begin"],
+            "each countdown warms up first, then the take begins with what was prepared"
+        );
+
+        // Without a countdown there is nothing to warm up during.
+        notes.borrow_mut().clear();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let mut input = ScriptedInput::new(vec![(500, Input::Command(Command::Stop))]);
+        run_session(&cfg, &factory, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(*notes.borrow(), vec!["begin"]);
+    }
+
+    #[test]
+    fn starting_the_countdown_again_does_not_warm_up_again() {
+        let notes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 3000;
+        let factory = Warm { notes: std::rc::Rc::clone(&notes), fail_warm_up: false };
+        // "Start again" during the countdown only restarts the count; what was prepared is still ready.
+        let mut input =
+            ScriptedInput::new(vec![(1000, Input::Command(Command::Restart)), (6000, Input::Command(Command::Stop))]);
+        run_session(&cfg, &factory, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(*notes.borrow(), vec!["warm", "begin"]);
+    }
+
+    #[test]
+    fn a_failure_while_warming_up_ends_the_session_before_any_take_with_a_plain_message() {
+        let notes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 3000;
+        let factory = Warm { notes: std::rc::Rc::clone(&notes), fail_warm_up: true };
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &factory, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        assert!(!out.ok);
+        assert_eq!(*notes.borrow(), vec!["warm"], "no take was started");
+        assert!(sink.events.iter().any(|e| matches!(e, Event::Error { code, message, fatal: true }
+            if code == "media-failed" && message.contains("The screen would not start."))));
     }
 
     #[test]

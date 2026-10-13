@@ -12,7 +12,7 @@ mod checks;
 mod demo;
 mod plain;
 
-use checks::{emit_check, finish_checks, run_video_crash_test};
+use checks::{emit_check, finish_checks, run_recorder_crash_test, run_video_crash_test};
 use clap::{Parser, Subcommand};
 use openstage_capture::{
     run_session, EventSink, Input, InputSource, MediaFactory, ScriptedInput, SessionConfig, Source, SyntheticSource,
@@ -22,9 +22,10 @@ use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
-    describe_devices, plan_sound, run_audio_test, run_find_output, run_screen_test, run_video_test,
-    system_audio_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check, DeviceKind,
-    FindOutputOptions, ScreenMedia, ScreenTestOptions, SoundPlan, VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
+    describe_devices, plan_sound, run_audio_test, run_find_output, run_screen_test, run_timing_test, run_video_test,
+    summarize, system_audio_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check,
+    DeviceKind, FindOutputOptions, ScreenMedia, ScreenTestOptions, SoundPlan, TimingTestOptions, VideoTestOptions,
+    MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -80,6 +81,10 @@ enum Cmd {
         /// quieter, for example -10. The separate `system.wav` is never changed.
         #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
         system_gain_db: i32,
+        /// Count the summary findings (skipped pictures, processor use, memory growth, sound drifting
+        /// from the picture) as part of passing or failing. Meant for long test recordings.
+        #[arg(long)]
+        strict: bool,
         /// Milliseconds of countdown before recording starts. 0 turns it off.
         #[arg(long, default_value_t = 3000)]
         countdown_ms: u64,
@@ -168,6 +173,26 @@ enum Cmd {
         #[arg(long)]
         plain: bool,
     },
+    /// Measure how late the picture and the sound reach this program after Windows captures them, and
+    /// whether the two clocks agree. Keep a window moving and play some sound. Windows only. Does not
+    /// make a project.
+    TimingTest {
+        /// Which display to capture (1 is the main display).
+        #[arg(long, default_value_t = 1)]
+        display: u32,
+        /// How long to listen.
+        #[arg(long, default_value_t = 10.0)]
+        seconds: f64,
+        /// Which microphone: its number from `audio-devices`, part of its name, or `default`.
+        #[arg(long, default_value = "default")]
+        microphone: String,
+        /// Which sound output to listen to: its number from `audio-devices`, part of its name, or `default`.
+        #[arg(long, default_value = "default")]
+        output: String,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
     /// Try making an MP4 video of the screen on this computer: capture a few seconds at a steady
     /// frame rate, encode it as H.264, and report how hard the computer worked. Windows only.
     /// Does not make a project and records no sound.
@@ -218,6 +243,29 @@ enum Cmd {
         seconds_before_kill: f64,
         /// The folder for the video file (created if needed).
         #[arg(long, default_value = "video-crash-output")]
+        out: PathBuf,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// Test crash safety of the real recorder: record the screen and sound through a pause, kill the
+    /// program without warning, repair the project, and report how much of each file survived.
+    /// Windows only.
+    RecorderCrashTest {
+        /// Which display to record (1 is the main display).
+        #[arg(long, default_value_t = 1)]
+        display: u32,
+        /// Which microphone: its number from `audio-devices`, part of its name, `default`, or `none`.
+        #[arg(long, default_value = "default")]
+        microphone: String,
+        /// Which sound output to record: its number from `audio-devices`, part of its name, `default`, or `none`.
+        #[arg(long, default_value = "default")]
+        output: String,
+        /// How long to record before the program is killed.
+        #[arg(long, default_value_t = 12.0)]
+        seconds_before_kill: f64,
+        /// The folder for the test recording (created if needed).
+        #[arg(long, default_value = "recorder-crash-output")]
         out: PathBuf,
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
@@ -396,6 +444,7 @@ fn main() -> ExitCode {
             output,
             mic_gain_db,
             system_gain_db,
+            strict,
             countdown_ms,
             segment_ms,
             flush_ms,
@@ -411,6 +460,7 @@ fn main() -> ExitCode {
                 hello();
             }
             let mut sound_plan = SoundPlan::default();
+            let mut report_handle = None;
             let factory: Box<dyn MediaFactory> = match source.as_str() {
                 "synthetic" => Box::new(|| -> Box<dyn Source> { Box::new(SyntheticSource::new()) }),
                 "screen" if cfg!(windows) => {
@@ -435,10 +485,10 @@ fn main() -> ExitCode {
                         }
                     };
                     sink.emit(Event::Check { check: "sound-devices".into(), ok: true, message: sound_plan.describe() });
-                    Box::new(
-                        ScreenMedia::for_this_computer(display, fps, bitrate_kbps)
-                            .with_sound(platform, sound_plan.clone()),
-                    )
+                    let media = ScreenMedia::for_this_computer(display, fps, bitrate_kbps)
+                        .with_sound(platform, sound_plan.clone());
+                    report_handle = Some(media.report_handle());
+                    Box::new(media)
                 }
                 "screen" => {
                     sink.emit(Event::Error {
@@ -537,6 +587,15 @@ fn main() -> ExitCode {
                         for (code, message) in warnings {
                             sink.emit(Event::Warning { code, message });
                         }
+                        // What the recording did: did the program keep up, did it grow, did sound stay with picture.
+                        if let Some(report) = report_handle.as_ref().and_then(|h| h.borrow().clone()) {
+                            for check in summarize(&report) {
+                                if strict {
+                                    readback_ok &= check.ok;
+                                }
+                                sink.emit(Event::Check { check: check.check, ok: check.ok, message: check.message });
+                            }
+                        }
                     }
                     sink.emit(Event::Result {
                         ok: outcome.ok,
@@ -633,6 +692,19 @@ fn main() -> ExitCode {
             let all_fine = run_audio_test(&opts, &mut |c| emit_check(plain, c));
             finish_checks(plain, all_fine)
         }
+        Cmd::TimingTest { display, seconds, microphone, output, plain } => {
+            if !plain {
+                hello();
+            }
+            let opts = TimingTestOptions {
+                display,
+                seconds,
+                microphone: AudioChoice::parse(&microphone),
+                output: AudioChoice::parse(&output),
+            };
+            let all_fine = run_timing_test(&opts, &mut |c| emit_check(plain, c));
+            finish_checks(plain, all_fine)
+        }
         Cmd::VideoTest { display, seconds, fps, bitrate_kbps, fragmented, start_marker, out, plain } => {
             if !plain {
                 hello();
@@ -676,6 +748,16 @@ fn main() -> ExitCode {
                 hello();
             }
             let all_fine = run_video_crash_test(display, seconds_before_kill, &out, &mut |c| emit_check(plain, c));
+            finish_checks(plain, all_fine)
+        }
+        Cmd::RecorderCrashTest { display, microphone, output, seconds_before_kill, out, plain } => {
+            if !plain {
+                hello();
+            }
+            let all_fine =
+                run_recorder_crash_test(display, &microphone, &output, seconds_before_kill, &out, &mut |c| {
+                    emit_check(plain, c)
+                });
             finish_checks(plain, all_fine)
         }
         Cmd::Render { .. } => {

@@ -320,6 +320,28 @@ fn screen_test_says_it_needs_windows_and_exits_with_2() {
 
 #[cfg(not(windows))]
 #[test]
+fn timing_test_says_it_needs_windows_and_exits_with_2() {
+    let (status, events) = run_once(&["timing-test", "--seconds", "1"]);
+    assert_eq!(status.code(), Some(2));
+    assert!(matches!(&events[0], Event::Hello { .. }));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::Check { ok: false, message, .. } if message.contains("only works on Windows"))));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn recorder_crash_test_says_it_needs_windows_and_exits_with_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, events) = run_once(&["recorder-crash-test", "--out", dir.path().join("o").to_str().unwrap()]);
+    assert_eq!(status.code(), Some(2));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::Check { ok: false, message, .. } if message.contains("only work on Windows"))));
+}
+
+#[cfg(not(windows))]
+#[test]
 fn screen_test_plain_prints_sentences_not_json() {
     let out = Command::new(BIN).args(["screen-test", "--plain"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));

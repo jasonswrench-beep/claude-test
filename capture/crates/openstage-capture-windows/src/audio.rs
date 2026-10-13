@@ -40,10 +40,32 @@ pub trait AudioSource {
     fn discontinuities(&self) -> u64;
     /// What stopped the capture, if something did, in plain words.
     fn failure(&self) -> Option<String>;
+    /// Everything captured since the last call, as packets that say when they were captured. The
+    /// default knows no times; sources that can say when sound was captured override it.
+    fn read_packets(&mut self) -> Vec<AudioPacket> {
+        let samples = self.read();
+        if samples.is_empty() {
+            Vec::new()
+        } else {
+            vec![AudioPacket { samples, captured_100ns: None, arrived_100ns: None }]
+        }
+    }
     /// While paused, the source keeps listening (a microphone cannot be paused) but throws away what it
     /// hears, so a long pause does not fill the computer's memory. Sources that stop by themselves
     /// need not do anything.
     fn set_paused(&mut self, _paused: bool) {}
+}
+
+/// Sound captured in one go, with the time it was captured.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioPacket {
+    /// Interleaved 16-bit samples.
+    pub samples: Vec<i16>,
+    /// When the first sample was captured, on the clock Windows also uses for pictures (units of
+    /// 100 nanoseconds). `None` when unknown.
+    pub captured_100ns: Option<i64>,
+    /// When the packet reached this program, on the same clock. `None` when not measured.
+    pub arrived_100ns: Option<i64>,
 }
 
 /// What kind of sound device.
@@ -248,6 +270,10 @@ pub struct AudioAligner {
     delivered_frames: u64,
     padded_frames: u64,
     trimmed_frames: u64,
+    /// The most sound ever held back ahead of the recording clock (the sound card running fast).
+    worst_ahead_frames: u64,
+    /// The most sound ever missing from the recording clock while waiting for it (the sound card running slow or late).
+    worst_late_frames: u64,
 }
 
 impl AudioAligner {
@@ -264,6 +290,8 @@ impl AudioAligner {
             delivered_frames: 0,
             padded_frames: 0,
             trimmed_frames: 0,
+            worst_ahead_frames: 0,
+            worst_late_frames: 0,
         }
     }
 
@@ -288,6 +316,7 @@ impl AudioAligner {
             out.extend(self.pending.drain(..need as usize * channels));
             // Too far ahead: the sound card's clock is running fast. Drop the oldest of the surplus.
             let ahead = (self.pending.len() / channels) as u64;
+            self.worst_ahead_frames = self.worst_ahead_frames.max(ahead);
             if ahead > self.frames(Self::AHEAD_MS) {
                 let drop_frames = ahead - self.frames(Self::LATE_MS);
                 self.pending.drain(..drop_frames as usize * channels);
@@ -296,6 +325,7 @@ impl AudioAligner {
             self.delivered_frames += need;
         } else {
             let deficit = need - have;
+            self.worst_late_frames = self.worst_late_frames.max(deficit);
             out.append(&mut self.pending);
             if deficit > self.frames(Self::LATE_MS) {
                 // The stream sent nothing for a while (a quiet computer): fill the gap with silence.
@@ -318,6 +348,17 @@ impl AudioAligner {
     /// How much sound has been handed out, as seconds.
     pub fn delivered_ms(&self) -> u64 {
         self.delivered_frames * 1000 / self.rate as u64
+    }
+
+    /// The most sound that was ever held back ahead of the recording clock, in milliseconds: how far
+    /// behind the picture the sound could be, as far as this counting can tell.
+    pub fn worst_ahead_ms(&self) -> u64 {
+        self.worst_ahead_frames * 1000 / self.rate as u64
+    }
+
+    /// The most sound that was ever missing at the recording clock while waiting for it, in milliseconds.
+    pub fn worst_late_ms(&self) -> u64 {
+        self.worst_late_frames * 1000 / self.rate as u64
     }
 
     /// Silence added because nothing arrived, in milliseconds.

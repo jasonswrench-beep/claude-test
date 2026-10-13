@@ -254,6 +254,7 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext), ScreenError> {
 /// Copy one captured picture into ordinary memory and queue it.
 fn handle_frame(shared: &Shared, frame: &Direct3D11CaptureFrame) -> windows::core::Result<()> {
     let ticks = frame.SystemRelativeTime()?.Duration;
+    let arrived_100ns = crate::timing::now_100ns();
     let t_ms = {
         let mut first = shared.first_ticks.lock().unwrap();
         let base = *first.get_or_insert(ticks);
@@ -295,6 +296,13 @@ fn handle_frame(shared: &Shared, frame: &Direct3D11CaptureFrame) -> windows::cor
     }
     drop(gpu);
 
-    shared.queue.push(Frame { width, height, t_ms, bgra });
+    shared.queue.push(Frame {
+        width,
+        height,
+        t_ms,
+        captured_100ns: Some(ticks),
+        arrived_100ns: Some(arrived_100ns),
+        bgra,
+    });
     Ok(())
 }

@@ -134,6 +134,14 @@ impl VideoPlatform for WindowsVideo {
     fn logical_cores(&self) -> u32 {
         std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1)
     }
+
+    fn process_memory_mb(&self) -> Option<f64> {
+        use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+        let mut counters =
+            PROCESS_MEMORY_COUNTERS { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32, ..Default::default() };
+        unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) }.ok()?;
+        Some(counters.WorkingSetSize as f64 / (1024.0 * 1024.0))
+    }
 }
 
 /// List the H.264 encoders: the ones that run on the graphics card, or the ones that run on the processor.

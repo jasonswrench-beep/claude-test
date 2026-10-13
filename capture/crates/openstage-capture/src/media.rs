@@ -47,6 +47,13 @@ pub trait MediaFactory {
     fn declared_flush_ms(&self, cfg: &SessionConfig) -> u64 {
         cfg.flush_ms
     }
+    /// Get ready while the countdown runs: start whatever takes a moment and does not need the take's
+    /// folder (a screen capture, a microphone, a video encoder), so that recording can begin the instant
+    /// the countdown ends. Called once as each countdown starts; anything it prepares is used by the next
+    /// [`MediaFactory::begin`]. A failure here ends the session before the countdown finishes.
+    fn warm_up(&self, _cfg: &SessionConfig) -> Result<(), SessionError> {
+        Ok(())
+    }
     /// Start the media for one take, in that take's folder (which already exists).
     fn begin(&self, take_dir: &Path, cfg: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError>;
 }

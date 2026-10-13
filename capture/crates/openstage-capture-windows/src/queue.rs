@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 struct State {
     frames: VecDeque<Frame>,
     replaced: u64,
+    /// How many pictures were ever added.
+    pushed: u64,
+    /// The most pictures that were ever waiting at once.
+    most_waiting: usize,
 }
 
 /// A waiting line shared between the thread Windows delivers pictures on and the thread that uses them.
@@ -26,7 +30,7 @@ impl FrameQueue {
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
-            state: Mutex::new(State { frames: VecDeque::new(), replaced: 0 }),
+            state: Mutex::new(State { frames: VecDeque::new(), replaced: 0, pushed: 0, most_waiting: 0 }),
             arrived: Condvar::new(),
         }
     }
@@ -39,6 +43,8 @@ impl FrameQueue {
             state.replaced += 1;
         }
         state.frames.push_back(frame);
+        state.pushed += 1;
+        state.most_waiting = state.most_waiting.max(state.frames.len());
         drop(state);
         self.arrived.notify_one();
     }
@@ -63,6 +69,16 @@ impl FrameQueue {
     /// How many pictures were dropped to make room for newer ones.
     pub fn replaced(&self) -> u64 {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).replaced
+    }
+
+    /// How many pictures were ever added.
+    pub fn pushed(&self) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).pushed
+    }
+
+    /// The most pictures that were ever waiting at once.
+    pub fn most_waiting(&self) -> usize {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).most_waiting
     }
 }
 
@@ -96,6 +112,22 @@ mod tests {
         assert_eq!(q.replaced(), 2);
         let kept: Vec<u64> = std::iter::from_fn(|| q.pop(Duration::ZERO)).map(|f| f.t_ms).collect();
         assert_eq!(kept, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn the_queue_counts_what_came_in_and_the_most_that_ever_waited() {
+        let q = FrameQueue::new(4);
+        for t in 1..=3 {
+            q.push(pic(t));
+        }
+        q.pop(Duration::ZERO);
+        q.pop(Duration::ZERO);
+        for t in 4..=9 {
+            q.push(pic(t));
+        }
+        assert_eq!(q.pushed(), 9);
+        assert_eq!(q.most_waiting(), 4, "never more than the line holds");
+        assert_eq!(q.replaced(), 3);
     }
 
     #[test]

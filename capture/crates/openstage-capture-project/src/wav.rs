@@ -107,6 +107,18 @@ impl WavWriter {
         self.file.get_ref().sync_data()
     }
 
+    /// Like [`WavWriter::sync`], and then ask the disk to take the sound in the background, without making
+    /// the caller wait. Waiting for the disk took up to a fifth of a second on a real computer, which is
+    /// long enough to make a video stutter.
+    pub fn sync_to_disk_in_background(&mut self) -> io::Result<()> {
+        self.sync()?;
+        let handle = self.file.get_ref().try_clone()?;
+        std::thread::spawn(move || {
+            let _ = handle.sync_data();
+        });
+        Ok(())
+    }
+
     /// Complete the file, on the disk. Returns the number of frames in it.
     pub fn finish(mut self) -> io::Result<u64> {
         self.sync_to_disk()?;
@@ -351,6 +363,21 @@ mod tests {
         let r = repair_wav(&path).unwrap();
         assert_eq!(r, WavRepair { frames: 300, bytes_cut: 0, header_fixed: false });
         assert_eq!(std::fs::read(&path).unwrap(), before, "byte for byte the same");
+    }
+
+    #[test]
+    fn the_disk_can_be_asked_to_take_the_sound_in_the_background_without_losing_any() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mic.wav");
+        let mut w = WavWriter::create(&path, 48_000, 2).unwrap();
+        w.append(&tone(4800, 2, 9)).unwrap();
+        w.sync_to_disk_in_background().unwrap();
+        // The header already tells the truth when the call returns.
+        assert_eq!(wav_info(&path).unwrap().frames, 4800);
+        w.append(&tone(4800, 2, 9)).unwrap();
+        assert_eq!(w.finish().unwrap(), 9600);
+        let info = wav_info(&path).unwrap();
+        assert_eq!((info.frames, info.peak > 0.0), (9600, true));
     }
 
     #[test]

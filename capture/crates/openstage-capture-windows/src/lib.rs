@@ -46,8 +46,8 @@ pub use queue::FrameQueue;
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
 pub use report::{summarize, RecordingReport, TrackReport};
 pub use sound::{
-    check_sound_files, plan_sound, Sound, SoundFileReport, SoundPlan, MAX_GAIN_DB, MIC_FILE, MIN_GAIN_DB,
-    MIXED_BITRATE_KBPS, SYSTEM_FILE,
+    check_sound_files, output_may_have_changed, plan_sound, Sound, SoundFileReport, SoundPlan, MAX_GAIN_DB, MIC_FILE,
+    MIN_GAIN_DB, MIXED_BITRATE_KBPS, SYSTEM_FILE,
 };
 pub use stats::{FrameStats, FrameSummary};
 pub use timing::{now_100ns, run_timing_test, run_timing_test_with, Spread, TimingTestOptions, MAX_OFFSET_MS};
@@ -151,6 +151,10 @@ pub trait FrameSource {
     fn next_frame(&mut self, timeout: Duration) -> Option<Frame>;
     /// How many pictures had to be thrown away because the program was too slow to take them.
     fn dropped(&self) -> u64;
+    /// How many pictures arrived in all, if the source counts them.
+    fn received(&self) -> u64 {
+        0
+    }
 }
 
 /// Everything the checks need from the operating system.

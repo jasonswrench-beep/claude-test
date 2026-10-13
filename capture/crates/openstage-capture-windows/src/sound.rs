@@ -342,7 +342,7 @@ impl SoundTake {
         // the disk too. Waiting for the disk every second can stall everything else on a slow disk.
         let to_disk = self.last_disk_sync.elapsed() >= DISK_SYNC_EVERY;
         for t in &mut self.tracks {
-            let result = if to_disk { t.wav.sync_to_disk() } else { t.wav.sync() };
+            let result = if to_disk { t.wav.sync_to_disk_in_background() } else { t.wav.sync() };
             result.map_err(|e| media_error(format!("Saving the {} file failed: {e}", t.kind.label())))?;
         }
         if to_disk {
@@ -413,6 +413,20 @@ impl SoundTake {
         }
         Ok(reports)
     }
+}
+
+/// A warning for the author if Windows is now sending sound to a different output than the one this
+/// recording listened to. The recorder listens to one output; if the sound moved to another (headphones
+/// were plugged in, or the author switched), the rest of the computer's sound was not recorded.
+pub fn output_may_have_changed(devices: &[AudioDevice], recorded: &AudioDevice) -> Option<String> {
+    let current = devices.iter().find(|d| d.kind == crate::audio::DeviceKind::SoundOutput && d.is_default)?;
+    if current.id == recorded.id {
+        return None;
+    }
+    Some(format!(
+        "Windows is now sending sound to sound output {}, {}, but this recording listened to sound output {}, {}. If the sound moved partway through, the rest of the computer's sound was not recorded, because the recorder listens to one sound output only. Keep one output for the whole recording, or record again choosing output {}.",
+        current.number, current.name, recorded.number, recorded.name, current.number
+    ))
 }
 
 /// What looking at the saved sound files found.
@@ -1034,5 +1048,45 @@ mod tests {
             "{text}"
         );
         assert_eq!((plan.mix_info().microphone_gain_db, plan.mix_info().system_gain_db), (3, -12));
+    }
+
+    // ---- the sound going to another output ----
+
+    fn outputs(default_number: u32) -> Vec<AudioDevice> {
+        vec![
+            device(DeviceKind::Microphone, 1, "Mic", true),
+            device(DeviceKind::SoundOutput, 1, "Speakers (Realtek)", default_number == 1),
+            device(DeviceKind::SoundOutput, 2, "Headphones (2- Shure MV7)", default_number == 2),
+        ]
+    }
+
+    #[test]
+    fn no_warning_when_windows_still_sends_sound_to_the_output_that_was_recorded() {
+        let devices = outputs(1);
+        assert_eq!(output_may_have_changed(&devices, &devices[1]), None);
+    }
+
+    #[test]
+    fn a_warning_names_both_outputs_when_windows_now_uses_another() {
+        let devices = outputs(2); // the headphones were plugged in and became the default
+        let text = output_may_have_changed(&devices, &devices[1]).expect("a warning");
+        assert!(
+            text.contains("sound output 2, Headphones (2- Shure MV7)")
+                && text.contains("listened to sound output 1, Speakers (Realtek)")
+                && text.contains("one sound output only")
+                && text.contains("choosing output 2"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_microphone_is_never_mistaken_for_the_default_output() {
+        let devices =
+            vec![device(DeviceKind::Microphone, 1, "Mic", true), device(DeviceKind::SoundOutput, 1, "S", false)];
+        assert_eq!(
+            output_may_have_changed(&devices, &devices[1]),
+            None,
+            "no default output is known, so nothing is claimed"
+        );
     }
 }

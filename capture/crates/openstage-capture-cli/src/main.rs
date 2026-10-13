@@ -22,10 +22,10 @@ use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
-    describe_devices, plan_sound, run_audio_test, run_find_output, run_screen_test, run_timing_test, run_video_test,
-    summarize, system_audio_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check,
-    DeviceKind, FindOutputOptions, Mix, ScreenMedia, ScreenTestOptions, SoundPlan, TimingTestOptions, VideoTestOptions,
-    MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
+    describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_find_output, run_screen_test,
+    run_timing_test, run_video_test, summarize, system_audio_platform, system_platform, system_video_platform,
+    AudioChoice, AudioTestOptions, Check, DeviceKind, FindOutputOptions, Mix, ScreenMedia, ScreenTestOptions,
+    SoundPlan, TimingTestOptions, VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -557,6 +557,15 @@ fn main() -> ExitCode {
                             sink.emit(Event::Check { check: check.check, ok: check.ok, message: check.message });
                         }
                         let mut warnings = files.warnings;
+                        // If Windows now sends sound to a different output than the one recorded, say so: the
+                        // recorder listens to one output, so the rest of the computer's sound would be missing.
+                        if let Some(chosen) = &sound_plan.system {
+                            if let Ok(list) = system_audio_platform().list_devices() {
+                                if let Some(message) = output_may_have_changed(&list, chosen) {
+                                    warnings.push(("output-changed".to_string(), message));
+                                }
+                            }
+                        }
                         // With both sounds, see whether the microphone also heard the speakers. An echo is
                         // something for the author to know, not a fault of the recorder, so it does not
                         // change the exit code.

@@ -209,6 +209,10 @@ impl FrameSource for Capture {
     fn dropped(&self) -> u64 {
         self.shared.queue.replaced()
     }
+
+    fn received(&self) -> u64 {
+        self.shared.queue.pushed()
+    }
 }
 
 impl Drop for Capture {

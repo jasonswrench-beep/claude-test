@@ -423,6 +423,23 @@ fn a_demo_script_that_makes_no_sense_is_explained_and_nothing_is_recorded() {
 
 #[cfg(not(windows))]
 #[test]
+fn audio_test_says_it_needs_windows_and_exits_with_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(BIN)
+        .args(["audio-test", "--plain", "--seconds", "1", "--out", dir.path().join("o").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.starts_with("PROBLEM: Could not listen to the microphone: Screen capture only works on Windows."),
+        "{text}"
+    );
+    assert!(text.trim_end().ends_with("At least one check found a problem."));
+}
+
+#[cfg(not(windows))]
+#[test]
 fn video_info_says_it_needs_windows_and_exits_with_2() {
     let out = Command::new(BIN).args(["video-info", "--plain", "--file", "nothing.mp4"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));

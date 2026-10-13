@@ -555,6 +555,15 @@ pub fn run_audio_test_with(
         }
     }
 
+    // With both sounds, see whether the microphone is also hearing the computer's sound (an echo).
+    let mic_track = streams.iter().find(|s| s.check == "microphone");
+    let system_track = streams.iter().find(|s| s.check == "system-audio");
+    if let (Some(m), Some(sy)) = (mic_track, system_track) {
+        let mic_env = crate::echo::envelope_of(&m.track, SAMPLE_RATE, CHANNELS);
+        let system_env = crate::echo::envelope_of(&sy.track, SAMPLE_RATE, CHANNELS);
+        say(crate::echo::describe_echo(&crate::echo::detect_echo(&mic_env, &system_env)).check);
+    }
+
     // Save what a recording would hold: every track as long as the real time, gaps filled with silence.
     let saved = fs::create_dir_all(&opts.out_dir).and_then(|_| {
         let mut files: Vec<PathBuf> = Vec::new();
@@ -978,8 +987,15 @@ mod tests {
                 "microphone",
                 "system-audio",
                 "audio-clock",
+                "echo",
                 "audio-saved"
             ]
+        );
+        let echo = find(&checks, "echo");
+        assert!(
+            echo.ok && echo.message.contains("Could not tell whether the microphone is hearing"),
+            "{}",
+            echo.message
         );
         assert!(find(&checks, "microphone-start")
             .message

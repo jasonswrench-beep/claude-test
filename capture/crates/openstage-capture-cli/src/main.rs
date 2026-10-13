@@ -21,10 +21,10 @@ use openstage_capture::{
 use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
-    check_sound_files, compare_audio_readback, compare_readback, describe_devices, plan_sound, run_audio_test,
-    run_find_output, run_screen_test, run_video_test, system_audio_platform, system_platform, system_video_platform,
-    AudioChoice, AudioTestOptions, Check, DeviceKind, FindOutputOptions, ScreenMedia, ScreenTestOptions, SoundPlan,
-    VideoTestOptions, SCREEN_FILE,
+    check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback, describe_devices, plan_sound,
+    run_audio_test, run_find_output, run_screen_test, run_video_test, system_audio_platform, system_platform,
+    system_video_platform, AudioChoice, AudioTestOptions, Check, DeviceKind, FindOutputOptions, ScreenMedia,
+    ScreenTestOptions, SoundPlan, VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -483,7 +483,26 @@ fn main() -> ExitCode {
                             readback_ok &= check.ok;
                             sink.emit(Event::Check { check: check.check, ok: check.ok, message: check.message });
                         }
-                        for (code, message) in files.warnings {
+                        let mut warnings = files.warnings;
+                        // With both sounds, see whether the microphone also heard the speakers. An echo is
+                        // something for the author to know, not a fault of the recorder, so it does not
+                        // change the exit code.
+                        if sound_plan.microphone.is_some() && sound_plan.system.is_some() {
+                            match check_echo_in_files(&dir.join(MIC_FILE), &dir.join(SYSTEM_FILE)) {
+                                Ok(finding) => {
+                                    sink.emit(Event::Check {
+                                        check: finding.check.check,
+                                        ok: finding.check.ok,
+                                        message: finding.check.message,
+                                    });
+                                    if let Some(message) = finding.warning {
+                                        warnings.push(("echo-likely".to_string(), message));
+                                    }
+                                }
+                                Err(message) => warnings.push(("echo-unchecked".to_string(), message)),
+                            }
+                        }
+                        for (code, message) in warnings {
                             sink.emit(Event::Warning { code, message });
                         }
                     }

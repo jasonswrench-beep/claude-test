@@ -11,6 +11,7 @@
 
 mod audio;
 mod bmp;
+mod echo;
 mod queue;
 mod record;
 mod sound;
@@ -30,6 +31,7 @@ pub use audio::{
     SAMPLE_RATE as AUDIO_SAMPLE_RATE,
 };
 pub use bmp::write_bmp;
+pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, EchoFinding, EchoVerdict, Envelope};
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use queue::FrameQueue;
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};

@@ -59,7 +59,7 @@ Listens to the default microphone and to what the computer is playing (the defau
 | `--output` | `default` | Which sound output to listen to, chosen the same way. Windows listens to one output at a time. |
 | `--plain` | off | Print sentences for a person instead of JSON events. |
 
-The checks, in order: `audio-devices` (every microphone and sound output, numbered, with the default marked), `microphone-start`, `system-audio-start` (each names the device found, or says why listening could not start, with advice for the usual cause), `microphone` and `system-audio` (the loudest moment in words, or "heard nothing" with advice), `audio-clock` (the microphone's sound card clock compared with the computer's: fine within 250 milliseconds), and `audio-saved`. The saved files hold what a recording would hold: each track as long as the real time, with silence filled in where Windows delivered nothing (it sends nothing for a quiet sound output). Exit codes are as for `screen-test`.
+The checks, in order: `audio-devices` (every microphone and sound output, numbered, with the default marked), `microphone-start`, `system-audio-start` (each names the device found, or says why listening could not start, with advice for the usual cause), `microphone` and `system-audio` (the loudest moment in words, or "heard nothing" with advice), `audio-clock` (the microphone's sound card clock compared with the computer's: fine within 250 milliseconds), `echo` (only when both sounds were heard: whether the microphone's loudness follows the computer's, which means it is hearing the speakers; it fails with advice about headphones when an echo is likely, and says plainly when there was too little computer sound to tell), and `audio-saved`. The saved files hold what a recording would hold: each track as long as the real time, with silence filled in where Windows delivered nothing (it sends nothing for a quiet sound output). Exit codes are as for `screen-test`.
 
 ### `audio-devices`
 
@@ -175,7 +175,7 @@ Something worth knowing that did not stop the recording.
 ```json
 {"event":"warning","code":"not-paused","message":"Resume only works while paused."}
 ```
-Codes in use: `bad-command`, `not-recording`, `not-paused`, `recover-problem`, and `track-silent` (a sound track of a finished recording holds only silence: sent after the recording, with advice that fits the microphone or the computer's sound).
+Codes in use: `bad-command`, `not-recording`, `not-paused`, `recover-problem`, and `track-silent` (a sound track of a finished recording holds only silence: sent after the recording, with advice that fits the microphone or the computer's sound), `echo-likely` (the microphone seems to be hearing the speakers), and `echo-unchecked` (the two files could not be read to look for one).
 
 ### `error`
 Something went wrong. If `fatal` is true, the program is stopping, and it still tries to leave every file complete.
@@ -203,7 +203,7 @@ The author started again. The old take is **set aside, not erased**, and a new o
 ```
 
 ### `check`
-One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, `audio-test`, `find-output`, and `video-info`; and by `record --source screen`, which sends `sound-devices` before the countdown (which microphone and which sound output were chosen, in words) and, just before `result`, the readback checks: `video-readback` (Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds), `audio-readback` (the same for the video's sound track, sent only when sound was recorded), and `microphone-file` and `system-sound-file` (the separate sound files hold sound as long as the recording, to within 0.3 seconds, and the loudest moment is said in words). The setup checks of the recorder will use it too.
+One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, `audio-test`, `find-output`, and `video-info`; and by `record --source screen`, which sends `sound-devices` before the countdown (which microphone and which sound output were chosen, in words) and, just before `result`, the readback checks: `video-readback` (Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds), `audio-readback` (the same for the video's sound track, sent only when sound was recorded), and `microphone-file` and `system-sound-file` (the separate sound files hold sound as long as the recording, to within 0.3 seconds, and the loudest moment is said in words), then `echo` (the same echo check as in `audio-test`, from the two saved files; it never changes the exit code, because an echo is for the author to know, not a fault of the recorder). The setup checks of the recorder will use it too.
 ```json
 {"event":"check","check":"screen-capture","ok":true,"message":"Received 151 pictures in 5.0 seconds from Display 1, 1920 by 1080, main display. Each picture is 1920 by 1080 pixels."}
 ```

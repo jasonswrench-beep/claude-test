@@ -14,6 +14,7 @@ use openstage_capture::{
 };
 use openstage_capture_project::recover_project;
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
+use openstage_capture_windows::{run_screen_test, system_platform, ScreenTestOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -63,6 +64,25 @@ enum Cmd {
     Recover {
         #[arg(long)]
         project: PathBuf,
+    },
+    /// Try screen capture on this computer: find the displays, capture a few seconds, and save the
+    /// first and last pictures so they can be looked at. Windows only. Does not make a project.
+    ScreenTest {
+        /// Which display to capture (1 is the main display).
+        #[arg(long, default_value_t = 1)]
+        display: u32,
+        /// How long to capture.
+        #[arg(long, default_value_t = 5.0)]
+        seconds: f64,
+        /// The folder to save the pictures in (created if needed).
+        #[arg(long, default_value = "screen-test-output")]
+        out: PathBuf,
+        /// Draw the mouse pointer in the pictures. Off by default: the pointer is recorded separately.
+        #[arg(long)]
+        with_cursor: bool,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
     },
     /// Turn a project into a video. Not built yet.
     Render {
@@ -160,22 +180,56 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Cmd::Probe => {
             hello();
-            say(Event::Probe {
-                platform: std::env::consts::OS.to_string(),
-                sources: vec![
-                    SourceInfo {
-                        id: "synthetic".into(),
-                        available: true,
-                        note: "A built-in test source. It makes fake picture and sound so the recorder can be tested anywhere.".into(),
-                    },
-                    SourceInfo {
-                        id: "windows".into(),
+            let mut sources = vec![SourceInfo {
+                id: "synthetic".into(),
+                available: true,
+                note: "A built-in test source. It makes fake picture and sound so the recorder can be tested anywhere."
+                    .into(),
+            }];
+            // Real displays, found on Windows only. Found does not mean recordable yet.
+            if let Ok(displays) = system_platform().list_displays() {
+                for d in displays {
+                    sources.push(SourceInfo {
+                        id: format!("display:{}", d.number),
                         available: false,
-                        note: "Screen, window, microphone, and system sound capture for Windows is not built yet.".into(),
-                    },
-                ],
+                        note: format!(
+                            "{}. Found, but recording it into a project is not built yet. The screen-test command can try capturing it.",
+                            d.describe()
+                        ),
+                    });
+                }
+            }
+            sources.push(SourceInfo {
+                id: "windows".into(),
+                available: false,
+                note: "Recording the screen, windows, microphone, and system sound into a project is not built yet. Screen capture itself can be tried with the screen-test command.".into(),
             });
+            say(Event::Probe { platform: std::env::consts::OS.to_string(), sources });
             ExitCode::SUCCESS
+        }
+        Cmd::ScreenTest { display, seconds, out, with_cursor, plain } => {
+            if !plain {
+                hello();
+            }
+            let opts = ScreenTestOptions { display, seconds, out_dir: out, with_cursor };
+            let all_fine = run_screen_test(&opts, &mut |c| {
+                if plain {
+                    println!("{}: {}", if c.ok { "OK" } else { "PROBLEM" }, c.message);
+                    let _ = io::stdout().flush();
+                } else {
+                    say(Event::Check { check: c.check, ok: c.ok, message: c.message });
+                }
+            });
+            if plain {
+                println!("{}", if all_fine { "All checks passed." } else { "At least one check found a problem." });
+            }
+            if all_fine {
+                ExitCode::SUCCESS
+            } else if cfg!(windows) {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::from(2)
+            }
         }
         Cmd::Record {
             project,

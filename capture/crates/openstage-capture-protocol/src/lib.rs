@@ -68,6 +68,8 @@ pub enum Event {
     TakeSetAside { take: u32, next_take: u32 },
     /// `recover` repaired an interrupted take.
     Recovered { take: u32, duration_ms: u64, max_loss_ms: u64, segments: u32 },
+    /// One finding from a test or setup check, in plain language (see `screen-test`).
+    Check { check: String, ok: bool, message: String },
     /// The last line of a `record` or `recover` run.
     Result { ok: bool, project: String, take: u32, state: String, duration_ms: u64, segments: u32 },
 }
@@ -163,6 +165,7 @@ mod tests {
             Event::Marker { label: "here".into(), elapsed_ms: 99 },
             Event::TakeSetAside { take: 1, next_take: 2 },
             Event::Recovered { take: 1, duration_ms: 4000, max_loss_ms: 1000, segments: 3 },
+            Event::Check { check: "screen-capture".into(), ok: true, message: "Received 90 pictures.".into() },
             Event::Result {
                 ok: true,
                 project: "p".into(),

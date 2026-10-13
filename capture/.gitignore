@@ -13,3 +13,8 @@ record-test-output/
 audio-test-log.txt
 audio-test-output/
 find-output-log.txt
+timing-test-log.txt
+long-test-log.txt
+long-test-output/
+recorder-crash-log.txt
+recorder-crash-output/

@@ -8,7 +8,9 @@
 //! Windows for 48,000 samples per second, stereo, 16 bits (Windows converts from whatever the
 //! device really uses), and collects whatever arrives. The recorder takes it from there.
 
-use crate::audio::{AudioDevice, AudioInfo, AudioPlatform, AudioSource, DeviceKind, CHANNELS, SAMPLE_RATE};
+use crate::audio::{
+    AudioDevice, AudioInfo, AudioPacket, AudioPlatform, AudioSource, DeviceKind, CHANNELS, SAMPLE_RATE,
+};
 use crate::ScreenError;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::channel;
@@ -23,9 +25,9 @@ use windows::Win32::Devices::FunctionDiscovery::{
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-    DEVICE_STATE_ACTIVE, WAVEFORMATEX, WAVE_FORMAT_PCM,
+    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, DEVICE_STATE_ACTIVE, WAVEFORMATEX, WAVE_FORMAT_PCM,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
@@ -78,7 +80,7 @@ impl AudioPlatform for WindowsAudio {
 
 /// What the capture thread and the reader share.
 struct Shared {
-    samples: Mutex<Vec<i16>>,
+    packets: Mutex<Vec<AudioPacket>>,
     lost: AtomicU64,
     failure: Mutex<Option<String>>,
     stop: AtomicBool,
@@ -98,7 +100,11 @@ impl AudioSource for Wasapi {
     }
 
     fn read(&mut self) -> Vec<i16> {
-        std::mem::take(&mut *self.shared.samples.lock().unwrap_or_else(|e| e.into_inner()))
+        self.read_packets().into_iter().flat_map(|p| p.samples).collect()
+    }
+
+    fn read_packets(&mut self) -> Vec<AudioPacket> {
+        std::mem::take(&mut *self.shared.packets.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     fn discontinuities(&self) -> u64 {
@@ -125,7 +131,7 @@ impl Drop for Wasapi {
 
 fn start(kind: Kind, device: Option<AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
     let shared = Arc::new(Shared {
-        samples: Mutex::new(Vec::new()),
+        packets: Mutex::new(Vec::new()),
         lost: AtomicU64::new(0),
         failure: Mutex::new(None),
         stop: AtomicBool::new(false),
@@ -338,7 +344,10 @@ fn capture_thread(
             let mut data: *mut u8 = std::ptr::null_mut();
             let mut frames = 0u32;
             let mut flags = 0u32;
-            if let Err(e) = unsafe { opened.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None) } {
+            let mut qpc_position = 0u64;
+            if let Err(e) =
+                unsafe { opened.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, Some(&mut qpc_position)) }
+            {
                 *shared.failure.lock().unwrap_or_else(|p| p.into_inner()) =
                     Some(describe(kind, "Windows stopped delivering sound", &e));
                 shared.stop.store(true, Ordering::Relaxed);
@@ -353,9 +362,16 @@ fn capture_thread(
             if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
                 shared.lost.fetch_add(1, Ordering::Relaxed);
             }
+            // When Windows says it is not sure of the time, the packet carries no time rather than a wrong one.
+            let stamped = flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 == 0;
+            let packet = AudioPacket {
+                samples: block,
+                captured_100ns: stamped.then_some(qpc_position as i64),
+                arrived_100ns: Some(crate::timing::now_100ns()),
+            };
             // Sound heard while paused is not part of the recording, so it is not kept.
             if !shared.paused.load(Ordering::Relaxed) {
-                shared.samples.lock().unwrap_or_else(|p| p.into_inner()).extend_from_slice(&block);
+                shared.packets.lock().unwrap_or_else(|p| p.into_inner()).push(packet);
             }
             let _ = unsafe { opened.capture.ReleaseBuffer(frames) };
         }

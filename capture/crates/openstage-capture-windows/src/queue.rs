@@ -73,7 +73,7 @@ mod tests {
     use std::thread;
 
     fn pic(t: u64) -> Frame {
-        Frame { width: 1, height: 1, t_ms: t, bgra: vec![0; 4] }
+        Frame { width: 1, height: 1, t_ms: t, captured_100ns: None, arrived_100ns: None, bgra: vec![0; 4] }
     }
 
     #[test]

@@ -12,11 +12,14 @@
 mod audio;
 mod balance;
 mod bmp;
+mod crash;
 mod echo;
 mod queue;
 mod record;
+mod report;
 mod sound;
 mod stats;
+mod timing;
 mod video;
 #[cfg(windows)]
 mod win;
@@ -28,23 +31,26 @@ mod win_video;
 pub use audio::{
     choose_device, describe_devices, mix, peak, run_audio_test, run_audio_test_with, run_find_output,
     run_find_output_with, system_audio_platform, write_wav, AudioAligner, AudioChoice, AudioDevice, AudioInfo,
-    AudioPlatform, AudioSource, AudioTestOptions, DeviceKind, FindOutputOptions, CHANNELS as AUDIO_CHANNELS,
-    SAMPLE_RATE as AUDIO_SAMPLE_RATE,
+    AudioPacket, AudioPlatform, AudioSource, AudioTestOptions, DeviceKind, FindOutputOptions,
+    CHANNELS as AUDIO_CHANNELS, SAMPLE_RATE as AUDIO_SAMPLE_RATE,
 };
 pub use balance::{
     balance_of_samples, check_balance_in_files, describe_balance, judge_balance, typical_level, BalanceFinding,
     BalanceVerdict,
 };
 pub use bmp::write_bmp;
+pub use crash::{run_recorder_crash_report, MAX_LOSS_MS as RECORDER_CRASH_MAX_LOSS_MS};
 pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, EchoFinding, EchoVerdict, Envelope};
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use queue::FrameQueue;
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
+pub use report::{summarize, RecordingReport, TrackReport};
 pub use sound::{
     check_sound_files, plan_sound, Sound, SoundFileReport, SoundPlan, MAX_GAIN_DB, MIC_FILE, MIN_GAIN_DB,
     MIXED_BITRATE_KBPS, SYSTEM_FILE,
 };
 pub use stats::{FrameStats, FrameSummary};
+pub use timing::{now_100ns, run_timing_test, run_timing_test_with, Spread, TimingTestOptions, MAX_OFFSET_MS};
 pub use video::{
     compare_audio_readback, compare_readback, plain_name, run_crash_report, run_video_test, run_video_test_with,
     system_video_platform, AudioInspection, AudioSpec, EncoderInfo, Pacer, SinkSpec, VideoInspection, VideoPlatform,
@@ -130,6 +136,11 @@ pub struct Frame {
     pub height: u32,
     /// Milliseconds after the first picture of this capture.
     pub t_ms: u64,
+    /// When Windows captured this picture, on the clock Windows also uses for sound (units of 100
+    /// nanoseconds). `None` when the source cannot say.
+    pub captured_100ns: Option<i64>,
+    /// When the picture reached this program, on the same clock. `None` when not measured.
+    pub arrived_100ns: Option<i64>,
     /// Blue, green, red, alpha for every pixel, rows top to bottom, no padding.
     pub bgra: Vec<u8>,
 }
@@ -422,7 +433,7 @@ mod tests {
     }
 
     fn picture(t_ms: u64, shade: u8) -> Frame {
-        Frame { width: 4, height: 2, t_ms, bgra: vec![shade; 4 * 2 * 4] }
+        Frame { width: 4, height: 2, t_ms, captured_100ns: None, arrived_100ns: None, bgra: vec![shade; 4 * 2 * 4] }
     }
 
     struct FakePlatform {

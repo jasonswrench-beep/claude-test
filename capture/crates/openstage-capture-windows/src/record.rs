@@ -12,12 +12,15 @@
 //! steady frame rate (see [`Pacer`]).
 
 use crate::audio::{AudioPlatform, CHANNELS, SAMPLE_RATE};
+use crate::report::RecordingReport;
 use crate::sound::{Sound, SoundPlan, SoundTake, MIXED_BITRATE_KBPS};
 use crate::video::{AudioSpec, Pacer};
 use crate::{Frame, FrameSource, Platform, SinkSpec, VideoPlatform, VideoSink};
 use openstage_capture::{MediaFactory, SessionConfig, SessionError, TakeMedia};
 use openstage_capture_project::MediaFile;
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// The most recording a crash is declared to cost: a fragment (about a second) plus the encoder's delay.
@@ -34,11 +37,17 @@ fn media_error(what: impl std::fmt::Display) -> SessionError {
 /// Starts a screen recording for each take.
 pub struct ScreenMedia {
     screen: Box<dyn Platform>,
-    video: Box<dyn VideoPlatform>,
+    video: Rc<dyn VideoPlatform>,
     display: u32,
     fps: u32,
     bitrate_kbps: u32,
     sound: Option<Sound>,
+    /// What the most recent take did, filled in when it finishes.
+    report: Rc<RefCell<Option<RecordingReport>>>,
+    /// What was started during the countdown, waiting for the take to begin.
+    prepared: RefCell<Option<Prepared>>,
+    /// Whether the video encoder has been woken up yet in this run.
+    encoder_warmed: std::cell::Cell<bool>,
 }
 
 impl ScreenMedia {
@@ -49,7 +58,22 @@ impl ScreenMedia {
         fps: u32,
         bitrate_kbps: u32,
     ) -> Self {
-        Self { screen, video, display, fps: fps.max(1), bitrate_kbps, sound: None }
+        Self {
+            screen,
+            video: Rc::from(video),
+            display,
+            fps: fps.max(1),
+            bitrate_kbps,
+            sound: None,
+            report: Rc::new(RefCell::new(None)),
+            prepared: RefCell::new(None),
+            encoder_warmed: std::cell::Cell::new(false),
+        }
+    }
+
+    /// Where the numbers about the most recent take appear once it has finished.
+    pub fn report_handle(&self) -> Rc<RefCell<Option<RecordingReport>>> {
+        Rc::clone(&self.report)
     }
 
     /// Record sound too: the microphone and/or the computer's own sound, as already chosen in `plan`.
@@ -89,10 +113,91 @@ impl MediaFactory for ScreenMedia {
         DECLARED_LOSS_MS
     }
 
+    fn warm_up(&self, _cfg: &SessionConfig) -> Result<(), SessionError> {
+        let started = Instant::now();
+        let prepared = self.prepare()?;
+        // The first video encoder of a run can take most of a second to wake up (loading the graphics
+        // card's encoder). Make a throwaway file first, so the real one starts quickly.
+        if !self.encoder_warmed.replace(true) {
+            self.warm_encoder(&prepared);
+        }
+        eprintln!("warm-up during the countdown took {} ms in all", started.elapsed().as_millis());
+        *self.prepared.borrow_mut() = Some(prepared);
+        Ok(())
+    }
+
     fn begin(&self, take_dir: &Path, _cfg: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError> {
         let started = Instant::now();
-        self.video.start_media().map_err(|e| media_error(format!("Windows' video tools would not start: {e}")))?;
+        // What was prepared during the countdown, or, with no countdown, prepared now.
+        let (prepared, reused) = match self.prepared.borrow_mut().take() {
+            Some(p) => (p, true),
+            None => (self.prepare()?, false),
+        };
+        let prepared_at = started.elapsed();
+        let Prepared { source, first, listening, .. } = prepared;
 
+        let spec = SinkSpec {
+            path: take_dir.join(SCREEN_FILE),
+            width: first.width,
+            height: first.height,
+            fps: self.fps,
+            bitrate_kbps: self.bitrate_kbps,
+            fragmented: true,
+            audio: listening.as_ref().map(|_| AudioSpec {
+                sample_rate: SAMPLE_RATE,
+                channels: CHANNELS,
+                bitrate_kbps: MIXED_BITRATE_KBPS,
+            }),
+        };
+        let sink =
+            self.video.create_sink(&spec).map_err(|e| media_error(format!("Could not start the video file: {e}")))?;
+        let memory_now = self.video.process_memory_mb();
+        let mut sound = match listening {
+            Some(open) => Some(open.begin(take_dir)?),
+            None => None,
+        };
+        // Recording time starts now. Whatever the microphone heard while everything was starting is not part of it.
+        if let Some(sound) = sound.as_mut() {
+            sound.discard_backlog();
+        }
+        // Where the start-up time goes, for diagnosis. Standard error is for diagnostics only.
+        eprintln!(
+            "start-up: {} {} ms, then the video file was ready after {} ms in all (this is the pause after the countdown)",
+            if reused { "preparing had been done during the countdown; collecting it took" } else { "preparing took" },
+            prepared_at.as_millis(),
+            started.elapsed().as_millis()
+        );
+        Ok(Box::new(ScreenTake {
+            source: Some(source),
+            sink: Some(sink),
+            pacer: Pacer::new(self.fps),
+            latest: first,
+            written: 0,
+            sound,
+            video: Rc::clone(&self.video),
+            report: Rc::clone(&self.report),
+            started: Instant::now(),
+            cpu_start: self.video.process_cpu_time(),
+            memory_first_mb: memory_now,
+            memory_peak_mb: memory_now,
+            next_sample_ms: SAMPLE_EVERY_MS,
+            pictures_replaced: 0,
+        }))
+    }
+}
+
+/// Everything that can be started before the take's folder is known.
+struct Prepared {
+    source: Box<dyn FrameSource>,
+    first: Frame,
+    listening: Option<crate::sound::OpenSound>,
+}
+
+impl ScreenMedia {
+    /// Start Windows' video tools, the screen capture, and the sound. Waits for the first picture.
+    fn prepare(&self) -> Result<Prepared, SessionError> {
+        let started = Instant::now();
+        self.video.start_media().map_err(|e| media_error(format!("Windows' video tools would not start: {e}")))?;
         let tools_ready = started.elapsed();
         let displays = self.screen.list_displays().map_err(media_error)?;
         let display = displays.iter().find(|d| d.number == self.display).ok_or_else(|| {
@@ -115,51 +220,52 @@ impl MediaFactory for ScreenMedia {
                 first.width, first.height
             )));
         }
-
         // Start listening before the video file exists, so a microphone that cannot be opened leaves nothing behind.
         let listening = match &self.sound {
             Some(sound) => Some(sound.open()?),
             None => None,
         };
-        let spec = SinkSpec {
-            path: take_dir.join(SCREEN_FILE),
-            width: first.width,
-            height: first.height,
-            fps: self.fps,
-            bitrate_kbps: self.bitrate_kbps,
-            fragmented: true,
-            audio: listening.as_ref().map(|_| AudioSpec {
-                sample_rate: SAMPLE_RATE,
-                channels: CHANNELS,
-                bitrate_kbps: MIXED_BITRATE_KBPS,
-            }),
-        };
-        let sink =
-            self.video.create_sink(&spec).map_err(|e| media_error(format!("Could not start the video file: {e}")))?;
-        let mut sound = match listening {
-            Some(open) => Some(open.begin(take_dir)?),
-            None => None,
-        };
-        // Recording time starts now. Whatever the microphone heard while everything was starting is not part of it.
-        if let Some(sound) = sound.as_mut() {
-            sound.discard_backlog();
-        }
-        // Where the start-up time goes, for diagnosis. Standard error is for diagnostics only.
         eprintln!(
-            "start-up timing: video tools {} ms, screen capture started {} ms, first picture {} ms, video file ready {} ms (all counted from the start)",
+            "preparing: video tools {} ms, screen capture started {} ms, first picture {} ms, sound listening {} ms (counted from the start of preparing)",
             tools_ready.as_millis(),
             capture_started.as_millis(),
             first_picture.as_millis(),
             started.elapsed().as_millis()
         );
-        Ok(Box::new(ScreenTake {
-            source: Some(source),
-            sink: Some(sink),
-            pacer: Pacer::new(self.fps),
-            latest: first,
-            written: 0,
-            sound,
-        }))
+        Ok(Prepared { source, first, listening })
+    }
+
+    /// Make and throw away a small video file, so the encoder is awake when the real one is made. Any
+    /// trouble is ignored: this only saves time, and the real file reports its own problems.
+    fn warm_encoder(&self, prepared: &Prepared) {
+        let started = Instant::now();
+        let path = std::env::temp_dir().join(format!("openstage-capture-warmup-{}.mp4", std::process::id()));
+        let spec = SinkSpec {
+            path: path.clone(),
+            width: prepared.first.width,
+            height: prepared.first.height,
+            fps: self.fps,
+            bitrate_kbps: self.bitrate_kbps,
+            fragmented: true,
+            audio: prepared.listening.as_ref().map(|_| AudioSpec {
+                sample_rate: SAMPLE_RATE,
+                channels: CHANNELS,
+                bitrate_kbps: MIXED_BITRATE_KBPS,
+            }),
+        };
+        match self.video.create_sink(&spec) {
+            Ok(mut sink) => {
+                let step = Pacer::new(self.fps);
+                let _ = sink.write(&prepared.first, 0, step.duration_100ns(0));
+                if spec.audio.is_some() {
+                    let _ = sink.write_audio(&vec![0i16; (SAMPLE_RATE as usize / 50) * CHANNELS as usize], 0);
+                }
+                let _ = sink.finish();
+            }
+            Err(e) => eprintln!("warming up the video encoder did not work (this is not a problem by itself): {e}"),
+        }
+        let _ = std::fs::remove_file(&path);
+        eprintln!("video encoder warmed up in {} ms", started.elapsed().as_millis());
     }
 }
 
@@ -172,9 +278,42 @@ struct ScreenTake {
     latest: Frame,
     written: u64,
     sound: Option<SoundTake>,
+    // What the report needs.
+    video: Rc<dyn VideoPlatform>,
+    report: Rc<RefCell<Option<RecordingReport>>>,
+    started: Instant,
+    cpu_start: Option<Duration>,
+    memory_first_mb: Option<f64>,
+    memory_peak_mb: Option<f64>,
+    next_sample_ms: u64,
+    pictures_replaced: u64,
 }
 
+/// How often memory use is looked at, in recording time.
+const SAMPLE_EVERY_MS: u64 = 10_000;
+/// How often a line about resource use is written for the log, in recording time.
+const LOG_EVERY_MS: u64 = 60_000;
+
 impl ScreenTake {
+    /// Look at how much memory the program uses, and now and then say so in the log.
+    fn sample_resources(&mut self, media_ms: u64) {
+        if let Some(mb) = self.video.process_memory_mb() {
+            self.memory_first_mb.get_or_insert(mb);
+            self.memory_peak_mb = Some(self.memory_peak_mb.map_or(mb, |p| p.max(mb)));
+        }
+        if media_ms % LOG_EVERY_MS < SAMPLE_EVERY_MS {
+            let cpu =
+                self.cpu_start.zip(self.video.process_cpu_time()).map(|(a, b)| (b.saturating_sub(a)).as_secs_f64());
+            let wall = self.started.elapsed().as_secs_f64().max(0.001);
+            eprintln!(
+                "resources at {}: memory {} MB, processor {}",
+                crate::report::clock(media_ms),
+                self.memory_peak_mb.map_or("unknown".to_string(), |m| format!("{m:.0}")),
+                cpu.map_or("unknown".to_string(), |c| format!("{:.0} percent of one core so far", c * 100.0 / wall)),
+            );
+        }
+    }
+
     fn write_beat(&mut self, beat: u64) -> Result<(), SessionError> {
         let sink = self.sink.as_mut().expect("the video file is open while recording");
         sink.write(&self.latest, self.pacer.pts_100ns(beat), self.pacer.duration_100ns(beat))
@@ -196,6 +335,10 @@ impl TakeMedia for ScreenTake {
         }
         if let (Some(sound), Some(sink)) = (self.sound.as_mut(), self.sink.as_mut()) {
             sound.pump(media_ms, sink.as_mut())?;
+        }
+        if media_ms >= self.next_sample_ms {
+            self.next_sample_ms = media_ms - media_ms % SAMPLE_EVERY_MS + SAMPLE_EVERY_MS;
+            self.sample_resources(media_ms);
         }
         Ok(())
     }
@@ -228,6 +371,7 @@ impl TakeMedia for ScreenTake {
 
     fn finish(mut self: Box<Self>, media_ms: u64) -> Result<u32, SessionError> {
         // Stop taking pictures first, so nothing arrives while the file is being completed.
+        self.pictures_replaced = self.source.as_ref().map_or(0, |s| s.dropped());
         self.source = None;
         if self.written == 0 {
             // A recording stopped at once still gets one picture, so the file is a valid video.
@@ -235,10 +379,27 @@ impl TakeMedia for ScreenTake {
         }
         let mut sink = self.sink.take().expect("the video file is open until it is finished");
         let mut files = 1;
+        let mut tracks = Vec::new();
         if let Some(sound) = self.sound.take() {
             files += sound.track_count();
-            sound.finish(media_ms, sink.as_mut())?;
+            tracks = sound.finish(media_ms, sink.as_mut())?;
         }
+        self.sample_resources(media_ms);
+        *self.report.borrow_mut() = Some(RecordingReport {
+            recorded_ms: media_ms,
+            pictures_written: self.written,
+            beats_skipped: self.pacer.skipped(),
+            pictures_replaced: self.pictures_replaced,
+            wall_seconds: self.started.elapsed().as_secs_f64(),
+            cpu_seconds: self
+                .cpu_start
+                .zip(self.video.process_cpu_time())
+                .map(|(a, b)| b.saturating_sub(a).as_secs_f64()),
+            logical_cores: self.video.logical_cores(),
+            memory_first_mb: self.memory_first_mb,
+            memory_peak_mb: self.memory_peak_mb,
+            tracks,
+        });
         sink.finish().map_err(|e| media_error(format!("The video file could not be completed: {e}")))?;
         Ok(files)
     }
@@ -272,6 +433,8 @@ mod tests {
         width: u32,
         height: u32,
         gives_picture: bool,
+        /// How many times a capture of the screen was started.
+        captures: Rc<std::cell::Cell<u32>>,
     }
     impl Platform for FakeScreen {
         fn windows_version(&self) -> Result<WindowsVersion, ScreenError> {
@@ -293,10 +456,13 @@ mod tests {
             }])
         }
         fn start_display_capture(&self, _: &DisplayInfo, _: bool) -> Result<Box<dyn FrameSource>, ScreenError> {
+            self.captures.set(self.captures.get() + 1);
             let picture = self.gives_picture.then(|| Frame {
                 width: self.width,
                 height: self.height,
                 t_ms: 0,
+                captured_100ns: None,
+                arrived_100ns: None,
                 bgra: vec![9; self.width as usize * self.height as usize * 4],
             });
             Ok(Box::new(StillSource { picture }))
@@ -336,6 +502,8 @@ mod tests {
 
     struct FakeVideo {
         files: Rc<RefCell<Vec<Rc<RefCell<File>>>>>,
+        /// Memory in use; grows by 10 megabytes every time it is looked at.
+        memory: std::cell::Cell<f64>,
     }
     impl VideoPlatform for FakeVideo {
         fn start_media(&self) -> Result<(), ScreenError> {
@@ -363,16 +531,21 @@ mod tests {
         fn logical_cores(&self) -> u32 {
             1
         }
+        fn process_memory_mb(&self) -> Option<f64> {
+            let m = self.memory.get();
+            self.memory.set(m + 10.0);
+            Some(m)
+        }
     }
 
     fn factory(screen: FakeScreen) -> (ScreenMedia, Files) {
         let files = Files::default();
-        let video = FakeVideo { files: Rc::clone(&files.0) };
+        let video = FakeVideo { files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
         (ScreenMedia::new(Box::new(screen), Box::new(video), 1, 30, 8000), files)
     }
 
     fn good_screen() -> FakeScreen {
-        FakeScreen { width: 8, height: 4, gives_picture: true }
+        FakeScreen { width: 8, height: 4, gives_picture: true, captures: Rc::new(std::cell::Cell::new(0)) }
     }
 
     fn config(dir: &tempfile::TempDir) -> SessionConfig {
@@ -504,7 +677,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = config(&dir);
         let files = Files::default();
-        let video = FakeVideo { files: Rc::clone(&files.0) };
+        let video = FakeVideo { files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
         let media = ScreenMedia::new(Box::new(good_screen()), Box::new(video), 4, 30, 8000);
         let mut sink = VecSink::default();
         let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
@@ -747,5 +920,166 @@ mod tests {
         let mix = take.media[0].mix.expect("the video says how its sound was mixed");
         assert_eq!((mix.microphone_gain_db, mix.system_gain_db), (2, -9));
         assert!(take.media[1..].iter().all(|m| m.mix.is_none()), "the separate files are untouched");
+    }
+
+    #[test]
+    fn what_a_recording_did_is_collected_for_the_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, _files) = with_sound(&clock, |_| {}, Some("default"), Some("default"));
+        let report = media.report_handle();
+        assert!(report.borrow().is_none(), "nothing before a take has finished");
+        let mut input = ScriptedInput::new(vec![(25_000, Input::Command(Command::Stop))]);
+        run_session(&cfg, &media, &mut input, &mut VecSink::default(), clock.as_ref()).unwrap();
+
+        let r = report.borrow().clone().expect("a report once the take has finished");
+        assert!((24_900..=25_100).contains(&r.recorded_ms), "{}", r.recorded_ms);
+        assert!(
+            (740..=752).contains(&r.pictures_written),
+            "30 pictures a second for 25 seconds: {}",
+            r.pictures_written
+        );
+        assert_eq!(r.logical_cores, 1);
+        assert_eq!(r.cpu_seconds, None, "the fake computer cannot say, so none is claimed");
+        assert_eq!(r.memory_first_mb, Some(100.0));
+        assert!(r.memory_peak_mb.unwrap() >= 130.0, "memory was looked at every 10 seconds: {:?}", r.memory_peak_mb);
+        assert_eq!(r.tracks.len(), 2);
+        assert!(r.tracks[0].microphone && !r.tracks[1].microphone);
+        assert!(r.tracks.iter().all(|t| t.heard_ms.abs_diff(r.recorded_ms) < 100), "{:?}", r.tracks);
+
+        let checks = crate::summarize(&r);
+        let names: Vec<_> = checks.iter().map(|c| c.check.as_str()).collect();
+        assert_eq!(names, ["run-summary", "run-memory", "run-sound-microphone", "run-sound-system"]);
+    }
+
+    #[test]
+    fn a_second_take_replaces_the_report_of_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let (media, _files) = factory(good_screen());
+        let report = media.report_handle();
+        let mut input =
+            ScriptedInput::new(vec![(1500, Input::Command(Command::Restart)), (3500, Input::Command(Command::Stop))]);
+        run_session(&cfg, &media, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        let r = report.borrow().clone().unwrap();
+        assert!((1900..=2100).contains(&r.recorded_ms), "the last take, about 2 seconds: {}", r.recorded_ms);
+    }
+
+    // ---- warming up during the countdown ----
+
+    #[test]
+    fn during_a_countdown_the_screen_and_encoder_are_prepared_and_the_take_uses_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 2000;
+        let screen = good_screen();
+        let captures = Rc::clone(&screen.captures);
+        let (media, files) = factory(screen);
+        let mut input = ScriptedInput::new(vec![(3000, Input::Command(Command::Stop))]);
+        let out = run_session(&cfg, &media, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert!(out.ok);
+
+        assert_eq!(captures.get(), 1, "the screen capture started once, during the countdown, and the take reused it");
+        let files = files.0.borrow();
+        assert_eq!(files.len(), 2, "a throwaway file to wake the encoder, then the real one");
+        let (warm, real) = (files[0].borrow(), files[1].borrow());
+        assert!(warm.path.to_string_lossy().contains("openstage-capture-warmup") && warm.finished);
+        assert!(!warm.path.starts_with(&cfg.project), "the throwaway file is never inside the project");
+        assert_eq!(real.path, take_dir(&cfg.project, 1).join("screen.mp4"));
+        assert!(real.finished && !real.beats.is_empty());
+    }
+
+    #[test]
+    fn with_no_countdown_everything_is_prepared_at_the_start_of_the_take_and_nothing_is_thrown_away() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let screen = good_screen();
+        let captures = Rc::clone(&screen.captures);
+        let (media, files) = factory(screen);
+        let mut input = ScriptedInput::new(vec![(500, Input::Command(Command::Stop))]);
+        run_session(&cfg, &media, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(captures.get(), 1);
+        assert_eq!(files.0.borrow().len(), 1, "no throwaway file when there was no countdown to do it in");
+    }
+
+    #[test]
+    fn start_again_gets_a_fresh_capture_for_the_new_take_but_wakes_the_encoder_only_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 1000;
+        let screen = good_screen();
+        let captures = Rc::clone(&screen.captures);
+        let (media, files) = factory(screen);
+        let mut input =
+            ScriptedInput::new(vec![(2500, Input::Command(Command::Restart)), (6000, Input::Command(Command::Stop))]);
+        let out = run_session(&cfg, &media, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(out.take, 2);
+        assert_eq!(captures.get(), 2, "one capture for each take");
+        let files = files.0.borrow();
+        assert_eq!(files.len(), 3, "one throwaway file in all, then a real file for each take");
+        assert!(files[0].borrow().path.to_string_lossy().contains("warmup"));
+        assert!(!files[1].borrow().path.to_string_lossy().contains("warmup"));
+        assert!(!files[2].borrow().path.to_string_lossy().contains("warmup"));
+    }
+
+    #[test]
+    fn a_screen_that_cannot_be_recorded_is_reported_during_the_countdown_before_any_take_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 3000;
+        let (media, files) = factory(FakeScreen { width: 7, ..good_screen() });
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        assert!(!out.ok);
+        assert_eq!(out.take, 0, "no take was started");
+        assert!(sink
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::Error { message, .. } if message.contains("even width and height"))));
+        assert!(files.0.borrow().is_empty());
+        assert!(!take_dir(&cfg.project, 1).exists(), "no take folder was left behind");
+    }
+
+    #[test]
+    fn a_warm_up_that_cannot_make_its_throwaway_file_does_not_stop_the_recording() {
+        struct NoWarmFile(FakeVideo, std::cell::Cell<u32>);
+        impl VideoPlatform for NoWarmFile {
+            fn start_media(&self) -> Result<(), ScreenError> {
+                self.0.start_media()
+            }
+            fn h264_encoders(&self) -> Result<Vec<EncoderInfo>, ScreenError> {
+                self.0.h264_encoders()
+            }
+            fn create_sink(&self, spec: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError> {
+                self.1.set(self.1.get() + 1);
+                if self.1.get() == 1 {
+                    return Err(ScreenError::Failed("the temporary folder is full".into()));
+                }
+                self.0.create_sink(spec)
+            }
+            fn inspect_video(&self, p: &Path) -> Result<VideoInspection, ScreenError> {
+                self.0.inspect_video(p)
+            }
+            fn process_cpu_time(&self) -> Option<Duration> {
+                None
+            }
+            fn logical_cores(&self) -> u32 {
+                1
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 1000;
+        let files = Files::default();
+        let video = NoWarmFile(
+            FakeVideo { files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) },
+            std::cell::Cell::new(0),
+        );
+        let media = ScreenMedia::new(Box::new(good_screen()), Box::new(video), 1, 30, 8000);
+        let mut input = ScriptedInput::new(vec![(2000, Input::Command(Command::Stop))]);
+        let out = run_session(&cfg, &media, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert!(out.ok, "the real recording went ahead");
+        assert_eq!(files.0.borrow().len(), 1);
     }
 }

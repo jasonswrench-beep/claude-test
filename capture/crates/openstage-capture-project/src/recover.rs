@@ -88,6 +88,8 @@ fn recover_mp4_take(project: &Path, mut take: Take, report: &mut RecoverReport) 
             Ok(info) => {
                 if info.frames == 0 {
                     report.problems.push(format!("Take {}: the sound file {} holds no sound.", take.id, media.file));
+                } else {
+                    usable_files += 1;
                 }
             }
             Err(e) => report.problems.push(format!(

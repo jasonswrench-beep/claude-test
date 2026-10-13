@@ -36,7 +36,7 @@ pub use audio::{
 };
 pub use balance::{
     balance_of_samples, check_balance_in_files, describe_balance, judge_balance, typical_level, BalanceFinding,
-    BalanceVerdict,
+    BalanceVerdict, Mix,
 };
 pub use bmp::write_bmp;
 pub use crash::{run_recorder_crash_report, MAX_LOSS_MS as RECORDER_CRASH_MAX_LOSS_MS};

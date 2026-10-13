@@ -18,7 +18,12 @@ fn secs(ms: u64) -> String {
 pub struct PlainSink {
     last_state: Option<(State, u32)>,
     last_level_text: HashMap<String, String>,
+    /// When, in recording time, each sound's level was last said.
+    last_level_said_ms: HashMap<String, u64>,
 }
+
+/// The least recording time between two spoken levels of the same sound, in milliseconds.
+const LEVEL_EVERY_MS: u64 = 5000;
 
 impl PlainSink {
     pub fn new() -> Self {
@@ -50,15 +55,26 @@ impl PlainSink {
                     State::Error => Some("The recorder stopped because of a problem.".to_string()),
                 }
             }
-            Event::Level { source, text, .. } => {
-                // Only say a level when it changes, so a steady sound does not fill the screen.
-                let previous = self.last_level_text.insert(source.clone(), text.clone());
+            Event::Level { source, text, elapsed_ms, .. } => {
+                // A sound level is said when it changes, and then at most once every few seconds for each
+                // sound, so that a person (or a screen reader) is not talked over by a meter that flickers.
+                // The one exception is a sound that is too loud, which is said at once.
+                let changed = self.last_level_text.get(source).map(String::as_str) != Some(text.as_str());
+                let waited_enough = match self.last_level_said_ms.get(source) {
+                    Some(said_at) => *elapsed_ms < *said_at || *elapsed_ms - *said_at >= LEVEL_EVERY_MS,
+                    None => true,
+                };
+                if !changed || !(waited_enough || text == "too loud") {
+                    return None;
+                }
+                self.last_level_text.insert(source.clone(), text.clone());
+                self.last_level_said_ms.insert(source.clone(), *elapsed_ms);
                 let name = match source.as_str() {
                     "mic" => "microphone",
                     "system" => "the computer's sound",
                     other => other,
                 };
-                (previous.as_deref() != Some(text.as_str())).then(|| format!("Sound level, {name}: {text}."))
+                Some(format!("Sound level, {name}: {text}."))
             }
             Event::Warning { message, .. } => Some(format!("Warning: {message}")),
             Event::Error { message, .. } => Some(format!("PROBLEM: {message}")),
@@ -165,13 +181,39 @@ mod tests {
         );
     }
 
+    fn level_at(source: &str, text: &str, elapsed_ms: u64) -> Event {
+        Event::Level { source: source.into(), peak: 0.5, text: text.into(), elapsed_ms }
+    }
+
     #[test]
     fn a_steady_sound_level_is_said_only_when_it_changes() {
         let mut p = PlainSink::new();
-        let level = |text: &str| Event::Level { source: "mic".into(), peak: 0.5, text: text.into(), elapsed_ms: 0 };
-        assert!(p.describe(&level("good")).is_some());
-        assert!(p.describe(&level("good")).is_none());
-        assert_eq!(p.describe(&level("loud")).as_deref(), Some("Sound level, microphone: loud."));
+        assert!(p.describe(&level_at("mic", "good", 0)).is_some());
+        assert!(p.describe(&level_at("mic", "good", 6000)).is_none());
+        assert_eq!(p.describe(&level_at("mic", "loud", 12_000)).as_deref(), Some("Sound level, microphone: loud."));
+    }
+
+    #[test]
+    fn a_flickering_level_is_said_at_most_once_every_few_seconds_for_each_sound() {
+        let mut p = PlainSink::new();
+        assert!(p.describe(&level_at("mic", "quiet", 500)).is_some());
+        // The meter flickers between quiet and silent twice a second: nothing more is said for 5 seconds.
+        for (i, text) in ["silent", "quiet", "silent", "quiet", "silent"].iter().enumerate() {
+            assert!(p.describe(&level_at("mic", text, 1000 + i as u64 * 500)).is_none(), "{text} at step {i}");
+        }
+        assert_eq!(p.describe(&level_at("mic", "good", 5600)).as_deref(), Some("Sound level, microphone: good."));
+        // The other sound has its own clock.
+        assert!(p.describe(&level_at("system", "loud", 5700)).is_some());
+    }
+
+    #[test]
+    fn a_sound_that_is_too_loud_is_said_at_once() {
+        let mut p = PlainSink::new();
+        assert!(p.describe(&level_at("mic", "good", 1000)).is_some());
+        assert_eq!(
+            p.describe(&level_at("mic", "too loud", 1500)).as_deref(),
+            Some("Sound level, microphone: too loud.")
+        );
     }
 
     #[test]

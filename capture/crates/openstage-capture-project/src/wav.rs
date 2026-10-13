@@ -7,9 +7,10 @@
 //!
 //! A WAV file normally gets its length written into its header only when it is finished, so one cut
 //! off by a crash would claim to be empty. [`WavWriter`] avoids that: every time it is synced (about
-//! once a second) it writes the data, forces it to disk, and only then updates the length in the
-//! header. So the header is never ahead of the data, and a crash costs at most the sound since the
-//! last sync. [`repair_wav`] fixes a file whose header is behind or wrong.
+//! once a second) it writes the data and only then updates the length in the header. So the header is
+//! never ahead of the data, and a program that is killed costs at most the sound since the last sync.
+//! Now and then it also waits for the disk, which a power cut needs. [`repair_wav`] fixes a file whose
+//! header is behind or wrong.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -84,21 +85,31 @@ impl WavWriter {
         Ok(())
     }
 
-    /// Force everything written so far to disk, then record its length in the header.
+    /// Hand everything written so far to the operating system, then record its length in the header.
+    /// After this the file is playable up to here even if the program is killed. It is quick: it does not
+    /// wait for the disk (see [`WavWriter::sync_to_disk`]).
     pub fn sync(&mut self) -> io::Result<()> {
         self.file.flush()?;
-        self.file.get_ref().sync_data()?;
         let data_bytes = (self.frames * self.channels as u64 * 2) as u32;
         let file = self.file.get_mut();
         file.seek(SeekFrom::Start(0))?;
         file.write_all(&header(self.sample_rate, self.channels, data_bytes))?;
         file.seek(SeekFrom::End(0))?;
-        file.sync_data()
+        Ok(())
     }
 
-    /// Complete the file. Returns the number of frames in it.
-    pub fn finish(mut self) -> io::Result<u64> {
+    /// Like [`WavWriter::sync`], and then wait until the disk itself has the sound. That can take a
+    /// noticeable moment on a busy or slow disk, so it is done now and then, not every second. Only a
+    /// power cut or a crash of the whole computer needs it: a program that is killed leaves what it
+    /// handed to the operating system.
+    pub fn sync_to_disk(&mut self) -> io::Result<()> {
         self.sync()?;
+        self.file.get_ref().sync_data()
+    }
+
+    /// Complete the file, on the disk. Returns the number of frames in it.
+    pub fn finish(mut self) -> io::Result<u64> {
+        self.sync_to_disk()?;
         Ok(self.frames)
     }
 }

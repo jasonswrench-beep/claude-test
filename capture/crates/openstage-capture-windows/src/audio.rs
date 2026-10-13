@@ -274,6 +274,9 @@ pub struct AudioAligner {
     worst_ahead_frames: u64,
     /// The most sound ever missing from the recording clock while waiting for it (the sound card running slow or late).
     worst_late_frames: u64,
+    /// Recording time at which each of those worst moments happened, in milliseconds.
+    worst_ahead_at_ms: u64,
+    worst_late_at_ms: u64,
 }
 
 impl AudioAligner {
@@ -292,6 +295,8 @@ impl AudioAligner {
             trimmed_frames: 0,
             worst_ahead_frames: 0,
             worst_late_frames: 0,
+            worst_ahead_at_ms: 0,
+            worst_late_at_ms: 0,
         }
     }
 
@@ -316,7 +321,10 @@ impl AudioAligner {
             out.extend(self.pending.drain(..need as usize * channels));
             // Too far ahead: the sound card's clock is running fast. Drop the oldest of the surplus.
             let ahead = (self.pending.len() / channels) as u64;
-            self.worst_ahead_frames = self.worst_ahead_frames.max(ahead);
+            if ahead > self.worst_ahead_frames {
+                self.worst_ahead_frames = ahead;
+                self.worst_ahead_at_ms = media_ms;
+            }
             if ahead > self.frames(Self::AHEAD_MS) {
                 let drop_frames = ahead - self.frames(Self::LATE_MS);
                 self.pending.drain(..drop_frames as usize * channels);
@@ -325,15 +333,21 @@ impl AudioAligner {
             self.delivered_frames += need;
         } else {
             let deficit = need - have;
-            self.worst_late_frames = self.worst_late_frames.max(deficit);
-            out.append(&mut self.pending);
+            if deficit > self.worst_late_frames {
+                self.worst_late_frames = deficit;
+                self.worst_late_at_ms = media_ms;
+            }
             if deficit > self.frames(Self::LATE_MS) {
-                // The stream sent nothing for a while (a quiet computer): fill the gap with silence.
+                // The stream sent nothing for a while (a quiet computer, or the program was busy): fill the
+                // gap with silence. The silence goes FIRST: sound that arrived after a quiet stretch belongs
+                // at the end of the stretch, up against the present, not at its start.
                 out.extend(std::iter::repeat_n(0i16, deficit as usize * channels));
+                out.append(&mut self.pending);
                 self.padded_frames += deficit;
                 self.delivered_frames += need;
             } else {
                 // Just a little late: hand over what there is and wait for the rest.
+                out.append(&mut self.pending);
                 self.delivered_frames += have;
             }
         }
@@ -359,6 +373,16 @@ impl AudioAligner {
     /// The most sound that was ever missing at the recording clock while waiting for it, in milliseconds.
     pub fn worst_late_ms(&self) -> u64 {
         self.worst_late_frames * 1000 / self.rate as u64
+    }
+
+    /// When, in recording time, the sound was held back the most, in milliseconds.
+    pub fn worst_ahead_at_ms(&self) -> u64 {
+        self.worst_ahead_at_ms
+    }
+
+    /// When, in recording time, the sound was missing the most, in milliseconds.
+    pub fn worst_late_at_ms(&self) -> u64 {
+        self.worst_late_at_ms
     }
 
     /// Silence added because nothing arrived, in milliseconds.
@@ -834,6 +858,21 @@ mod tests {
         let seconds = total as f64 / 2.0 / R as f64;
         assert!((1.95..=2.0).contains(&seconds), "two seconds of silence, got {seconds}");
         assert!(a.padded_ms() >= 1950);
+    }
+
+    #[test]
+    fn sound_that_starts_after_a_quiet_stretch_is_placed_after_the_silence_not_before() {
+        // A quiet computer sends nothing, then sound starts partway through the interval that is due: 800 ms
+        // of nothing and then 200 ms of sound. The sound happened at the END of the second.
+        let mut a = AudioAligner::new(R, 2);
+        a.push(&stereo_frames(9600, 5));
+        let out = a.take_until(1000);
+        assert_eq!(out.len(), 48_000 * 2, "exactly the second that is due");
+        let first_sound = out.iter().position(|s| *s == 5).expect("the sound is in there");
+        assert_eq!(first_sound / 2, 38_400, "800 ms of silence come first");
+        assert!(out[..first_sound].iter().all(|s| *s == 0));
+        assert!(out[first_sound..].iter().all(|s| *s == 5), "the sound runs to the end of the second");
+        assert_eq!((a.worst_late_ms(), a.worst_late_at_ms()), (800, 1000), "when and how much was missing is noted");
     }
 
     #[test]

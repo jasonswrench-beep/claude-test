@@ -6,3 +6,5 @@ screen-test-log.txt
 screen-test-output/
 video-test-log.txt
 video-test-output/
+video-crash-log.txt
+video-crash-output/

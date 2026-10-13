@@ -10,6 +10,8 @@
 //! pictures arrive, how steadily, and that they show the screen.
 
 mod bmp;
+mod fmp4;
+mod queue;
 mod stats;
 mod video;
 #[cfg(windows)]
@@ -18,10 +20,12 @@ mod win;
 mod win_video;
 
 pub use bmp::write_bmp;
+pub use fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
+pub use queue::FrameQueue;
 pub use stats::{FrameStats, FrameSummary};
 pub use video::{
-    run_video_test, run_video_test_with, system_video_platform, EncoderInfo, Pacer, VideoPlatform, VideoSink,
-    VideoTestOptions, CPU_TARGET_PERCENT,
+    plain_name, run_crash_report, run_video_test, run_video_test_with, system_video_platform, EncoderInfo, Pacer,
+    SinkSpec, VideoInspection, VideoPlatform, VideoSink, VideoTestOptions, CPU_TARGET_PERCENT,
 };
 
 use std::fs;

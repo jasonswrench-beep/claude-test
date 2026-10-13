@@ -341,6 +341,19 @@ fn video_test_says_it_needs_windows_and_exits_with_2() {
     assert_eq!(lines.last(), Some(&"At least one check found a problem."));
 }
 
+#[cfg(not(windows))]
+#[test]
+fn video_crash_test_says_it_needs_windows_and_exits_with_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(BIN)
+        .args(["video-crash-test", "--plain", "--out", dir.path().join("o").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("PROBLEM: Screen capture and video only work on Windows."), "{text}");
+}
+
 #[test]
 fn render_says_it_is_not_built_yet_and_exits_with_2() {
     let dir = tempfile::tempdir().unwrap();

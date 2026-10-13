@@ -8,6 +8,7 @@
 //! As with the screen test, the real Windows parts sit behind a trait ([`VideoPlatform`]) so the
 //! whole flow, and every message a person will read, is tested here with a fake.
 
+use crate::fmp4::{repair_file, scan_file};
 use crate::{check, Check, Frame, Platform, ScreenError};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,19 +34,34 @@ pub trait VideoSink {
     fn finish(self: Box<Self>) -> Result<(), ScreenError>;
 }
 
+/// How to make the video file.
+#[derive(Debug, Clone)]
+pub struct SinkSpec {
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub bitrate_kbps: u32,
+    /// Write a fragmented MP4: a setup box and then many short, self-contained fragments, so that a
+    /// file cut off by a crash still plays up to the last whole fragment.
+    pub fragmented: bool,
+}
+
+/// What Windows finds when it reads a video file back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoInspection {
+    pub frames: u64,
+    pub duration_ms: u64,
+}
+
 /// What the video checks need from the operating system.
 pub trait VideoPlatform {
     /// Start Windows' video tools (Media Foundation).
     fn start_media(&self) -> Result<(), ScreenError>;
     fn h264_encoders(&self) -> Result<Vec<EncoderInfo>, ScreenError>;
-    fn create_sink(
-        &self,
-        path: &Path,
-        width: u32,
-        height: u32,
-        fps: u32,
-        bitrate_kbps: u32,
-    ) -> Result<Box<dyn VideoSink>, ScreenError>;
+    fn create_sink(&self, spec: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError>;
+    /// Open a finished (or cut-off) video file the way a player would and count what can be read.
+    fn inspect_video(&self, path: &Path) -> Result<VideoInspection, ScreenError>;
     /// Processor time this program has used so far, if the system can say.
     fn process_cpu_time(&self) -> Option<Duration>;
     /// How many logical processors the computer has.
@@ -75,7 +91,10 @@ impl VideoPlatform for NoVideo {
     fn h264_encoders(&self) -> Result<Vec<EncoderInfo>, ScreenError> {
         Err(ScreenError::NotWindows)
     }
-    fn create_sink(&self, _: &Path, _: u32, _: u32, _: u32, _: u32) -> Result<Box<dyn VideoSink>, ScreenError> {
+    fn create_sink(&self, _: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError> {
+        Err(ScreenError::NotWindows)
+    }
+    fn inspect_video(&self, _: &Path) -> Result<VideoInspection, ScreenError> {
         Err(ScreenError::NotWindows)
     }
     fn process_cpu_time(&self) -> Option<Duration> {
@@ -84,6 +103,37 @@ impl VideoPlatform for NoVideo {
     fn logical_cores(&self) -> u32 {
         1
     }
+}
+
+/// An encoder's name made safe to read aloud and to show in any console: trademark signs become
+/// words and runs of spaces collapse. (Windows' console draws the real symbols as garbage.)
+pub fn plain_name(name: &str) -> String {
+    let swapped = name.replace('\u{00AE}', "(R)").replace('\u{2122}', "(TM)").replace('\u{00A9}', "(C)");
+    swapped.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// "NVIDIA H.264 Encoder MFT (uses the graphics card)", with identical entries merged ("2 found").
+fn describe_encoders(list: &[EncoderInfo]) -> String {
+    let mut merged: Vec<(String, bool, usize)> = Vec::new();
+    for e in list {
+        let name = plain_name(&e.name);
+        match merged.iter_mut().find(|(n, h, _)| *n == name && *h == e.hardware) {
+            Some(entry) => entry.2 += 1,
+            None => merged.push((name, e.hardware, 1)),
+        }
+    }
+    merged
+        .iter()
+        .map(|(name, hardware, n)| {
+            let how = if *hardware { "uses the graphics card" } else { "uses the processor" };
+            if *n > 1 {
+                format!("{name} ({how}; {n} found)")
+            } else {
+                format!("{name} ({how})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Decides when each picture of a steady-rate video is due.
@@ -139,8 +189,13 @@ pub struct VideoTestOptions {
     pub fps: u32,
     /// Video quality, as kilobits per second. 8000 is good for a 1080p screen.
     pub bitrate_kbps: u32,
-    /// The folder for `test.mp4`.
+    /// The folder for the video (`test.mp4`, or `test_fragmented.mp4`).
     pub out_dir: PathBuf,
+    /// Write a fragmented MP4 that survives a crash (see [`SinkSpec::fragmented`]).
+    pub fragmented: bool,
+    /// A file to create at the exact moment recording begins, so another program can time the
+    /// recording precisely (the crash test uses it).
+    pub start_marker: Option<PathBuf>,
 }
 
 /// The share of the computer's total processing power this program may use at 1080p30 on a
@@ -194,16 +249,10 @@ pub fn run_video_test_with(
     // 2. An H.264 encoder.
     match video.h264_encoders() {
         Ok(list) if !list.is_empty() => {
-            let names: Vec<String> = list
-                .iter()
-                .map(|e| {
-                    format!("{} ({})", e.name, if e.hardware { "uses the graphics card" } else { "uses the processor" })
-                })
-                .collect();
             say(check(
                 "h264-encoder",
                 true,
-                format!("Found {} H.264 video encoder(s): {}.", list.len(), names.join("; ")),
+                format!("Found {} H.264 video encoder(s): {}.", list.len(), describe_encoders(&list)),
             ));
         }
         Ok(_) => {
@@ -274,9 +323,17 @@ pub fn run_video_test_with(
         say(check("video-encode", false, format!("Could not create the folder {}: {e}", opts.out_dir.display())));
         return false;
     }
-    let path = opts.out_dir.join("test.mp4");
+    let path = opts.out_dir.join(if opts.fragmented { "test_fragmented.mp4" } else { "test.mp4" });
     let _ = fs::remove_file(&path);
-    let mut sink = match video.create_sink(&path, first.width, first.height, opts.fps, opts.bitrate_kbps) {
+    let spec = SinkSpec {
+        path: path.clone(),
+        width: first.width,
+        height: first.height,
+        fps: opts.fps,
+        bitrate_kbps: opts.bitrate_kbps,
+        fragmented: opts.fragmented,
+    };
+    let mut sink = match video.create_sink(&spec) {
         Ok(s) => s,
         Err(e) => {
             say(check("video-encode", false, format!("Could not start the video file: {e}")));
@@ -290,6 +347,9 @@ pub fn run_video_test_with(
     let mut latest = first;
     let mut written: u64 = 0;
     let mut write_error: Option<ScreenError> = None;
+    if let Some(marker) = &opts.start_marker {
+        let _ = fs::write(marker, b"recording");
+    }
     let beats_start = Instant::now();
     loop {
         let elapsed = beats_start.elapsed();
@@ -333,7 +393,7 @@ pub fn run_video_test_with(
     let beats = written + skipped;
     let skipped_share = percent(skipped as f64, beats as f64);
     let capture_note = if dropped_by_capture > 0 {
-        format!(" The screen capture also threw away {dropped_by_capture} pictures.")
+        format!(" While the screen changed faster than the video needed, the capture replaced {dropped_by_capture} older pictures with newer ones, which is harmless.")
     } else {
         String::new()
     };
@@ -358,6 +418,29 @@ pub fn run_video_test_with(
                 opts.fps
             ),
         ));
+    }
+
+    // 4b. Ask Windows to read the finished file back the way a player would.
+    match video.inspect_video(&path) {
+        Ok(info) if info.frames > 0 && info.frames.abs_diff(written) * 100 <= written.max(1) * 5 => say(check(
+            "video-readback",
+            true,
+            format!(
+                "Windows read the finished video back: {} pictures, {:.1} seconds long.",
+                info.frames,
+                info.duration_ms as f64 / 1000.0
+            ),
+        )),
+        Ok(info) => say(check(
+            "video-readback",
+            false,
+            format!(
+                "Windows read back {} pictures ({:.1} seconds) from the finished video, but {written} were written.",
+                info.frames,
+                info.duration_ms as f64 / 1000.0
+            ),
+        )),
+        Err(e) => say(check("video-readback", false, format!("Windows could not read the finished video back: {e}"))),
     }
 
     // 5. How hard the computer worked.
@@ -404,12 +487,171 @@ pub fn run_video_test_with(
     all_ok
 }
 
+/// After a recording was killed in the middle, find out what survived. Reports each finding as a
+/// check; returns whether all were fine. `recorded_ms` is how long the recording ran before the kill.
+pub fn run_crash_report(
+    video: &dyn VideoPlatform,
+    path: &Path,
+    recorded_ms: u64,
+    report: &mut dyn FnMut(Check),
+) -> bool {
+    /// The most recording a crash may cost, for this test to call it fine. (The requirement allows 10 seconds.)
+    const MAX_LOSS_MS: u64 = 3000;
+
+    let mut all_ok = true;
+    let mut say = |c: Check| {
+        all_ok &= c.ok;
+        report(c);
+    };
+    let seconds = |ms: u64| ms as f64 / 1000.0;
+
+    match fs::metadata(path) {
+        Ok(m) if m.len() > 0 => {}
+        Ok(_) => {
+            say(check(
+                "crash-file",
+                false,
+                "The video file exists but is empty: nothing had been saved when the program was killed.",
+            ));
+            return false;
+        }
+        Err(e) => {
+            say(check(
+                "crash-file",
+                false,
+                format!("The video file does not exist after the kill, so nothing was saved: {e}"),
+            ));
+            return false;
+        }
+    }
+
+    let scan = match scan_file(path) {
+        Ok(s) => s,
+        Err(e) => {
+            say(check("crash-scan", false, format!("The file could not be examined: {e}")));
+            return false;
+        }
+    };
+    let ending = if scan.unsafe_tail() == 0 {
+        "ends cleanly between two fragments".to_string()
+    } else {
+        format!("ends inside an unfinished piece ({} bytes of it)", scan.unsafe_tail())
+    };
+    if scan.safe_len == 0 {
+        say(check(
+            "crash-scan",
+            false,
+            format!(
+                "The file is {:.1} megabytes but has no usable start, so it cannot be recovered.",
+                scan.file_len as f64 / 1e6
+            ),
+        ));
+        return false;
+    }
+    say(check(
+        "crash-scan",
+        true,
+        format!(
+            "The file is {:.1} megabytes, holds {} complete fragments of video, and {ending}.",
+            scan.file_len as f64 / 1e6,
+            scan.fragments
+        ),
+    ));
+
+    // What Windows makes of the file exactly as the crash left it.
+    match video.inspect_video(path) {
+        Ok(info) => say(check(
+            "crash-read-as-is",
+            true,
+            format!(
+                "Without any repair, Windows can read {} pictures ({:.1} seconds) from the file.",
+                info.frames,
+                seconds(info.duration_ms)
+            ),
+        )),
+        Err(e) => say(check(
+            "crash-read-as-is",
+            false,
+            format!("Without any repair, Windows cannot read the file: {e} (Repair is tried next.)"),
+        )),
+    }
+
+    // Cut off the unfinished last piece, then read again.
+    match repair_file(path) {
+        Ok(r) if r.before != r.after => say(check(
+            "crash-repair",
+            true,
+            format!(
+                "Cut the file back from {} to {} bytes, removing only the unfinished last piece.",
+                r.before, r.after
+            ),
+        )),
+        Ok(_) => say(check("crash-repair", true, "The file already ended cleanly, so nothing needed cutting off.")),
+        Err(e) => {
+            say(check("crash-repair", false, format!("The file could not be repaired: {e}")));
+            return false;
+        }
+    }
+    let recovered_ms = match video.inspect_video(path) {
+        Ok(info) if info.frames > 0 => {
+            say(check(
+                "crash-read-after-repair",
+                true,
+                format!(
+                    "After repair, Windows reads {} pictures ({:.1} seconds).",
+                    info.frames,
+                    seconds(info.duration_ms)
+                ),
+            ));
+            info.duration_ms
+        }
+        Ok(_) => {
+            say(check("crash-read-after-repair", false, "After repair, the file holds no video pictures."));
+            return false;
+        }
+        Err(e) => {
+            say(check(
+                "crash-read-after-repair",
+                false,
+                format!("Even after repair, Windows cannot read the file: {e}"),
+            ));
+            return false;
+        }
+    };
+
+    let lost = recorded_ms.saturating_sub(recovered_ms);
+    let verdict = format!(
+        "The recording ran about {:.1} seconds before the program was killed. {:.1} seconds were saved, and about {:.1} seconds were lost.",
+        seconds(recorded_ms),
+        seconds(recovered_ms),
+        seconds(lost)
+    );
+    if lost <= MAX_LOSS_MS {
+        say(check(
+            "crash-loss",
+            true,
+            format!("{verdict} That is within the target of {:.0} seconds.", seconds(MAX_LOSS_MS)),
+        ));
+    } else {
+        say(check(
+            "crash-loss",
+            false,
+            format!(
+                "{verdict} That is more than the target of {:.0} seconds (the product allows at most 10).",
+                seconds(MAX_LOSS_MS)
+            ),
+        ));
+    }
+    all_ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{DisplayInfo, FrameSource, WindowsVersion};
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
+    use std::path::Path;
     use std::rc::Rc;
     use std::thread::sleep;
 
@@ -536,6 +778,20 @@ mod tests {
         cores: u32,
         reading: Cell<u32>,
         sink_note: Option<String>,
+        /// How reading a file back behaves.
+        inspect: Inspect,
+    }
+
+    #[derive(Clone)]
+    enum Inspect {
+        /// Count what was written (for a normal test).
+        WhatWasWritten,
+        /// Count one second per complete fragment in the file, and refuse files with an unfinished tail
+        /// unless they are `tolerant` (as a player might).
+        Fragments {
+            tolerant: bool,
+        },
+        Nothing,
     }
 
     impl FakeVideo {
@@ -552,6 +808,7 @@ mod tests {
                 cores: 8,
                 reading: Cell::new(0),
                 sink_note: None,
+                inspect: Inspect::WhatWasWritten,
             }
         }
     }
@@ -563,13 +820,32 @@ mod tests {
         fn h264_encoders(&self) -> Result<Vec<EncoderInfo>, ScreenError> {
             Ok(self.encoders.clone())
         }
-        fn create_sink(&self, path: &Path, _: u32, _: u32, _: u32, _: u32) -> Result<Box<dyn VideoSink>, ScreenError> {
+        fn create_sink(&self, spec: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError> {
             Ok(Box::new(FakeSink {
-                path: path.to_path_buf(),
+                path: spec.path.clone(),
                 written: Rc::clone(&self.written),
                 write_delay: self.write_delay,
                 note: self.sink_note.clone(),
             }))
+        }
+        fn inspect_video(&self, path: &Path) -> Result<VideoInspection, ScreenError> {
+            match &self.inspect {
+                Inspect::WhatWasWritten => {
+                    let frames = self.written.borrow().beats.len() as u64;
+                    Ok(VideoInspection { frames, duration_ms: frames * 1000 / 30 })
+                }
+                Inspect::Fragments { tolerant } => {
+                    let scan = scan_file(path).map_err(|e| ScreenError::Failed(e.to_string()))?;
+                    if scan.unsafe_tail() > 0 && !*tolerant {
+                        return Err(ScreenError::Failed("the file ends in the middle of a piece".into()));
+                    }
+                    Ok(VideoInspection {
+                        frames: scan.fragments as u64 * 30,
+                        duration_ms: scan.fragments as u64 * 1000,
+                    })
+                }
+                Inspect::Nothing => Err(ScreenError::Failed("not a video file".into())),
+            }
         }
         fn process_cpu_time(&self) -> Option<Duration> {
             // The first reading is zero; the second is "busy_cores" worth of the time that has passed in the test.
@@ -584,8 +860,15 @@ mod tests {
 
     fn run(video: &FakeVideo) -> (bool, Vec<Check>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let opts =
-            VideoTestOptions { display: 1, seconds: 1.0, fps: 30, bitrate_kbps: 8000, out_dir: dir.path().join("v") };
+        let opts = VideoTestOptions {
+            display: 1,
+            seconds: 1.0,
+            fps: 30,
+            bitrate_kbps: 8000,
+            out_dir: dir.path().join("v"),
+            fragmented: false,
+            start_marker: None,
+        };
         let mut checks = Vec::new();
         let ok = run_video_test_with(&FakeScreen, video, &opts, &mut |c| checks.push(c));
         (ok, checks, dir)
@@ -601,7 +884,10 @@ mod tests {
         let (ok, checks, dir) = run(&video);
         assert!(ok, "{checks:?}");
         let names: Vec<_> = checks.iter().map(|c| c.check.as_str()).collect();
-        assert_eq!(names, ["media-foundation", "h264-encoder", "video-encode", "cpu-use", "mp4-file"]);
+        assert_eq!(
+            names,
+            ["media-foundation", "h264-encoder", "video-encode", "video-readback", "cpu-use", "mp4-file"]
+        );
 
         let w = video.written.borrow();
         assert!(w.finished, "the file must be completed");
@@ -705,20 +991,194 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let opts =
-            VideoTestOptions { display: 1, seconds: 1.0, fps: 30, bitrate_kbps: 8000, out_dir: dir.path().join("v") };
+        let opts = VideoTestOptions {
+            display: 1,
+            seconds: 1.0,
+            fps: 30,
+            bitrate_kbps: 8000,
+            out_dir: dir.path().join("v"),
+            fragmented: false,
+            start_marker: None,
+        };
         let mut checks = Vec::new();
         let ok = run_video_test_with(&OddScreen, &FakeVideo::good(), &opts, &mut |c| checks.push(c));
         assert!(!ok);
         assert!(find(&checks, "video-encode").message.contains("even width and height"));
     }
 
+    #[test]
+    fn the_start_marker_appears_when_recording_begins_and_not_before_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("started");
+        let opts = VideoTestOptions {
+            display: 1,
+            seconds: 1.0,
+            fps: 30,
+            bitrate_kbps: 8000,
+            out_dir: dir.path().join("v"),
+            fragmented: true,
+            start_marker: Some(marker.clone()),
+        };
+        let mut checks = Vec::new();
+        assert!(run_video_test_with(&FakeScreen, &FakeVideo::good(), &opts, &mut |c| checks.push(c)));
+        assert!(marker.is_file(), "marker made once recording began");
+        assert!(dir.path().join("v/test_fragmented.mp4").is_file(), "the fragmented name is used");
+
+        // With no encoder the test stops before recording, so no marker is made.
+        let marker2 = dir.path().join("never");
+        let mut video = FakeVideo::good();
+        video.encoders.clear();
+        let opts2 = VideoTestOptions { start_marker: Some(marker2.clone()), ..opts };
+        assert!(!run_video_test_with(&FakeScreen, &video, &opts2, &mut |_| {}));
+        assert!(!marker2.exists());
+    }
+
+    #[test]
+    fn trademark_signs_become_words_and_duplicates_are_merged() {
+        assert_eq!(
+            plain_name("Intel\u{00AE} Quick  Sync Video H.264 Encoder MFT"),
+            "Intel(R) Quick Sync Video H.264 Encoder MFT"
+        );
+        assert_eq!(plain_name("Some\u{2122}  Thing"), "Some(TM) Thing");
+        let list = vec![
+            EncoderInfo { name: "NVIDIA H.264 Encoder MFT".into(), hardware: true },
+            EncoderInfo { name: "Intel\u{00AE} Quick Sync Video H.264 Encoder MFT".into(), hardware: true },
+            EncoderInfo { name: "Intel\u{00AE} Quick Sync Video H.264 Encoder MFT".into(), hardware: true },
+            EncoderInfo { name: "H264 Encoder MFT".into(), hardware: false },
+        ];
+        let text = describe_encoders(&list);
+        assert_eq!(
+            text,
+            "NVIDIA H.264 Encoder MFT (uses the graphics card); Intel(R) Quick Sync Video H.264 Encoder MFT (uses the graphics card; 2 found); H264 Encoder MFT (uses the processor)"
+        );
+        assert!(text.is_ascii(), "nothing a console could draw wrongly");
+    }
+
+    #[test]
+    fn a_video_windows_cannot_read_back_is_a_failure_even_if_a_file_exists() {
+        let mut video = FakeVideo::good();
+        video.inspect = Inspect::Nothing;
+        let (ok, checks, _dir) = run(&video);
+        assert!(!ok);
+        assert!(find(&checks, "video-encode").ok);
+        let c = find(&checks, "video-readback");
+        assert!(!c.ok && c.message.contains("could not read the finished video back"));
+    }
+
+    // ---- The crash report ----
+
+    fn boxed(kind: &str, payload_len: usize) -> Vec<u8> {
+        let mut out = ((payload_len + 8) as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind.as_bytes());
+        out.extend(std::iter::repeat_n(0u8, payload_len));
+        out
+    }
+
+    /// A fragmented file with `whole` fragments and then a torn one if `torn_bytes` > 0.
+    fn killed_file(dir: &Path, whole: usize, torn_bytes: usize) -> PathBuf {
+        let mut bytes = boxed("ftyp", 16);
+        bytes.extend(boxed("moov", 200));
+        for _ in 0..whole {
+            bytes.extend(boxed("moof", 60));
+            bytes.extend(boxed("mdat", 4000));
+        }
+        if torn_bytes > 0 {
+            bytes.extend(boxed("moof", 60));
+            bytes.extend_from_slice(&boxed("mdat", 4000)[..torn_bytes]);
+        }
+        let path = dir.join("test_fragmented.mp4");
+        fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn crash(video: &FakeVideo, path: &Path, recorded_ms: u64) -> (bool, Vec<Check>) {
+        let mut checks = Vec::new();
+        let ok = run_crash_report(video, path, recorded_ms, &mut |c| checks.push(c));
+        (ok, checks)
+    }
+
+    #[test]
+    fn a_killed_recording_loses_only_the_unfinished_fragment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = killed_file(dir.path(), 5, 1500);
+        let mut video = FakeVideo::good();
+        video.inspect = Inspect::Fragments { tolerant: true };
+        let (ok, checks) = crash(&video, &path, 6200);
+        assert!(ok, "{checks:?}");
+        let names: Vec<_> = checks.iter().map(|c| c.check.as_str()).collect();
+        assert_eq!(names, ["crash-scan", "crash-read-as-is", "crash-repair", "crash-read-after-repair", "crash-loss"]);
+        assert!(find(&checks, "crash-scan").message.contains("holds 5 complete fragments"));
+        assert!(find(&checks, "crash-scan").message.contains("inside an unfinished piece"));
+        assert!(find(&checks, "crash-repair").message.contains("removing only the unfinished last piece"));
+        assert!(find(&checks, "crash-loss")
+            .message
+            .contains("5.0 seconds were saved, and about 1.2 seconds were lost"));
+        // The file really was cut back.
+        assert_eq!(scan_file(&path).unwrap().unsafe_tail(), 0);
+    }
+
+    #[test]
+    fn a_player_that_refuses_the_torn_file_is_reported_but_repair_still_saves_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = killed_file(dir.path(), 4, 900);
+        let mut video = FakeVideo::good();
+        video.inspect = Inspect::Fragments { tolerant: false };
+        let (ok, checks) = crash(&video, &path, 5000);
+        assert!(!ok, "the as-is read failed, which is reported");
+        assert!(!find(&checks, "crash-read-as-is").ok);
+        assert!(find(&checks, "crash-read-after-repair").ok);
+        assert!(find(&checks, "crash-loss").ok);
+    }
+
+    #[test]
+    fn losing_too_much_is_flagged_with_the_numbers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = killed_file(dir.path(), 2, 0);
+        let mut video = FakeVideo::good();
+        video.inspect = Inspect::Fragments { tolerant: true };
+        let (ok, checks) = crash(&video, &path, 9000);
+        assert!(!ok);
+        let c = find(&checks, "crash-loss");
+        assert!(!c.ok && c.message.contains("2.0 seconds were saved") && c.message.contains("7.0 seconds were lost"));
+    }
+
+    #[test]
+    fn a_missing_or_empty_file_after_the_kill_is_the_first_finding() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ok, checks) = crash(&FakeVideo::good(), &dir.path().join("nope.mp4"), 5000);
+        assert!(!ok);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].message.contains("does not exist"));
+
+        let empty = dir.path().join("empty.mp4");
+        fs::write(&empty, b"").unwrap();
+        let (ok, checks) = crash(&FakeVideo::good(), &empty, 5000);
+        assert!(!ok && checks[0].message.contains("exists but is empty"));
+    }
+
+    #[test]
+    fn a_file_with_no_usable_start_cannot_be_recovered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_fragmented.mp4");
+        fs::write(&path, [9u8; 300]).unwrap();
+        let (ok, checks) = crash(&FakeVideo::good(), &path, 5000);
+        assert!(!ok);
+        assert!(find(&checks, "crash-scan").message.contains("no usable start"));
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn on_other_systems_the_video_test_says_it_needs_windows() {
         let dir = tempfile::tempdir().unwrap();
-        let opts =
-            VideoTestOptions { display: 1, seconds: 1.0, fps: 30, bitrate_kbps: 8000, out_dir: dir.path().join("v") };
+        let opts = VideoTestOptions {
+            display: 1,
+            seconds: 1.0,
+            fps: 30,
+            bitrate_kbps: 8000,
+            out_dir: dir.path().join("v"),
+            fragmented: false,
+            start_marker: None,
+        };
         let mut checks = Vec::new();
         assert!(!run_video_test(&opts, &mut |c| checks.push(c)));
         assert!(checks[0].message.contains("only works on Windows"));

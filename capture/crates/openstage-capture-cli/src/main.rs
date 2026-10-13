@@ -8,6 +8,9 @@
 //! Exit codes: 0 success, 1 something went wrong, 2 not available (an unknown source, or a
 //! command that has not been built yet).
 
+mod checks;
+
+use checks::{emit_check, finish_checks, run_video_crash_test};
 use clap::{Parser, Subcommand};
 use openstage_capture::{
     run_session, EventSink, Input, InputSource, SessionConfig, Source, SyntheticSource, SystemClock,
@@ -102,8 +105,30 @@ enum Cmd {
         /// Video quality in kilobits per second.
         #[arg(long, default_value_t = 8000)]
         bitrate_kbps: u32,
-        /// The folder to save `test.mp4` in (created if needed).
+        /// Write a crash-safe fragmented MP4 (`test_fragmented.mp4`) instead of an ordinary one.
+        #[arg(long)]
+        fragmented: bool,
+        /// Create this file at the moment recording begins (used by `video-crash-test` to time things).
+        #[arg(long, hide = true)]
+        start_marker: Option<PathBuf>,
+        /// The folder to save the video in (created if needed).
         #[arg(long, default_value = "video-test-output")]
+        out: PathBuf,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// Test crash safety: record a crash-safe video, kill the program without warning partway
+    /// through, then repair the file and report how much of the recording survived. Windows only.
+    VideoCrashTest {
+        /// Which display to record (1 is the main display).
+        #[arg(long, default_value_t = 1)]
+        display: u32,
+        /// How long to record before the program is killed.
+        #[arg(long, default_value_t = 8.0)]
+        seconds_before_kill: f64,
+        /// The folder for the video file (created if needed).
+        #[arg(long, default_value = "video-crash-output")]
         out: PathBuf,
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
@@ -237,24 +262,8 @@ fn main() -> ExitCode {
                 hello();
             }
             let opts = ScreenTestOptions { display, seconds, out_dir: out, with_cursor };
-            let all_fine = run_screen_test(&opts, &mut |c| {
-                if plain {
-                    println!("{}: {}", if c.ok { "OK" } else { "PROBLEM" }, c.message);
-                    let _ = io::stdout().flush();
-                } else {
-                    say(Event::Check { check: c.check, ok: c.ok, message: c.message });
-                }
-            });
-            if plain {
-                println!("{}", if all_fine { "All checks passed." } else { "At least one check found a problem." });
-            }
-            if all_fine {
-                ExitCode::SUCCESS
-            } else if cfg!(windows) {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::from(2)
-            }
+            let all_fine = run_screen_test(&opts, &mut |c| emit_check(plain, c));
+            finish_checks(plain, all_fine)
         }
         Cmd::Record {
             project,
@@ -343,29 +352,20 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Cmd::VideoTest { display, seconds, fps, bitrate_kbps, out, plain } => {
+        Cmd::VideoTest { display, seconds, fps, bitrate_kbps, fragmented, start_marker, out, plain } => {
             if !plain {
                 hello();
             }
-            let opts = VideoTestOptions { display, seconds, fps, bitrate_kbps, out_dir: out };
-            let all_fine = run_video_test(&opts, &mut |c| {
-                if plain {
-                    println!("{}: {}", if c.ok { "OK" } else { "PROBLEM" }, c.message);
-                    let _ = io::stdout().flush();
-                } else {
-                    say(Event::Check { check: c.check, ok: c.ok, message: c.message });
-                }
-            });
-            if plain {
-                println!("{}", if all_fine { "All checks passed." } else { "At least one check found a problem." });
+            let opts = VideoTestOptions { display, seconds, fps, bitrate_kbps, out_dir: out, fragmented, start_marker };
+            let all_fine = run_video_test(&opts, &mut |c| emit_check(plain, c));
+            finish_checks(plain, all_fine)
+        }
+        Cmd::VideoCrashTest { display, seconds_before_kill, out, plain } => {
+            if !plain {
+                hello();
             }
-            if all_fine {
-                ExitCode::SUCCESS
-            } else if cfg!(windows) {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::from(2)
-            }
+            let all_fine = run_video_crash_test(display, seconds_before_kill, &out, &mut |c| emit_check(plain, c));
+            finish_checks(plain, all_fine)
         }
         Cmd::Render { .. } => {
             hello();

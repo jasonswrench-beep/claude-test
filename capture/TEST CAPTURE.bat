@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul
 title OpenStage Capture - test
 cd /d "%~dp0"
 

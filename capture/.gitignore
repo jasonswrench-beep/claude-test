@@ -18,3 +18,5 @@ long-test-log.txt
 long-test-output/
 recorder-crash-log.txt
 recorder-crash-output/
+switch-test-log.txt
+switch-test-output/

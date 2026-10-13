@@ -12,6 +12,7 @@ This repository holds the design documents and the early code for the Capture mo
 | [docs/prd.md](docs/prd.md) | The requirements: user stories with "done when" checklists and accessibility checks |
 | [docs/roadmap.md](docs/roadmap.md) | The build order, phase by phase, with checks for each phase |
 | [docs/openstage-requests.md](docs/openstage-requests.md) | Everything Capture needs OpenStage Author to add or change, and why |
+| [docs/openstage-session-handoff.md](docs/openstage-session-handoff.md) | Step-by-step tasks for the OpenStage session: the rules, roadmap and notice edits (OS-1 to OS-3) and the real-LMS and screen reader testing (OS-16, OS-17) |
 | [docs/capture-protocol-spec.md](docs/capture-protocol-spec.md) | How OpenStage and the recording program talk to each other |
 | [docs/capture-project-format.md](docs/capture-project-format.md) | What is stored in a capture project folder, and how a crashed recording is recovered |
 

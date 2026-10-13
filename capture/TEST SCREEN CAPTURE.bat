@@ -83,6 +83,12 @@ echo.
 echo The program could not be built. The last lines of the log follow.
 echo Please send me the file screen-test-log.txt from this folder.
 echo.
+echo.
+echo HINT: if the error says something was not found, or that a variant is
+echo missing, this folder is probably a MIX of old and new files. That can
+echo happen when a new ZIP is extracted over an old folder and some files
+echo are skipped. Fix: extract the ZIP into a NEW, empty folder and run the
+echo script from there.
 powershell -NoProfile -Command "Get-Content -LiteralPath 'screen-test-log.txt' -Tail 30"
 
 :done

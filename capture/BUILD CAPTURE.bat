@@ -64,6 +64,12 @@ echo Nothing on your computer was changed outside this folder.
 echo Please send me the file build-log.txt from this folder, or copy the
 echo last lines shown below. Those lines usually say what went wrong.
 echo.
+echo.
+echo HINT: if the error says something was not found, or that a variant is
+echo missing, this folder is probably a MIX of old and new files. That can
+echo happen when a new ZIP is extracted over an old folder and some files
+echo are skipped. Fix: extract the ZIP into a NEW, empty folder and run the
+echo script from there.
 powershell -NoProfile -Command "Get-Content -LiteralPath 'build-log.txt' -Tail 25"
 
 :done

@@ -32,6 +32,8 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 2. Double-click **`TEST CAPTURE.bat`**. It runs every test, then makes a short test recording, and says PASS or FAIL.
 3. Double-click **`TEST SCREEN CAPTURE.bat`**. It watches your main screen for 8 seconds (keep a window moving), saves two still pictures of it, opens one, and says PASS or lists what went wrong. The pictures show your screen, so they stay on your computer and you do not need to send them.
 
+**Tip when updating:** extract each new ZIP into a **new, empty folder** rather than over an old one. Extracting over an old folder can skip some files and leave a mix of old and new code, which shows up as a build error that says something was "not found" or a "variant" is missing. (The old folder's build files are not needed; the first build in the new folder just takes a few minutes.)
+
 If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, or `screen-test-log.txt`, saved in this folder).
 
 ## How the pieces fit

@@ -12,12 +12,13 @@
 //! steady frame rate (see [`Pacer`]).
 
 use crate::audio::{AudioPlatform, CHANNELS, SAMPLE_RATE};
+use crate::region::{CroppedSource, Region};
 use crate::report::{LookStats, RecordingReport, SlowMoment};
 use crate::sound::{Sound, SoundPlan, SoundTake, MIXED_BITRATE_KBPS};
 use crate::video::{AudioSpec, Pacer};
 use crate::{Frame, FrameSource, Platform, SinkSpec, VideoPlatform, VideoSink};
 use openstage_capture::{MediaFactory, SessionConfig, SessionError, TakeMedia};
-use openstage_capture_project::MediaFile;
+use openstage_capture_project::{MediaFile, RegionInfo};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
@@ -41,6 +42,8 @@ pub struct ScreenMedia {
     display: u32,
     fps: u32,
     bitrate_kbps: u32,
+    /// Record only this part of the display, if set.
+    region: Option<Region>,
     sound: Option<Sound>,
     /// What the most recent take did, filled in when it finishes.
     report: Rc<RefCell<Option<RecordingReport>>>,
@@ -64,6 +67,7 @@ impl ScreenMedia {
             display,
             fps: fps.max(1),
             bitrate_kbps,
+            region: None,
             sound: None,
             report: Rc::new(RefCell::new(None)),
             prepared: RefCell::new(None),
@@ -74,6 +78,13 @@ impl ScreenMedia {
     /// Where the numbers about the most recent take appear once it has finished.
     pub fn report_handle(&self) -> Rc<RefCell<Option<RecordingReport>>> {
         Rc::clone(&self.report)
+    }
+
+    /// Record only this part of the display instead of all of it. The region is checked against the
+    /// display when the countdown starts, and an odd width or height is made one pixel smaller.
+    pub fn with_region(mut self, region: Region) -> Self {
+        self.region = Some(region);
+        self
     }
 
     /// Record sound too: the microphone and/or the computer's own sound, as already chosen in `plan`.
@@ -102,6 +113,13 @@ impl MediaFactory for ScreenMedia {
             kind: "screen".into(),
             container: "fragmented-mp4".into(),
             mix: self.sound.as_ref().map(|s| s.plan().mix_info()),
+            region: self.region.map(|r| RegionInfo {
+                display: self.display,
+                x: r.x,
+                y: r.y,
+                width: r.width - r.width % 2,
+                height: r.height - r.height % 2,
+            }),
         }];
         if let Some(sound) = &self.sound {
             files.extend(sound.plan().media_files());
@@ -210,10 +228,18 @@ impl ScreenMedia {
         let display = displays.iter().find(|d| d.number == self.display).ok_or_else(|| {
             media_error(format!("There is no Display {}. Choose a number from 1 to {}.", self.display, displays.len()))
         })?;
+        // A region is checked against the display before anything is started.
+        let region = match self.region {
+            Some(r) => Some(r.fit(display.width, display.height).map_err(media_error)?.0),
+            None => None,
+        };
         let mut source = self
             .screen
             .start_display_capture(display, false)
             .map_err(|e| media_error(format!("Could not start capturing {}: {e}", display.describe())))?;
+        if let Some(region) = region {
+            source = Box::new(CroppedSource::new(source, region));
+        }
         let capture_started = started.elapsed();
         let first = source.next_frame(Duration::from_secs(3)).ok_or_else(|| {
             media_error(
@@ -534,6 +560,8 @@ mod tests {
         width: u32,
         height: u32,
         gives_picture: bool,
+        /// Make every pixel say where it is (blue is the column, green the row), instead of all the same.
+        positional: bool,
         /// How many times a capture of the screen was started.
         captures: Rc<std::cell::Cell<u32>>,
     }
@@ -564,7 +592,13 @@ mod tests {
                 t_ms: 0,
                 captured_100ns: None,
                 arrived_100ns: None,
-                bgra: vec![9; self.width as usize * self.height as usize * 4],
+                bgra: if self.positional {
+                    (0..self.height)
+                        .flat_map(|r| (0..self.width).flat_map(move |c| [c as u8, r as u8, 7, 255]))
+                        .collect()
+                } else {
+                    vec![9; self.width as usize * self.height as usize * 4]
+                },
             });
             Ok(Box::new(StillSource { picture }))
         }
@@ -580,6 +614,9 @@ mod tests {
         /// Whether the file was asked to have a sound track, and what was written to it: (start, frames).
         sound_track: bool,
         sound: Vec<(i64, usize)>,
+        /// The size the file was made for, and the size and first pixel of every picture written to it.
+        size: (u32, u32),
+        pictures: Vec<(u32, u32, [u8; 4])>,
     }
 
     #[derive(Default)]
@@ -587,8 +624,14 @@ mod tests {
 
     struct FakeSink(Rc<RefCell<File>>);
     impl VideoSink for FakeSink {
-        fn write(&mut self, _: &Frame, pts: i64, dur: i64) -> Result<(), ScreenError> {
-            self.0.borrow_mut().beats.push((pts, dur));
+        fn write(&mut self, frame: &Frame, pts: i64, dur: i64) -> Result<(), ScreenError> {
+            let mut file = self.0.borrow_mut();
+            file.beats.push((pts, dur));
+            file.pictures.push((
+                frame.width,
+                frame.height,
+                [frame.bgra[0], frame.bgra[1], frame.bgra[2], frame.bgra[3]],
+            ));
             Ok(())
         }
         fn write_audio(&mut self, samples: &[i16], pts: i64) -> Result<(), ScreenError> {
@@ -618,6 +661,7 @@ mod tests {
                 fragmented: spec.fragmented,
                 path: spec.path.clone(),
                 sound_track: spec.audio.is_some(),
+                size: (spec.width, spec.height),
                 ..File::default()
             }));
             self.files.borrow_mut().push(Rc::clone(&file));
@@ -646,7 +690,13 @@ mod tests {
     }
 
     fn good_screen() -> FakeScreen {
-        FakeScreen { width: 8, height: 4, gives_picture: true, captures: Rc::new(std::cell::Cell::new(0)) }
+        FakeScreen {
+            width: 8,
+            height: 4,
+            gives_picture: true,
+            positional: false,
+            captures: Rc::new(std::cell::Cell::new(0)),
+        }
     }
 
     fn config(dir: &tempfile::TempDir) -> SessionConfig {
@@ -656,6 +706,86 @@ mod tests {
     }
 
     // ---- tests ----
+
+    // ---- a region of the display ----
+
+    fn wide_screen() -> FakeScreen {
+        FakeScreen { width: 200, height: 100, positional: true, ..good_screen() }
+    }
+
+    #[test]
+    fn a_region_records_only_that_part_of_the_display_and_says_so_in_take_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(1000);
+        let (media, files) = factory(wide_screen());
+        let media = media.with_region(Region { x: 30, y: 20, width: 64, height: 64 });
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new())
+            .unwrap();
+        assert!(out.ok);
+
+        let files = files.0.borrow();
+        let f = files[0].borrow();
+        assert_eq!(f.size, (64, 64), "the video is the size of the region");
+        assert!(!f.pictures.is_empty());
+        assert!(
+            f.pictures.iter().all(|p| *p == (64, 64, [30, 20, 7, 255])),
+            "every picture starts at the region's corner of the display"
+        );
+
+        let region = read_take(&cfg.project, 1).unwrap().media[0].region.expect("the region is written down");
+        assert_eq!(region, RegionInfo { display: 1, x: 30, y: 20, width: 64, height: 64 });
+    }
+
+    #[test]
+    fn a_region_with_an_odd_size_is_recorded_one_pixel_smaller_and_written_down_as_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(500);
+        let (media, files) = factory(wide_screen());
+        let media = media.with_region(Region { x: 0, y: 0, width: 65, height: 67 });
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(files.0.borrow()[0].borrow().size, (64, 66));
+        let region = read_take(&cfg.project, 1).unwrap().media[0].region.unwrap();
+        assert_eq!((region.width, region.height), (64, 66), "the file says what the video really shows");
+    }
+
+    #[test]
+    fn a_region_past_the_edge_ends_the_session_with_a_plain_message_and_makes_no_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let (media, files) = factory(wide_screen());
+        let media = media.with_region(Region { x: 150, y: 0, width: 100, height: 64 });
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        assert!(!out.ok);
+        let message = sink
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::Error { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .expect("an error event");
+        assert!(
+            message.contains("reaches past the edge of the display") && message.contains("200 by 100"),
+            "{message}"
+        );
+        assert!(files.0.borrow().is_empty(), "no video file was made");
+    }
+
+    #[test]
+    fn without_a_region_the_whole_display_is_recorded_and_no_region_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(500);
+        let (media, files) = factory(wide_screen());
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(files.0.borrow()[0].borrow().size, (200, 100));
+        assert_eq!(read_take(&cfg.project, 1).unwrap().media[0].region, None);
+        let text = std::fs::read_to_string(take_dir(&cfg.project, 1).join("take.json")).unwrap();
+        assert!(!text.contains("region"), "{text}");
+    }
 
     #[test]
     fn a_screen_take_is_one_fragmented_mp4_listed_in_take_json() {

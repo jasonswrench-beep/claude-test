@@ -17,6 +17,7 @@ mod cue_player;
 mod echo;
 mod queue;
 mod record;
+mod region;
 mod report;
 mod sound;
 mod stats;
@@ -48,6 +49,7 @@ pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, Ech
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use queue::FrameQueue;
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
+pub use region::{crop, CroppedSource, Region, MIN_SIDE as REGION_MIN_SIDE};
 pub use report::{summarize, OutputMove, RecordingReport, TrackReport};
 pub use sound::{
     check_sound_files, output_may_have_changed, plan_sound, Sound, SoundFileReport, SoundPlan, MAX_GAIN_DB, MIC_FILE,
@@ -56,9 +58,9 @@ pub use sound::{
 pub use stats::{FrameStats, FrameSummary};
 pub use timing::{now_100ns, run_timing_test, run_timing_test_with, Spread, TimingTestOptions, MAX_OFFSET_MS};
 pub use video::{
-    compare_audio_readback, compare_readback, plain_name, run_crash_report, run_video_test, run_video_test_with,
-    system_video_platform, AudioInspection, AudioSpec, EncoderInfo, Pacer, SinkSpec, VideoInspection, VideoPlatform,
-    VideoSink, VideoTestOptions, CPU_TARGET_PERCENT,
+    compare_audio_readback, compare_readback, compare_size_readback, plain_name, run_crash_report, run_video_test,
+    run_video_test_with, system_video_platform, AudioInspection, AudioSpec, EncoderInfo, Pacer, SinkSpec,
+    VideoInspection, VideoPlatform, VideoSink, VideoTestOptions, CPU_TARGET_PERCENT,
 };
 
 use std::fs;

@@ -119,7 +119,12 @@ impl VideoPlatform for WindowsVideo {
             }
         }
         let audio = unsafe { inspect_sound(&reader) }?;
-        Ok(VideoInspection { frames, duration_ms: (end_100ns.max(0) / 10_000) as u64, audio })
+        // The pictures' size is packed into one number: the width in the top half, the height in the bottom half.
+        let size = unsafe { reader.GetCurrentMediaType(stream) }
+            .ok()
+            .and_then(|t| unsafe { t.GetUINT64(&MF_MT_FRAME_SIZE) }.ok())
+            .map(|packed| ((packed >> 32) as u32, (packed & 0xFFFF_FFFF) as u32));
+        Ok(VideoInspection { frames, duration_ms: (end_100ns.max(0) / 10_000) as u64, audio, size })
     }
 
     fn process_cpu_time(&self) -> Option<Duration> {

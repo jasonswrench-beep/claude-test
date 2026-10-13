@@ -36,6 +36,24 @@ pub struct MediaFile {
     /// file holds no mixed sound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mix: Option<MixInfo>,
+    /// For the video file: which part of the display it shows, when that is less than the whole
+    /// display. Absent when the whole display was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<RegionInfo>,
+}
+
+/// The part of a display that a video shows. Pixels are measured from the display's top left
+/// corner, so the editor can map anything recorded in display coordinates (the cursor, a click) onto
+/// the video by subtracting `x` and `y`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionInfo {
+    /// The display's number (1 is the main display), as in `sources`.
+    pub display: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// How the sound inside a video file was mixed. The separate sound files are never changed: these
@@ -259,6 +277,7 @@ mod tests {
             kind: "screen".into(),
             container: "fragmented-mp4".into(),
             mix: None,
+            region: None,
         }];
         let take = create_take_with(dir.path(), 2, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
         assert_eq!(take.media, media);
@@ -276,8 +295,15 @@ mod tests {
                 kind: "screen".into(),
                 container: "fragmented-mp4".into(),
                 mix: Some(MixInfo { microphone_gain_db: 3, system_gain_db: -12 }),
+                region: None,
             },
-            MediaFile { file: "mic.wav".into(), kind: "microphone".into(), container: "wav".into(), mix: None },
+            MediaFile {
+                file: "mic.wav".into(),
+                kind: "microphone".into(),
+                container: "wav".into(),
+                mix: None,
+                region: None,
+            },
         ];
         create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
         let text = std::fs::read_to_string(take_dir(dir.path(), 1).join("take.json")).unwrap();
@@ -303,5 +329,42 @@ mod tests {
         assert_eq!(takes.len(), 2);
         assert!(takes[0].take.is_some());
         assert!(takes[1].take.is_none());
+    }
+
+    #[test]
+    fn which_part_of_the_display_a_video_shows_is_written_down_and_old_files_without_it_still_read() {
+        let dir = tempfile::tempdir().unwrap();
+        create_project(dir.path(), "t", "en-US").unwrap();
+        let media = vec![MediaFile {
+            file: "screen.mp4".into(),
+            kind: "screen".into(),
+            container: "fragmented-mp4".into(),
+            mix: None,
+            region: Some(RegionInfo { display: 2, x: 100, y: 200, width: 1280, height: 720 }),
+        }];
+        create_take_with(dir.path(), 1, vec!["screen:2".into()], None, 2000, media.clone()).unwrap();
+        let text = std::fs::read_to_string(take_dir(dir.path(), 1).join("take.json")).unwrap();
+        assert!(
+            text.contains("\"region\"") && text.contains("\"display\": 2") && text.contains("\"width\": 1280"),
+            "{text}"
+        );
+        assert_eq!(read_take(dir.path(), 1).unwrap().media, media);
+
+        // A video of the whole display says nothing about a region, and files from before regions read as before.
+        let whole = vec![MediaFile {
+            file: "screen.mp4".into(),
+            kind: "screen".into(),
+            container: "fragmented-mp4".into(),
+            mix: None,
+            region: None,
+        }];
+        create_take_with(dir.path(), 2, vec!["screen:1".into()], None, 2000, whole).unwrap();
+        let text = std::fs::read_to_string(take_dir(dir.path(), 2).join("take.json")).unwrap();
+        assert!(!text.contains("region"), "{text}");
+        let old = r#"{"id":2,"state":"complete","startedAt":"2026-10-13T12:00:00Z","endedAt":null,"setAsideAt":null,
+            "sources":["screen:1"],"target":null,"flushMs":2000,"durationMs":1000,"maxLossMs":null,"segments":1,
+            "media":[{"file":"screen.mp4","kind":"screen","container":"fragmented-mp4","mix":{"microphoneGainDb":0,"systemGainDb":0}}]}"#;
+        std::fs::write(take_dir(dir.path(), 2).join("take.json"), old).unwrap();
+        assert_eq!(read_take(dir.path(), 2).unwrap().media[0].region, None);
     }
 }

@@ -225,6 +225,7 @@ mod tests {
             frames,
             duration_ms: ms,
             audio: audio_ms.map(|duration_ms| AudioInspection { samples: duration_ms / 21, duration_ms }),
+            size: None,
         }))
     }
 
@@ -270,6 +271,7 @@ mod tests {
             kind: "screen".into(),
             container: "fragmented-mp4".into(),
             mix: None,
+            region: None,
         }];
         media.extend(plan().media_files());
         media

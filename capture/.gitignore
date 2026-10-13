@@ -12,3 +12,4 @@ record-test-log.txt
 record-test-output/
 audio-test-log.txt
 audio-test-output/
+find-output-log.txt

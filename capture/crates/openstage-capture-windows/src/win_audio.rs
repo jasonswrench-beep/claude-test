@@ -17,7 +17,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use windows::core::{HSTRING, PWSTR};
-use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Devices::FunctionDiscovery::{
+    PKEY_DeviceInterface_FriendlyName, PKEY_Device_DeviceDesc, PKEY_Device_FriendlyName,
+};
+use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
@@ -26,6 +29,7 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 
 /// How big Windows' own buffer is, in units of 100 nanoseconds (100 milliseconds).
 const BUFFER_100NS: i64 = 1_000_000;
@@ -156,15 +160,43 @@ fn describe(kind: Kind, what: &str, e: &windows::core::Error) -> String {
     format!("{what} (Windows error code 0x{code:08X}: {}).{advice}", e.message().trim())
 }
 
-fn friendly_name(device: &IMMDevice) -> Option<String> {
+fn code_text(e: &windows::core::Error) -> String {
+    format!("0x{:08X}", e.code().0 as u32)
+}
+
+/// One text property of a device, or why it could not be read.
+fn text_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Result<String, String> {
     unsafe {
-        let store = device.OpenPropertyStore(STGM_READ).ok()?;
-        let value = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
-        let text: PWSTR = PropVariantToStringAlloc(&value).ok()?;
-        let name = text.to_string().ok();
+        let value = store.GetValue(key).map_err(|e| format!("the value could not be read ({})", code_text(&e)))?;
+        let text: PWSTR =
+            PropVariantToStringAlloc(&value).map_err(|e| format!("it is not text ({})", code_text(&e)))?;
+        // Lossy, so odd characters in a name can never make it unreadable.
+        let name = String::from_utf16_lossy(text.as_wide()).trim().to_string();
         CoTaskMemFree(Some(text.0 as *const _));
-        name
+        if name.is_empty() {
+            Err("it is empty".to_string())
+        } else {
+            Ok(name)
+        }
     }
+}
+
+/// What Windows calls a device. Tries the name, then the description, then the hardware's own name.
+fn device_name(device: &IMMDevice) -> Result<String, String> {
+    let store = unsafe { device.OpenPropertyStore(STGM_READ) }
+        .map_err(|e| format!("Windows would not open its details ({})", code_text(&e)))?;
+    let mut reasons = Vec::new();
+    for (what, key) in [
+        ("name", &PKEY_Device_FriendlyName),
+        ("description", &PKEY_Device_DeviceDesc),
+        ("hardware name", &PKEY_DeviceInterface_FriendlyName),
+    ] {
+        match text_property(&store, key) {
+            Ok(name) => return Ok(name),
+            Err(why) => reasons.push(format!("{what}: {why}")),
+        }
+    }
+    Err(reasons.join("; "))
 }
 
 fn device_id(device: &IMMDevice) -> Option<String> {
@@ -193,9 +225,11 @@ unsafe fn list(kind: Kind) -> Result<Vec<AudioDevice>, String> {
     for i in 0..count {
         let Ok(device) = collection.Item(i) else { continue };
         let Some(id) = device_id(&device) else { continue };
-        let name = friendly_name(&device)
-            .map(|n| crate::plain_name(&n))
-            .unwrap_or_else(|| format!("{} {}", kind.label(), i + 1));
+        // A device whose name cannot be read is still listed, with the reason, so it can still be chosen by number.
+        let name = match device_name(&device) {
+            Ok(n) => crate::plain_name(&n),
+            Err(why) => format!("{} {} (its name could not be read: {why})", kind.label(), i + 1),
+        };
         devices.push(AudioDevice {
             kind: kind.device_kind(),
             number: i + 1,
@@ -230,9 +264,8 @@ unsafe fn open(kind: Kind, chosen: Option<AudioDevice>) -> Result<Opened, String
             .GetDefaultAudioEndpoint(flow, eConsole)
             .map_err(|e| describe(kind, &format!("Windows has no default {} to listen to", kind.label()), &e))?,
     };
-    let name = friendly_name(&device)
-        .map(|n| crate::plain_name(&n))
-        .unwrap_or_else(|| format!("the default {}", kind.label()));
+    let name =
+        device_name(&device).map(|n| crate::plain_name(&n)).unwrap_or_else(|_| format!("the chosen {}", kind.label()));
     let client: IAudioClient =
         device.Activate(CLSCTX_ALL, None).map_err(|e| describe(kind, &format!("Could not open {name}"), &e))?;
 

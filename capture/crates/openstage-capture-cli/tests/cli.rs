@@ -484,3 +484,15 @@ fn audio_devices_says_it_needs_windows_and_exits_with_2() {
         "{text}"
     );
 }
+
+#[cfg(not(windows))]
+#[test]
+fn find_output_says_it_needs_windows_and_exits_with_2() {
+    let out = Command::new(BIN).args(["find-output", "--plain", "--seconds", "1"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.starts_with("PROBLEM: Could not list the sound devices: Screen capture only works on Windows."),
+        "{text}"
+    );
+}

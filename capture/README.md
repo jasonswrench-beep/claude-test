@@ -18,7 +18,7 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 | Sound levels with plain-language text | Captions, audio description, step-by-step output |
 | License and rule checks | Encoding the pictures into video (the next slice) |
 
-**What "tested" means here.** The 174 automated tests pass on Linux (a Windows computer runs 176, because two tests only exist on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 109 tests added since then (the take-number fix, the screen capture, video, and crash checks) have passed on Linux and have not yet been run on Windows. On Windows, the fake test source and the real screen capture test (`screen-test`) have been run. Making video, recording sound, and recording a real screen into a project have not, so none of that is claimed to work.
+**What "tested" means here.** The 180 automated tests pass on Linux (a Windows computer runs 182, because two tests only exist on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 115 tests added since then (the take-number fix, the screen capture, video, and crash checks) have passed on Linux and have not yet been run on Windows. On Windows, the fake test source and the real screen capture test (`screen-test`) have been run. Making video, recording sound, and recording a real screen into a project have not, so none of that is claimed to work.
 
 ## Phase 2 has started: screen capture
 
@@ -32,7 +32,7 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 
 **The real recorder has passed on the owner's computer** with a scripted session on a real screen (countdown, markers, a 2 second pause that left no gap, stop), producing `takes/take-001/screen.mp4` that Windows read back at exactly the recording's length. It starts about 1.3 seconds after the countdown ends, which will be fixed. `TEST RECORD SCREEN.bat` runs it.
 
-**Sound: the microphone works** on the owner's computer (its clock agreed with the computer's to 13 milliseconds over 8 seconds). The computer's own sound output started but heard only silence in the first run, so it needs another try with the right output chosen. `TEST AUDIO CAPTURE.bat` lists the microphones and sound outputs, asks which to use, listens for 8 seconds, and saves what it heard.
+**Sound: the microphone works** on the owner's computer, with the right one chosen from a list of 8 (its clock agreed with the computer's to 13 and then 56 milliseconds over 8 seconds). The computer's own sound has not been heard yet: two runs listened to the default speakers and got silence. That computer has 11 sound outputs, so the sound probably plays through a different one. `FIND SOUND OUTPUT.bat` listens to all of them at once and says which one carries sound; `TEST AUDIO CAPTURE.bat` lists the microphones and sound outputs, asks which to use, listens for 8 seconds, and saves what it heard.
 
 ## What to do on Windows (no typing needed)
 
@@ -42,11 +42,12 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 4. Double-click **`TEST VIDEO CAPTURE.bat`**. It records an 8 second MP4 video of your main screen (no sound yet), opens it, and says PASS or lists what went wrong. The video shows your screen, so it stays on your computer and you do not need to send it.
 5. Double-click **`TEST VIDEO CRASH.bat`**. It records your screen, stops the program without warning (only its own recording process), then repairs the video and tells you how many seconds survived.
 6. Double-click **`TEST RECORD SCREEN.bat`**. It runs the real recorder through a scripted session (countdown, marker, pause, resume, marker, stop) on your main screen, opens the video it made, and says PASS or lists what went wrong. No sound yet. The video shows your screen, so it stays on your computer.
-7. Double-click **`TEST AUDIO CAPTURE.bat`**. It lists your microphones and sound outputs and asks which to use (press Enter for the defaults), then listens to your microphone and to the sound your computer is playing for 8 seconds (play something, and say a sentence), saves what it heard as sound files, plays them, and says PASS or lists what went wrong. The files contain your voice, so they stay on your computer.
+7. Double-click **`FIND SOUND OUTPUT.bat`** while something is playing (a video or some music). It listens to every sound output at the same time for 6 seconds and says which output carries the sound and its number. Nothing is saved.
+8. Double-click **`TEST AUDIO CAPTURE.bat`**. It lists your microphones and sound outputs and asks which to use (press Enter for the defaults), then listens to your microphone and to the sound your computer is playing for 8 seconds (play something, and say a sentence), saves what it heard as sound files, plays them, and says PASS or lists what went wrong. When it asks which sound output to use, give the number `FIND SOUND OUTPUT.bat` named. The files contain your voice, so they stay on your computer.
 
 **Tip when updating:** extract each new ZIP into a **new, empty folder** rather than over an old one. Extracting over an old folder can skip some files and leave a mix of old and new code, which shows up as a build error that says something was "not found" or a "variant" is missing. (The old folder's build files are not needed; the first build in the new folder just takes a few minutes.)
 
-If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, `screen-test-log.txt`, `video-test-log.txt`, `video-crash-log.txt`, `record-test-log.txt`, or `audio-test-log.txt`, saved in this folder).
+If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, `screen-test-log.txt`, `video-test-log.txt`, `video-crash-log.txt`, `record-test-log.txt`, `find-output-log.txt`, or `audio-test-log.txt`, saved in this folder).
 
 ## How the pieces fit
 
@@ -80,6 +81,7 @@ openstage-capture video-test                  try making an MP4 of the screen (W
 openstage-capture video-info --file <video>   say how long a saved video is (Windows only)
 openstage-capture audio-devices               list the microphones and sound outputs (Windows only)
 openstage-capture audio-test                  listen to the microphone and the computer's sound (Windows only)
+openstage-capture find-output                 find which sound output is carrying sound (Windows only)
 openstage-capture video-crash-test            record, stop the program without warning, check what survived (Windows only)
 openstage-capture render ...                  not built yet (Phase 3)
 ```

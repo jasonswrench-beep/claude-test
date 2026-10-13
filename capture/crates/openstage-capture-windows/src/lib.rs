@@ -19,6 +19,7 @@ mod queue;
 mod record;
 mod region;
 mod report;
+mod setup;
 mod sound;
 mod stats;
 mod timing;
@@ -29,6 +30,8 @@ mod win;
 mod win_audio;
 #[cfg(windows)]
 mod win_cues;
+#[cfg(windows)]
+mod win_setup;
 #[cfg(windows)]
 mod win_video;
 
@@ -51,6 +54,7 @@ pub use queue::FrameQueue;
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
 pub use region::{crop, CroppedSource, Region, MIN_SIDE as REGION_MIN_SIDE};
 pub use report::{summarize, OutputMove, RecordingReport, TrackReport};
+pub use setup::{run_setup_check, run_setup_check_with, system_facts, Access, SetupOptions, SystemFacts};
 pub use sound::{
     check_sound_files, output_may_have_changed, plan_sound, Sound, SoundFileReport, SoundPlan, MAX_GAIN_DB, MIC_FILE,
     MIN_GAIN_DB, MIXED_BITRATE_KBPS, SYSTEM_FILE,

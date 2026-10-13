@@ -597,3 +597,14 @@ fn the_cue_test_saves_each_sound_as_a_file_and_says_it_cannot_play_them_here() {
         assert!(out_dir.join(format!("cue-{name}.wav")).is_file(), "{name}");
     }
 }
+
+#[cfg(not(windows))]
+#[test]
+fn the_setup_check_says_it_needs_windows_and_exits_with_2() {
+    let out = Command::new(BIN).args(["setup-check", "--plain"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Windows would not say which version this is"), "{text}");
+    assert!(text.contains("The free space on the drive that holds"), "{text}");
+    assert_eq!(text.lines().last(), Some("At least one check found a problem."));
+}

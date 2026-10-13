@@ -23,10 +23,10 @@ use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolEr
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
     compare_size_readback, describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_cue_test,
-    run_find_output, run_screen_test, run_timing_test, run_video_test, summarize, system_audio_platform,
-    system_cue_player, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check, CueTestOptions,
-    DeviceKind, FindOutputOptions, Mix, Region, ScreenMedia, ScreenTestOptions, SoundPlan, TimingTestOptions,
-    VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
+    run_find_output, run_screen_test, run_setup_check, run_timing_test, run_video_test, summarize,
+    system_audio_platform, system_cue_player, system_platform, system_video_platform, AudioChoice, AudioTestOptions,
+    Check, CueTestOptions, DeviceKind, FindOutputOptions, Mix, Region, ScreenMedia, ScreenTestOptions, SetupOptions,
+    SoundPlan, TimingTestOptions, VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -127,6 +127,17 @@ enum Cmd {
         /// start of the session, countdown included). For demos and tests.
         #[arg(long)]
         demo_script: Option<String>,
+    },
+    /// Check whether this computer is ready to record: the Windows version, screen capture, the video
+    /// and sound parts MP4 needs, the microphone and its permission, and free disk space. Looks only;
+    /// records nothing and asks for nothing. Windows only.
+    SetupCheck {
+        /// Where recordings will be kept; the free space of its drive is reported.
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
     },
     /// Play the recorder's own sounds one by one, saying in words what each is for, so you can hear
     /// whether they are clear and comfortable. Plays on Windows; saves each as a WAV file everywhere.
@@ -818,6 +829,13 @@ fn main() -> ExitCode {
                 output: AudioChoice::parse(&output),
             };
             let all_fine = run_timing_test(&opts, &mut |c| emit_check(plain, c));
+            finish_checks(plain, all_fine)
+        }
+        Cmd::SetupCheck { dir, plain } => {
+            if !plain {
+                hello();
+            }
+            let all_fine = run_setup_check(&SetupOptions { dir }, &mut |c| emit_check(plain, c));
             finish_checks(plain, all_fine)
         }
         Cmd::CueTest { volume, out, plain } => {

@@ -16,10 +16,11 @@ use windows::Win32::Media::MediaFoundation::{
     eAVEncH264VProfile_High, IMFActivate, IMFAttributes, IMFMediaType, IMFSinkWriter, MFCreateAttributes,
     MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Video, MFStartup,
     MFTEnumEx, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive,
-    MFSTARTUP_FULL, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
-    MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE,
-    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO,
-    MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_DISABLE_THROTTLING, MF_VERSION,
+    MFSTARTUP_FULL, MFT_CATEGORY_AUDIO_ENCODER, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_HARDWARE,
+    MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE,
+    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+    MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_SINK_WRITER_DISABLE_THROTTLING, MF_VERSION,
 };
 use windows::Win32::Media::MediaFoundation::{
     IMFSourceReader, MFAudioFormat_AAC, MFAudioFormat_PCM, MFCreateSourceReaderFromURL, MFMediaType_Audio,
@@ -63,6 +64,12 @@ impl VideoPlatform for WindowsVideo {
         let mut found = enumerate(true)?;
         found.extend(enumerate(false)?);
         Ok(found)
+    }
+
+    fn aac_encoder_available(&self) -> Result<bool, ScreenError> {
+        crate::win::prepare();
+        let wanted = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Audio, guidSubtype: MFAudioFormat_AAC };
+        Ok(!enumerate_mfts(MFT_CATEGORY_AUDIO_ENCODER, &wanted, MFT_ENUM_FLAG_SYNCMFT, false, "sound")?.is_empty())
     }
 
     fn create_sink(&self, spec: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError> {
@@ -153,18 +160,22 @@ impl VideoPlatform for WindowsVideo {
 fn enumerate(hardware: bool) -> Result<Vec<EncoderInfo>, ScreenError> {
     let wanted = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_H264 };
     let flags = if hardware { MFT_ENUM_FLAG_HARDWARE } else { MFT_ENUM_FLAG_SYNCMFT };
+    enumerate_mfts(MFT_CATEGORY_VIDEO_ENCODER, &wanted, flags, hardware, "video")
+}
+
+/// List Media Foundation's transforms of one category that produce the wanted kind of output.
+fn enumerate_mfts(
+    category: GUID,
+    wanted: &MFT_REGISTER_TYPE_INFO,
+    flags: MFT_ENUM_FLAG,
+    hardware: bool,
+    what: &str,
+) -> Result<Vec<EncoderInfo>, ScreenError> {
     let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
     let mut count: u32 = 0;
     unsafe {
-        MFTEnumEx(
-            MFT_CATEGORY_VIDEO_ENCODER,
-            flags | MFT_ENUM_FLAG_SORTANDFILTER,
-            None,
-            Some(&wanted),
-            &mut list,
-            &mut count,
-        )
-        .map_err(|e| failed("Windows would not list its video encoders", e))?;
+        MFTEnumEx(category, flags | MFT_ENUM_FLAG_SORTANDFILTER, None, Some(wanted), &mut list, &mut count)
+            .map_err(|e| failed(&format!("Windows would not list its {what} encoders"), e))?;
     }
     let mut out = Vec::new();
     if !list.is_null() {

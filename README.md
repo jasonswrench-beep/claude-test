@@ -12,6 +12,8 @@ This repository holds the design documents and the early code for the Capture mo
 | [docs/prd.md](docs/prd.md) | The requirements: user stories with "done when" checklists and accessibility checks |
 | [docs/roadmap.md](docs/roadmap.md) | The build order, phase by phase, with checks for each phase |
 | [docs/openstage-requests.md](docs/openstage-requests.md) | Everything Capture needs OpenStage Author to add or change, and why |
+| [docs/capture-protocol-spec.md](docs/capture-protocol-spec.md) | How OpenStage and the recording program talk to each other |
+| [docs/capture-project-format.md](docs/capture-project-format.md) | What is stored in a capture project folder, and how a crashed recording is recovered |
 
 ## The code
 

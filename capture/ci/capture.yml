@@ -1,0 +1,51 @@
+# Automatic checks for OpenStage Capture.
+#
+# To turn this on, copy this file to  .github/workflows/capture.yml  in the repository.
+# (It lives here, not there, so that adding it is a deliberate step.)
+#
+# On every change it builds and tests on BOTH Linux and Windows, checks the code style,
+# and runs the rule checker (license allowlist, no bundled FFmpeg, no GPL build flags).
+
+name: capture
+
+on:
+  push:
+    paths: ["capture/**", "docs/**", ".github/workflows/capture.yml"]
+  pull_request:
+    paths: ["capture/**", "docs/**", ".github/workflows/capture.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: capture
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+
+      - name: Rules (licenses, FFmpeg guard, headers, writing style)
+        run: python -I tools/check_rules.py
+
+      - name: Code style
+        run: cargo fmt --all -- --check
+
+      - name: Lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace

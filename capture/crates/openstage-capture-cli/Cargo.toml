@@ -1,0 +1,22 @@
+[package]
+name = "openstage-capture-cli"
+description = "The openstage-capture program: record, probe, recover, and (later) render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "openstage-capture"
+path = "src/main.rs"
+
+[dependencies]
+openstage-capture = { path = "../openstage-capture" }
+openstage-capture-project = { path = "../openstage-capture-project" }
+openstage-capture-protocol = { path = "../openstage-capture-protocol" }
+clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true

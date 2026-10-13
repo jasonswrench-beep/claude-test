@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** v0.10, checked against the OpenStage Author repository; ready to become a requirements document (PRD), with open items in section 12
+**Status:** v0.11, checked against the OpenStage Author repository; ready to become a requirements document (PRD), with open items in section 12
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage Author** ("OpenStage" for short), a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface) at [github.com/jasonswrench-beep/openstage-author](https://github.com/jasonswrench-beep/openstage-author). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -29,9 +29,10 @@
 | Publishing | **One publisher only: OpenStage's.** Any capture path hands assets to it; OpenStage Capture never ships its own exporter. Release 1 targets **SCORM 1.2 only**. Today the publisher produces a folder of plain web files and a SCORM 1.2 zip; SCORM 2004 and xAPI are on OpenStage's roadmap as later *(confirmed)* |
 | Narration | Text-first. Audio generation is **download on first use, never bundled** in the installer. Nothing breaks if it is never downloaded |
 | Speech | Local only, permissive licenses only |
-| Accessibility bar | WCAG 2.2 AA for output; ATAG 2.0 Part A for the editor (this brief proposes adding Part B). **No conformance report yet; publish an accessibility statement.** Known exception: reflow (1.4.10) in OpenStage's player, see 6.2 |
+| Accessibility bar | WCAG 2.2 AA for output; ATAG 2.0 Part A for the editor (this brief proposes adding Part B). **No conformance report yet; publish an accessibility statement.** Reflow (1.4.10) in OpenStage's player is a known gap today and **will be fixed before Release 1 ships** (owner decision), see 6.2 |
 | Name | **OpenStage Capture** (confirmed by owner; crate prefix `openstage-capture`). Replaces the working title "OpenScreen" |
 | Release plan | **One big first release (Release 1)** with everything major; section 8 says what is in and out |
+| Prerequisite | **Responsive output in OpenStage's player is fixed first** (owner: "ideally, fix responsive output first"). Release 1 does not ship until it is done. It is OpenStage Author work, outside this module (section 8) |
 | Video output | **MP4** (H.264 video, AAC audio) using Windows's built-in encoders. WebM is not in Release 1. A legal check on patents is still advised before shipping |
 | Narration helper tools (GPL) | **Option 1, for now:** they stay separate and the user installs them; OpenStage never includes or hosts them |
 | Code from other projects | **None** copied from the existing OpenScreen project (owner: cleaner). Rules for any future outside code stay in section 7 |
@@ -111,7 +112,7 @@ Three ideas drive the design:
 
 Accessibility has two halves, and [ATAG 2.0](https://www.w3.org/TR/ATAG/) (W3C Authoring Tool Accessibility Guidelines) names both: **Part A** covers making the authoring tool itself accessible, and **Part B** covers making it support and promote accessible content. ATAG 2.0 references WCAG 2.0, so apply it with **WCAG 2.2 AA** as the success-criteria baseline.
 
-**Targets:** WCAG 2.2 AA for the editing UI and all generated output (**with one known exception today: reflow, 1.4.10, in OpenStage's player; see 6.2**); ATAG 2.0 Part A (OpenStage's existing bar) **plus Part B** for this module, because a recorder authors content. **An accessibility statement now; an Accessibility Conformance Report (ACR/VPAT-style) only after real screen-reader testing exists.**
+**Targets:** WCAG 2.2 AA for the editing UI and all generated output (**reflow, 1.4.10, in OpenStage's player is a known gap today and is to be fixed before Release 1 ships; see 6.2**); ATAG 2.0 Part A (OpenStage's existing bar) **plus Part B** for this module, because a recorder authors content. **An accessibility statement now; an Accessibility Conformance Report (ACR/VPAT-style) only after real screen-reader testing exists.**
 
 ### 6.1 The tool must be accessible (ATAG Part A)
 
@@ -139,7 +140,7 @@ The recorder and editor are OpenStage HTML, so they inherit OpenStage's accessib
 - **Motion and flashing safeguards.** Zooms, click effects, and transitions must not exceed three flashes per second (WCAG 2.3.1); respect reduced motion in the player.
 - **Contrast and legibility checks** for callouts, captions, cursor highlights, and annotations (WCAG 1.4.3 / 1.4.11).
 - **Use OpenStage's course player and publisher; never build a second one.** Practice and Assessment modes use keyboard-operable hotspots and text-entry checks. **No click-only interactions.** Time limits adjustable or removable (WCAG 2.2.1). Correct language, headings, landmarks, and reading order.
-  - **Known gap, owned by OpenStage:** the player scales the whole stage down to fit narrow windows (and never above 100%), but it cannot reflow. On a phone the stage is a shrunken picture of a desktop slide, with tiny text and no re-wrapping at large text sizes or high zoom. That fails WCAG 2.2 AA 1.4.10 (Reflow). OpenStage's own specification lists it as a known limit, and "responsive output" is on its roadmap as later work *(confirmed)*. Recordings placed in a course inherit the gap, and the accessibility statement must list it plainly. WCAG excepts parts of content that need a two-dimensional layout to be usable or meaningful, and some explainers list video and presentations as examples, but whether that covers OpenStage's stage is a judgment for an accessibility specialist; until then treat it as a gap, as OpenStage already does. See open item 5 in section 12.
+  - **Known gap, owned by OpenStage, to be fixed first:** the player scales the whole stage down to fit narrow windows (and never above 100%), but it cannot reflow. On a phone the stage is a shrunken picture of a desktop slide, with tiny text and no re-wrapping at large text sizes or high zoom. That fails WCAG 2.2 AA 1.4.10 (Reflow). OpenStage's own specification lists it as a known limit, and "responsive output" is on its roadmap as later work *(confirmed)*. **Decided (owner): fix it first.** Release 1 does not ship until responsive output exists (see Prerequisites in section 8). Until then, the accessibility statement lists the gap plainly, and recordings placed in a course inherit it. WCAG excepts parts of content that need a two-dimensional layout to be usable or meaningful, and some explainers list video and presentations as examples, but whether that covers OpenStage's stage is a judgment for an accessibility specialist; the owner chose to fix the gap rather than rely on the exception.
 - **Optional sign-language video track** as a first-class track type.
 - **Accessibility checker.** A pre-export report that lists missing captions, missing alt text, contrast failures, flashing risk, and unlabeled hotspots, with jump-to-fix. Warnings are prominent and defaults favor accessibility, but the author is not blocked from exporting.
 
@@ -220,6 +221,19 @@ The owner would rather have everything major ready to ship at once, so this brie
 
 **The trade-off, stated plainly:** a bigger first release takes longer to reach anyone, and the timeline, the interactive step-by-step content, and the captioning all have to reach the same accessibility standard before it ships. To manage that, the work is **built in a suggested order** (below) even though it **ships as one release**.
 
+### Prerequisites outside this module
+
+Release 1 does not ship until these OpenStage Author items are done. They are OpenStage work, not Capture work, and their schedule is OpenStage's to set.
+
+1. **Responsive output in the published player** *(owner decision: fix first)*. Today the stage is a fixed size scaled to fit the window; text cannot re-wrap at narrow widths or large text sizes, which fails WCAG 2.2 AA 1.4.10 (Reflow). The roadmap lists "Responsive output" under Later and the format spec calls it "the open responsive-output decision", so it must move up the roadmap. It will touch the format (a schema version bump with a migration), the shared renderer, and the editor's stage. This is the largest prerequisite and a real design question for a freeform canvas. One possible starting point, for OpenStage to weigh: every object already has a required reading order (`tabOrder`), which might drive a stacked layout at narrow widths. That is a design question for OpenStage, not decided here.
+2. **SCORM 1.2 verified in a real LMS** (Brightspace and Moodle, then Canvas). This is already open on OpenStage's own roadmap and release gate.
+3. **The streaming launch path** in OpenStage's Rust shell (section 9.1). Built as part of this project and agreed with the owner first.
+4. **A baseline screen-reader pass** on the editor patterns Capture reuses (6.3).
+
+Not prerequisites: timing that follows a video (a roadmap request only, open item 8), and macOS, Linux, JAWS, or VoiceOver work.
+
+**Checkpoint.** Responsive output could turn out to be much larger than expected. If it does, the owner can revisit the decision and ship Release 1 with the gap stated plainly in the accessibility statement. That would be the owner's call, made with the facts at that point.
+
 ### Release 1 includes
 
 **Recording**
@@ -265,6 +279,8 @@ The owner would rather have everything major ready to ship at once, so this brie
 4. **Timeline:** the visual multi-track timeline over that model.
 5. **Learning features:** step segmentation, zoom and callouts, practice modes; captions, speech-to-text, audio description; accessibility checker.
 6. **Publishing and hardening:** SCORM 1.2 in a real LMS; full manual screen-reader pass; accessibility statement.
+
+Responsive output (prerequisite 1) can proceed in parallel with steps 1 to 5, but Release 1 cannot ship before it is finished.
 
 ### After Release 1 *(not scheduled)*
 
@@ -349,7 +365,8 @@ If a capture folder were ever placed inside a project, the publisher would need 
 - **A published course package contains no raw recordings, keystroke logs, or window logs** unless the author explicitly chose to include them.
 - **A course with a Capture video, saved, closed, reopened, and republished, is byte-identical** (OpenStage's own release gate), because the MP4 is rendered once and stored as an asset.
 - **With the narration weights absent, projects still open, render, and publish; only audio generation is unavailable.**
-- **Zero serious or critical axe findings on generated HTML**, plus a passing manual keyboard and screen-reader review of the player (the reflow gap is a known, documented exception until OpenStage has responsive output).
+- **Zero serious or critical axe findings on generated HTML**, plus a passing manual keyboard and screen-reader review of the player (after responsive output ships).
+- **Published courses, including ones with recordings, pass the reflow check (WCAG 2.2 AA 1.4.10)** at 320 CSS pixels wide and at large text sizes.
 - Capture overhead stays below ~10% CPU on a mid-range laptop at 1080p30.
 - A/V drift under 40 ms over a 60-minute recording.
 - The dependency license check, including the FFmpeg build-configuration guard, passes in CI on every commit.
@@ -372,7 +389,7 @@ If a capture folder were ever placed inside a project, the publisher would need 
 | Cancel kills the process tree mid-recording | Lost or corrupt recordings | Crash-safe segments, append-only events, `recover` command |
 | Global hotkeys collide with screen-reader keys | Authors can't start or stop recording | Configurable hotkeys; test against NVDA, JAWS, Narrator defaults |
 | Live-region announcements may not fire while another app has focus | Screen-reader users don't know recording state | Audio cues from the capture process; verify with real AT |
-| Player fails reflow (1.4.10); responsive output is on OpenStage's roadmap as later work *(confirmed)* | Recordings inherit a WCAG failure, so Release 1 cannot claim full WCAG 2.2 AA for published courses | List it plainly in the accessibility statement; decide whether to pull responsive output forward (open item 5) |
+| Player fails reflow (1.4.10); responsive output is a Release 1 prerequisite *(owner decision)* | Release 1 cannot ship before OpenStage has responsive output, and it may be much larger than expected | Track it on OpenStage's roadmap; keep the checkpoint in section 8 so the owner can revisit the decision; list the gap in the accessibility statement until it is fixed |
 | GPL components in the narration environment | Redistribution obligations if mirrored or bundled | Keep upstream-sourced and user-installed, or replace; decide before any installer (section 7) |
 | Downloaded narration weights tampered with or corrupted | Unverified blob runs inference | SHA-256 verification before load |
 | Managed institutional machines block downloads | Narration unavailable to a core audience | Documented manual placement path; text-first narration keeps everything else working |
@@ -386,7 +403,7 @@ If a capture folder were ever placed inside a project, the publisher would need 
 
 ## 12. Open questions
 
-*Resolved: name (OpenStage Capture); the Camtasia-style timeline is in Release 1; one big first release; Release 1 scope confirmed; no code from the existing OpenScreen project; GPL helper tools: option 1; MP4 output; Windows only; no compliance deadline; no contribution rules; Brightspace and Moodle as real-LMS test targets, with Canvas access on the way; no VPAT yet (accessibility statement instead); and every fact previously listed to confirm in OpenStage's files (below).*
+*Resolved: reflow (fix responsive output first, as a Release 1 prerequisite); Windows only for now; the owner will add the timing-follows-video request to OpenStage's roadmap; name (OpenStage Capture); the Camtasia-style timeline is in Release 1; one big first release; Release 1 scope confirmed; no code from the existing OpenScreen project; GPL helper tools: option 1; MP4 output; no compliance deadline; no contribution rules; Brightspace and Moodle as real-LMS test targets, with Canvas access on the way; no VPAT yet (accessibility statement instead); and every fact previously listed to confirm in OpenStage's files (below).*
 
 ### Confirmed from the OpenStage Author repository
 
@@ -411,17 +428,14 @@ Read by the author of this brief from `jasonswrench-beep/openstage-author` (read
 2. **Pick a speech-recognition tool.** This is research, not a decision for you. It would plug in through OpenStage's planned "captions from media" contract, and "Whisper for imported media" is already on OpenStage's roadmap, so start with that candidate (believed to be MIT-licensed; to be verified in the audit). Candidates are checked for license and quality; the fallback rule in section 8 applies if none passes.
 3. **Legal check on MP4 patents** before anything ships. H.264 and AAC involve patent licensing; Windows's built-in encoder handles this on the platform side, but get it confirmed.
 4. **Trademark and search check on the names** ("OpenStage" and "OpenStage Capture") before they go public (section 13).
-5. **The reflow gap in OpenStage's player: ship with it, or pull the fix forward?** "Reflow" means text and layout re-wrapping to fit a narrow screen or a large text size, instead of just shrinking the whole slide into a smaller picture. OpenStage's player shrinks the slide to fit but can't re-wrap, so on a phone or at high zoom the text is tiny. That fails one WCAG rule (1.4.10), and "responsive output" is on OpenStage's roadmap as later work.
-   - **Option A (recommended): ship Release 1 with the gap, stated plainly** in the accessibility statement. *Good:* nothing waits, the statement is honest, and because the gap affects every OpenStage course (not just recordings) it can be fixed on its own schedule. *Not so good:* Release 1 cannot claim full WCAG 2.2 AA for published courses.
-   - **Option B: make responsive output a requirement for Release 1.** *Good:* a stronger accessibility claim. *Not so good:* it is a large piece of OpenStage work outside this module, and it delays Release 1.
-   - Either way the statement says so; the choice is about timing. If the accessibility claim matters more to you than the date, B is a legitimate choice.
+5. ~~The reflow gap in OpenStage's player: ship with it, or pull the fix forward?~~ **Decided (owner):** fix responsive output first. It is now a Release 1 prerequisite (section 8), with a checkpoint if it proves much larger than expected. Moving "Responsive output" from Later into OpenStage's active roadmap is an OpenStage edit for you or your OpenStage session.
 6. ~~A real LMS to test with.~~ **Done:** the owner has access to Brightspace and Moodle, so OpenStage's SCORM 1.2 output and Release 1 can be tested in both. Use a test or sandbox course, not a live course with real learners.
 7. **Where this module departs from OpenStage Author's own rules.** CLAUDE.md says three things this brief does not currently follow. They are your rules, so it is your call:
-   - **"Not a video editor."** The Camtasia-style timeline is video-editor territory. *Recommendation:* keep OpenStage Author "not a general video editor," and allow a **recording editor** limited to recordings made with OpenStage Capture (screen, audio, webcam, captions, callouts, zoom). It does not import arbitrary video into a multi-track workflow. That keeps the accessibility workload bounded and keeps the rule honest.
-   - **"Cross-platform from the start: Windows, macOS and Linux all matter."** Release 1 of this module is Windows only. *Recommendation:* record Windows first as an explicit exception for the capture module, since each platform needs its own capture code.
-   - **"TypeScript throughout."** The capture program is Rust, because screen capture needs native Windows code. *Recommendation:* record it as an explicit exception; the repository already uses Rust (the shell) and Python (the tools).
+   - ~~Cross-platform from the start.~~ **Resolved (owner):** Windows only for now. *Recommendation:* record "Windows first" as an explicit exception for the capture module in CLAUDE.md, since each platform needs its own capture code.
+   - **"Not a video editor."** *Still needs your answer.* The Camtasia-style timeline is video-editor territory. *Recommendation:* keep OpenStage Author "not a general video editor," and allow a **recording editor** limited to recordings made with OpenStage Capture (screen, audio, webcam, captions, callouts, zoom). It does not import arbitrary video into a multi-track workflow. That keeps the accessibility workload bounded and keeps the rule honest.
+   - **"TypeScript throughout."** *Still needs your answer.* The capture program is Rust, because screen capture needs native Windows code. *Recommendation:* record it as an explicit exception; the repository already uses Rust (the shell) and Python (the tools).
    - Each is a one-line edit to CLAUDE.md in the OpenStage repository, which only you or your OpenStage session should make (this session has read-only access). Suggested wording: *"Not a general video editor. The Capture module includes a recording editor for recordings made with OpenStage Capture."* / *"Cross-platform from the start, except the Capture module, which is Windows first."* / *"TypeScript throughout, except the Capture program, which is Rust because screen capture needs native code."*
-8. **Ask for timing that follows a video.** Today OpenStage cannot time an object to a video's clock. If it could, Capture's callouts and step text could be real, accessible OpenStage objects timed to the video instead of being baked into it. *Recommendation:* add it to OpenStage's roadmap as a request, but do not make it a Release 1 requirement, since Capture works without it (effects rendered in, with text equivalents).
+8. ~~Ask for timing that follows a video.~~ **Done:** the owner will add it to OpenStage's roadmap as a request. It is not a Release 1 requirement; Capture works without it (effects rendered in, with text equivalents).
 9. ~~Canvas.~~ **In progress:** the owner is getting access to Canvas. OpenStage's release gate names Moodle, Canvas, and Brightspace, so Canvas joins Brightspace and Moodle as a test target once access arrives. Until then, the accessibility statement and release notes say Canvas was not tested.
 
 ### Revisit when…
@@ -431,6 +445,7 @@ Read by the author of this brief from `jasonswrench-beep/openstage-author` (read
 | A Mac user becomes available | Add macOS capture and VoiceOver testing |
 | A JAWS license becomes available | Add JAWS testing |
 | Canvas access arrives | Add Canvas to the SCORM test pass (OpenStage's release gate names it) |
+| Responsive output proves much larger than expected | The owner revisits the decision (checkpoint in section 8) |
 | The tool is adopted by a department, campus, or system, or takes grant or institutional funding | Expect requests for an accessibility conformance report and possibly deadlines; build on the test evidence already collected |
 | Outside contributors want to help | Set contribution rules (section 7) before accepting their code |
 | Anyone wants an installer that includes the narration tools | Revisit the GPL decision (section 7) before it ships |
@@ -451,17 +466,19 @@ Read by the author of this brief from `jasonswrench-beep/openstage-author` (read
 
 1. ~~Confirm the Release 1 list.~~ **Done:** confirmed by the owner (section 8).
 2. **Baseline screen-reader pass** on OpenStage Author's existing editor patterns (NVDA and Narrator), including its Timeline panel, since the multi-track timeline will extend it. It gates the whole approach.
-3. **Settle open item 7** (the three departures from CLAUDE.md) and have the OpenStage session record the exceptions.
-4. **Put the rule checks in place** from the first line of code: license checking and the FFmpeg build-flag guard (section 7).
-5. **Test OpenStage's current SCORM 1.2 output in Brightspace and Moodle** (available now), then in Canvas when access arrives, using test courses rather than live ones. Release 1's must-pass test depends on it, and it has only been checked against a stand-in so far.
-6. **Design the streaming launch path** in OpenStage's Rust shell (section 9.1), agreed with the owner first.
-7. **Write the process protocol** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe segments, `recover`.
-8. **Windows capture spike:** screen + mic + system audio + cursor events + UI Automation element info, written to a capture project folder; then kill the process mid-recording and recover.
-9. **MP4 render spike:** render that project to MP4 through Media Foundation, confirm the license checks pass, and check which Windows editions have the needed media components.
-10. **Audit speech-recognition candidates** (start with Whisper) for license and quality, to decide whether they fit Release 1 or trigger the fallback rule.
-11. **Draft the accessibility statement,** including the reflow gap.
-12. **When the brief moves into the OpenStage repository,** apply that project's writing rules and working style (for example, no em dashes in prose).
-13. **Convert this brief into a PRD** with user stories, each carrying accessibility acceptance criteria.
+3. **Settle the two open parts of item 7** ("Not a video editor"; "TypeScript throughout") and have the OpenStage session record all three exceptions in CLAUDE.md, including Windows first.
+4. **Plan responsive output** in OpenStage Author (prerequisite 1, section 8): move it from Later into the active roadmap and scope it (format change, shared renderer, editor stage), with the checkpoint in mind. The owner and the OpenStage session lead this.
+5. **Add the roadmap request** for timing that follows a video (item 8).
+6. **Put the rule checks in place** from the first line of code: license checking and the FFmpeg build-flag guard (section 7).
+7. **Test OpenStage's current SCORM 1.2 output in Brightspace and Moodle** (available now), then in Canvas when access arrives, using test courses rather than live ones. Release 1's must-pass test depends on it, and it has only been checked against a stand-in so far.
+8. **Design the streaming launch path** in OpenStage's Rust shell (section 9.1), agreed with the owner first.
+9. **Write the process protocol** as a one-page spec: JSON-lines events, stdin control, graceful stop vs. kill, crash-safe segments, `recover`.
+10. **Windows capture spike:** screen + mic + system audio + cursor events + UI Automation element info, written to a capture project folder; then kill the process mid-recording and recover.
+11. **MP4 render spike:** render that project to MP4 through Media Foundation, confirm the license checks pass, and check which Windows editions have the needed media components.
+12. **Audit speech-recognition candidates** (start with Whisper) for license and quality, to decide whether they fit Release 1 or trigger the fallback rule.
+13. **Draft the accessibility statement,** including the reflow gap until it is fixed.
+14. **When the brief moves into the OpenStage repository,** apply that project's writing rules and working style (for example, no em dashes in prose).
+15. **Convert this brief into a PRD** with user stories, each carrying accessibility acceptance criteria.
 
 ## 15. Plain-language glossary
 

@@ -32,6 +32,21 @@ cargo build --release -p openstage-capture-cli > audio-test-log.txt 2>&1
 if errorlevel 1 goto build_failed
 
 echo.
+echo These are the microphones and sound outputs on this computer:
+echo.
+"%~dp0target\release\openstage-capture.exe" audio-devices --plain
+echo.
+echo WHICH MICROPHONE? Type its number from the list above and press Enter,
+echo or just press Enter to use the one marked as the default.
+set "MIC="
+set /p MIC=Microphone number: 
+echo.
+echo WHICH SOUND OUTPUT? This is where the sound you want to record is
+echo playing, for example your speakers or your headphones. Type its number
+echo and press Enter, or just press Enter for the default.
+set "OUT="
+set /p OUT=Sound output number: 
+echo.
 echo WHAT TO DO (before it starts):
 echo   - Start some sound playing on your computer, for example a video,
 echo     a song, or a talking web page. Keep it playing.
@@ -47,7 +62,7 @@ timeout /t 8 /nobreak >nul
 echo Listening now. Say your sentence...
 echo.
 
-"%~dp0target\release\openstage-capture.exe" audio-test --plain --seconds 8 --out "%~dp0audio-test-output" > audio-test-log.txt 2>&1
+"%~dp0target\release\openstage-capture.exe" audio-test --plain --seconds 8 --microphone "%MIC%" --output "%OUT%" --out "%~dp0audio-test-output" > audio-test-log.txt 2>&1
 set RESULT=%errorlevel%
 
 echo ------------------------------------------------------------
@@ -59,7 +74,7 @@ echo.
 if exist "%~dp0audio-test-output\both.wav" (
   echo Playing both.wav now. You should hear YOURSELF and the sound your
   echo computer was playing, mixed together. The folder also holds mic.wav
-  echo (only you) and system.wav (only the computer's sound).
+  echo with only you in it, and system.wav with only the computer's sound.
   start "" "%~dp0audio-test-output\both.wav"
   echo.
 )

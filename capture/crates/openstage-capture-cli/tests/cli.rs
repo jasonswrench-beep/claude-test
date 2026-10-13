@@ -432,9 +432,10 @@ fn audio_test_says_it_needs_windows_and_exits_with_2() {
     assert_eq!(out.status.code(), Some(2));
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(
-        text.starts_with("PROBLEM: Could not listen to the microphone: Screen capture only works on Windows."),
+        text.starts_with("PROBLEM: Could not list the sound devices: Screen capture only works on Windows."),
         "{text}"
     );
+    assert!(text.contains("PROBLEM: Could not listen to the microphone:"), "{text}");
     assert!(text.trim_end().ends_with("At least one check found a problem."));
 }
 
@@ -470,4 +471,16 @@ fn recover_on_a_folder_that_is_not_a_project_fails_politely() {
     let (status, events) = run_once(&["recover", "--project", dir.path().to_str().unwrap()]);
     assert_eq!(status.code(), Some(1));
     assert!(events.iter().any(|e| matches!(e, Event::Error { code, fatal: true, .. } if code == "project")));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn audio_devices_says_it_needs_windows_and_exits_with_2() {
+    let out = Command::new(BIN).args(["audio-devices", "--plain"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.starts_with("PROBLEM: Could not list the sound devices: Screen capture only works on Windows."),
+        "{text}"
+    );
 }

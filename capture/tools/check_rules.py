@@ -174,6 +174,38 @@ def check_style():
         record("PASS", "writing style (no em dashes)")
 
 
+def batch_block_problems(text):
+    """Lines of a Windows batch file that break it: an `echo` inside a ( ... ) block that contains a
+    bracket. In a block, the first `)` ends it, so the rest of the line is run as a command and the
+    whole script stops with a syntax error (and its window closes, which looks like a crash). Returns
+    (line number, line) pairs. Escaping with ^ is allowed."""
+    problems = []
+    depth = 0
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if depth > 0 and line.lower().startswith("echo"):
+            unescaped = re.sub(r"\^[()]", "", line)
+            if "(" in unescaped or ")" in unescaped:
+                problems.append((number, line))
+        # A line ending in ( opens a block; a line starting with ) closes one.
+        if line.endswith("("):
+            depth += 1
+        if line.startswith(")") and depth > 0:
+            depth -= 1
+    return problems
+
+
+def check_batch_files():
+    bad = []
+    for path in sorted(ROOT.glob("*.bat")):
+        for number, line in batch_block_problems(path.read_text(encoding="ascii", errors="replace")):
+            bad.append(f"{path.name} line {number}")
+    if bad:
+        record("FAIL", "batch files (no brackets in echo lines inside blocks)", ", ".join(bad))
+    else:
+        record("PASS", "batch files (no brackets in echo lines inside blocks)")
+
+
 def write_third_party(packages):
     members = {p["name"] for p in packages if p.get("source") is None}
     rows = sorted((p["name"], p["version"], p.get("license") or "unknown") for p in packages if p["name"] not in members)
@@ -198,6 +230,7 @@ def main():
     check_headers()
     check_ffmpeg_flags()
     check_style()
+    check_batch_files()
     if "--write-third-party" in sys.argv and packages:
         write_third_party(packages)
 

@@ -29,6 +29,7 @@ This page describes how OpenStage talks to the recording program, `openstage-cap
 openstage-capture probe
 openstage-capture record --project <folder> [options]
 openstage-capture recover --project <folder>
+openstage-capture audio-devices [--plain]                           (Windows only; lists the microphones and sound outputs)
 openstage-capture audio-test [options]                           (Windows only; listens to the microphone and the computer's sound)
 openstage-capture video-info --file <video>                          (Windows only; says how long a saved video is)
 openstage-capture screen-test [options]                          (Windows only; tries screen capture)
@@ -53,9 +54,15 @@ Listens to the default microphone and to what the computer is playing (the defau
 |---|---|---|
 | `--seconds` | 8 | How long to listen (between 1 and 600). |
 | `--out` | `audio-test-output` | Folder for `mic.wav`, `system.wav`, and `both.wav`. They contain your voice and what the computer played, so they are private. |
+| `--microphone` | `default` | Which microphone: its number from `audio-devices`, part of its name (capital letters do not matter), or `default`. |
+| `--output` | `default` | Which sound output to listen to, chosen the same way. Windows listens to one output at a time. |
 | `--plain` | off | Print sentences for a person instead of JSON events. |
 
-The checks, in order: `microphone-start`, `system-audio-start` (each names the device found, or says why listening could not start, with advice for the usual cause), `microphone` and `system-audio` (the loudest moment in words, or "heard nothing" with advice), `audio-clock` (the microphone's sound card clock compared with the computer's: fine within 250 milliseconds), and `audio-saved`. The saved files hold what a recording would hold: each track as long as the real time, with silence filled in where Windows delivered nothing (it sends nothing for a quiet sound output). Exit codes are as for `screen-test`.
+The checks, in order: `audio-devices` (every microphone and sound output, numbered, with the default marked), `microphone-start`, `system-audio-start` (each names the device found, or says why listening could not start, with advice for the usual cause), `microphone` and `system-audio` (the loudest moment in words, or "heard nothing" with advice), `audio-clock` (the microphone's sound card clock compared with the computer's: fine within 250 milliseconds), and `audio-saved`. The saved files hold what a recording would hold: each track as long as the real time, with silence filled in where Windows delivered nothing (it sends nothing for a quiet sound output). Exit codes are as for `screen-test`.
+
+### `audio-devices`
+
+Lists the microphones and sound outputs the computer has, numbered within their kind in the order Windows lists them, with the default marked, as one `check` named `audio-devices`. The numbers are what `--microphone` and `--output` take. Exit codes are as for `screen-test`. `probe` also lists them, as `microphone:N` and `output:N`, with `available` false until recording sound into a project is built.
 
 ### `video-info`
 

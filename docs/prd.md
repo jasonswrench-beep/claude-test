@@ -1,11 +1,11 @@
 # OpenStage Capture: Requirements (PRD)
 
-**Status:** Draft v0.3, with the owner's answers on the proposed details recorded (section 9), for review
+**Status:** Draft v0.5, with the owner's answers on the proposed details recorded (section 9), for review
 **Source:** the [product brief](product-brief.md) (v0.13). The brief records the reasoning and the decisions. This document turns them into requirements that a person can test.
 **Scope:** Release 1, Windows only
 **License:** Apache-2.0
 
-> **Plain-language guide.** A *user story* says who wants what and why. Under each story, **Done when** is the checklist a tester uses, and **Accessibility checks** are extra tests that are never optional. Details marked **[P]** are *proposals*: sensible starting values that still need your confirmation. Details marked *(confirmed)* have been answered by the owner. Section 9 shows which is which.
+> **Plain-language guide.** A *user story* says who wants what and why. Under each story, **Done when** is the checklist a tester uses, and **Accessibility checks** are extra tests that are never optional. Details marked *(confirmed)* have been answered by the owner or delegated to a recommended default. Section 9 shows which is which.
 
 ## 1. Purpose
 
@@ -78,7 +78,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **Done when**
 - Start, pause and resume, and stop each have a hotkey that works while another program has focus. Pause and resume share one key, which announces the new state.
 - Hotkeys are configurable. The settings screen warns if a choice uses a screen reader's modifier key (Insert or Caps Lock).
-- **Default hotkeys [P]:** Ctrl+Shift+F9 to start, Ctrl+Shift+F10 to pause or resume, Ctrl+Shift+F11 to stop, and Ctrl+Shift+F12 to start again (A10). During the capture spike they are tested against the default keys of NVDA, JAWS, and Narrator, Windows itself, and common programs, and changed if any collide.
+- **Default hotkeys** *(confirmed: the owner delegated the choice)*: Ctrl+Shift+F9 to start, Ctrl+Shift+F10 to pause or resume, Ctrl+Shift+F11 to stop, and Ctrl+Shift+F12 to start again (A10). During the capture spike they are tested against the default keys of NVDA, JAWS, and Narrator, Windows itself, and common programs, and changed if any collide.
 - An optional countdown runs before recording starts: 3 seconds by default, adjustable, and it can be turned off *(confirmed)*.
 - Stop finishes cleanly: every file is finalized and I am told where the recording was saved.
 - The same four actions are also buttons in the recorder panel.
@@ -166,9 +166,9 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **As an** author, **I want** to throw away a recording that went wrong and begin again with one action, **so that** a slip does not cost me a long detour.
 
 **Done when**
-- While recording or paused, one action (a hotkey, default Ctrl+Shift+F12 **[P]**, or a button in the recorder panel) stops this take, sets it aside, and starts a new recording with the same target, sound, camera, and options. The countdown, if on, runs first.
+- While recording or paused, one action (a hotkey, default Ctrl+Shift+F12, or a button in the recorder panel) stops this take, sets it aside, and starts a new recording with the same target, sound, camera, and options. The countdown, if on, runs first.
 - It also works right after I stop: a "Record again" button starts a new take with the same settings, and I choose whether the earlier take is kept or set aside.
-- **Nothing is erased.** A take set aside goes to a "Discarded takes" list inside the capture project, where I can play it or restore it. Only emptying that list deletes anything, and that asks for confirmation. **[P: this is the recommended way to make "start again" safe.]**
+- **Nothing is erased.** A take set aside goes to a "Discarded takes" list inside the capture project, where I can play it or restore it. Only emptying that list deletes anything, and that asks for confirmation. *(confirmed by delegation)*
 - There is no confirmation prompt when starting again. That keeps it fast and means it never pulls focus away from the program being recorded. Nothing is lost, so none is needed.
 - A sound and a text message announce it, for example "Take set aside. Starting again."
 - Discarded takes are never published (B2).
@@ -252,7 +252,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 - The timeline takes part in F6 region cycling, like OpenStage's existing Timeline.
 - The list (C1) and the timeline always make the same changes. Nothing is possible only with the mouse.
 - **The timeline does not ship until its keyboard model is complete and verified with NVDA and Narrator.**
-- A 60-minute recording stays usable **[P: editing actions respond without noticeable delay]**.
+- A 60-minute recording stays usable: editing actions (split, trim, move) finish in under 1 second on a mid-range laptop *(confirmed by delegation; validated in the capture spike and adjusted if unrealistic)*.
 
 **Accessibility checks**
 - Works in forced-colors mode and at larger text sizes. Nothing conveyed by color alone. Reduced motion respected.
@@ -363,7 +363,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **Done when**
 - Captions have their own track, with editable text and timing by fields.
 - WebVTT and SRT files can be imported and exported. Each track has a language.
-- Warnings (never blockers) appear for captions that are hard to read **[P: based on common caption guidance]**: more than 2 lines; more than 42 characters on a line; faster than about 160 words per minute (roughly 20 characters per second); or on screen for less than 1 second. The numbers are adjustable. WCAG sets no numbers for this. These come from published caption guides (DCMP, Netflix, and BBC) as summarized by secondary sources, so the official guides should be checked before the numbers are finalized.
+- Warnings (never blockers) appear for captions that are hard to read *(confirmed by delegation)*: more than 2 lines; more than 42 characters on a line; faster than about 160 words per minute (roughly 20 characters per second); or on screen for less than 1 second. The numbers are adjustable. WCAG sets no numbers for this. These come from published caption guides (DCMP, Netflix, and BBC) as summarized by secondary sources, so the official guides should be checked before the numbers are finalized.
 - A caption I edited by hand is marked, and regenerating never overwrites it without asking.
 
 #### D3. Captions from a recorded voice
@@ -384,7 +384,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Done when**
 - A transcript is generated from the captions, the step text, and overlay text, and stored in the video object's transcript field.
-- It includes text descriptions of important on-screen events that the audio does not say, such as zooms and callouts **[P: drawn from step text and audio description]**.
+- It includes text descriptions of important on-screen events that the audio does not say, such as zooms and callouts *(confirmed by delegation)*.
 - Learners can read it beside the video.
 
 #### D5. Audio description
@@ -448,7 +448,10 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 - Feedback is announced to screen readers.
 - There are no time limits by default. If any exist, they can be adjusted or removed (WCAG 2.2.1).
 
-**Depends on** OpenStage's interaction support. Its roadmap lists hotspot, text-entry, and scenario interactions as not built. Practice may be buildable from existing pieces (hotspot objects, inputs, layers, and the rules editor) or may need new interaction types. **To be confirmed in design.**
+**Depends on** OpenStage's interaction support, which a read of its files *(confirmed, `format-spec.md` and `player/`)* shows is partly there:
+- **What exists today:** a `hotspot` object that learners can activate by mouse or keyboard (named by its alt text, with a required tab order). It can run triggers such as showing a feedback layer, jumping to the next slide, or setting a variable. Layers, variables with conditions (equals, less than, and so on), and a live announcer in the player also exist.
+- **What is missing:** (1) the `hotspot` content is still "not yet defined" in the format; (2) there is **no free-text input**, since the inputs are checkbox, radio, drop-down, list, Likert, and semantic differential, so typing steps need a new text-entry input kind; (3) counting wrong attempts needs checking, because `setVariable` sets a value or true, and whether it can add one is to be confirmed.
+- **So:** click steps can be built from existing pieces. Typing steps need new OpenStage work (section 6, item 7).
 
 #### E4. Assessment mode (test me)
 **As an** instructor, **I want** a scored version, **so that** I can check that learners can do the task.
@@ -458,6 +461,8 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 - Passing and failing attempts both report the correct score through OpenStage's quiz and score system.
 - Course completion and assessment success stay separate states, as OpenStage already requires.
 - Time limits, if any, are adjustable or removable.
+
+**Depends on** a scoring source for steps. Today the score and the results box come only from `quizQuestion` objects (multiple choice) *(confirmed, `player/src/runtime.ts`)*, so scoring a practice step needs new OpenStage work: a way for hotspot and text-entry steps to contribute points to the existing score and SCORM reporting (section 6, item 8).
 
 ### Epic F: Export, checking, and publishing
 
@@ -520,8 +525,8 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Done when**
 - The shell can start the program while keeping its input open and reading its output as it arrives, and can show the state in the page.
-- A recording has its own slot, separate from preview and publish. While a recording is in progress, heavy jobs (publishing, previewing the course, making narration audio, and exporting video) wait until I pause or stop, with a plain message, because they would slow the recording and can cause dropped frames. Everything else, such as editing slides and saving, stays available **[P: the owner left this open; this is the recommended default]**.
-- Stop is graceful first. The abrupt kill is the fallback only after a wait **[P: 10 seconds]**.
+- A recording has its own slot, separate from preview and publish. While a recording is in progress, heavy jobs (publishing, previewing the course, making narration audio, and exporting video) wait until I pause or stop, with a plain message, because they would slow the recording and can cause dropped frames. Everything else, such as editing slides and saving, stays available *(confirmed: the owner delegated this to the recommended default)*.
+- Stop is graceful first. The abrupt kill is the fallback only after a wait of 10 seconds *(confirmed by delegation)*.
 - The window's security policy allows previewing local video without opening it to other sources.
 - This change is agreed with the owner first, as CLAUDE.md requires.
 
@@ -578,7 +583,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 ## 6. Prerequisites and dependencies
 
-Release 1 does not ship until these are done. Items 1, 2, 4, and 6 are OpenStage work outside this module.
+Release 1 does not ship until these are done. Items 1, 2, 4, 6, 7, and 8 are OpenStage work outside this module. Items 6 to 8 were found while writing this document.
 
 | # | Prerequisite | Why |
 |---|---|---|
@@ -588,6 +593,10 @@ Release 1 does not ship until these are done. Items 1, 2, 4, and 6 are OpenStage
 | 4 | **A baseline screen reader pass** on the OpenStage patterns Capture reuses | No real screen reader testing exists yet. |
 | 5 | **CLAUDE.md updated** for the three accepted exceptions (Windows first, mid-level video editor, Rust capture program) | Keeps the project's own rules and the work in agreement. |
 | 6 | **Player support for audio description:** the pop-up, playing the video with the description voiced in time, and pausing for extended description | D5 needs it. The player currently plays video with the browser's own controls. |
+| 7 | **A text-entry input** in OpenStage: a free-text field that saves into a variable and can be used in conditions | E3 typing steps. A format change, so a schema version bump with a migration. |
+| 8 | **Scoring from steps** in OpenStage: hotspot and text-entry steps contributing points to the score, the results box, and SCORM reporting | E4 needs it. Today only multiple-choice quiz questions feed the score. |
+
+**Checkpoint.** Items 1, 6, 7, and 8 are all sizable OpenStage additions. If more than one proves large, the owner can revisit what Release 1 includes (for example, shipping Demo and click-only Practice first). That would be the owner's call, made with the facts at that point.
 
 **Not prerequisites:** timing that follows a video (a roadmap request), and macOS, Linux, JAWS, or VoiceOver work.
 
@@ -609,12 +618,12 @@ macOS and Linux; JAWS and VoiceOver testing; SCORM 2004; xAPI and cmi5; WebM out
 
 ## 9. Details: confirmed and still proposed
 
-The owner answered the fourteen proposed details and asked for one more feature (item 15). This table shows where each stands.
+The owner answered the fourteen proposed details, asked for one more feature (item 15), and then delegated the remaining open details to the recommended defaults. This table shows where each stands.
 
 | # | Detail | Status |
 |---|---|---|
 | 1 | Countdown before recording (A3) | **Confirmed:** 3 seconds, adjustable, or off |
-| 2 | Default hotkeys (A3) | **Confirmed that defaults are needed. Values proposed:** Ctrl+Shift+F9 start, F10 pause or resume, F11 stop, F12 start again; tested for collisions in the capture spike |
+| 2 | Default hotkeys (A3) | **Confirmed (delegated):** Ctrl+Shift+F9 start, F10 pause or resume, F11 stop, F12 start again; collision-tested in the capture spike and changed if needed |
 | 3 | Sounds (A4) | **Confirmed:** short, adjustable volume, on by default, can be turned off |
 | 4 | Notification pop-ups (A7) | **Confirmed:** excluded by default |
 | 5 | Maximum recovery loss (A8) | **Confirmed: 10 seconds** (changed from the proposed 5) |
@@ -622,19 +631,18 @@ The owner answered the fourteen proposed details and asked for one more feature 
 | 7 | Delete leaves a gap or closes it (C2) | **Confirmed:** the author chooses |
 | 8 | What "short" means for outside video clips (C10) | **Confirmed:** 30 seconds or less |
 | 9 | Zoom transition and reduce-motion export (C5) | **Confirmed:** half a second; reduce-motion choice included |
-| 10 | Caption limits (D2) | **Proposed from best-practice research:** at most 2 lines; at most 42 characters a line; about 160 words per minute (roughly 20 characters per second); at least 1 second on screen; warnings only; adjustable. Check the official guides before finalizing |
+| 10 | Caption limits (D2) | **Confirmed (delegated):** at most 2 lines; at most 42 characters a line; about 160 words per minute (roughly 20 characters per second); at least 1 second on screen; warnings only; adjustable. The official guides are checked before the numbers are finalized |
 | 11 | How audio description reaches learners (D5) | **Confirmed:** a pop-up when the learner asks for it, with read, listen, and play-with-description options (needed to meet WCAG 1.2.5 at Level AA) |
-| 12 | What may run during a recording; the stop wait (G2) | **Left open by the owner.** Recommended default: heavy jobs wait until pause or stop; everything else stays available. The 10-second stop wait stands unless changed |
+| 12 | What may run during a recording; the stop wait (G2) | **Confirmed (delegated):** heavy jobs wait until pause or stop; everything else stays available; 10-second stop wait |
 | 13 | Supported Windows versions (A9, section 7) | **Confirmed:** Windows 11 and later |
 | 14 | Speech recognition tool to audit first (D3) | **Confirmed:** Whisper first (license to be verified) |
-| 15 | Start again (A10) | **Requested by the owner:** "start again if the first recording was messed up". **Proposed details:** default hotkey Ctrl+Shift+F12; the old take is set aside in a Discarded takes list, not erased; no confirmation prompt |
+| 15 | Start again (A10) | **Requested by the owner, details confirmed (delegated):** default hotkey Ctrl+Shift+F12; the old take is set aside in a Discarded takes list, not erased; no confirmation prompt |
 
-**Still to settle**
-- The hotkey values, after collision testing (item 2).
-- The caption numbers, after checking the official guides (item 10).
-- The details of Start again, especially the Discarded takes list (item 15).
-- Whether the recommended default for jobs during a recording is right (item 12).
-- The editing performance target for 60-minute recordings (C3).
+**Checks still to run** (these verify the decisions above; they are not open questions)
+- Collision-test the hotkeys in the capture spike (item 2).
+- Check the official DCMP, Netflix, and BBC caption guides against the caption numbers (item 10).
+- Validate the 60-minute editing target on a mid-range laptop (C3).
+- Verify Whisper's license before relying on it (item 14).
 
 ## 10. Traceability to the brief
 

@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** v0.16, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
+**Status:** v0.17, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage Author** ("OpenStage" for short), a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface) at [github.com/jasonswrench-beep/openstage-author](https://github.com/jasonswrench-beep/openstage-author). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -250,10 +250,12 @@ Release 1 does not ship until these OpenStage Author items are done. They are Op
 3. **The streaming launch path** in OpenStage's Rust shell (section 9.1). Built as part of this project and agreed with the owner first.
 4. **A baseline screen-reader pass** on the editor patterns Capture reuses (6.3).
 5. **Player support for audio description** in OpenStage's course player: the pop-up, playing the video with the description voiced in time, and pausing for extended description. Today the player uses the browser's own controls for video.
+6. **A text-entry input** in OpenStage (a free-text field that saves into a variable), for typing steps in Practice mode. OpenStage has no free-text input today *(confirmed)*.
+7. **Scoring from steps** in OpenStage, so Practice and Assessment steps can contribute to the score and SCORM reporting. Today only multiple-choice quiz questions feed the score *(confirmed)*.
 
 Not prerequisites: timing that follows a video (a roadmap request only, open item 8), and macOS, Linux, JAWS, or VoiceOver work.
 
-**Checkpoint.** Responsive output could turn out to be much larger than expected. If it does, the owner can revisit the decision and ship Release 1 with the gap stated plainly in the accessibility statement. That would be the owner's call, made with the facts at that point.
+**Checkpoint.** Responsive output could turn out to be much larger than expected. If it does, the owner can revisit the decision and ship Release 1 with the gap stated plainly in the accessibility statement. That would be the owner's call, made with the facts at that point. The same applies to prerequisites 5 to 7: if more than one proves large, the owner can revisit what Release 1 includes.
 
 ### Release 1 includes
 
@@ -404,6 +406,7 @@ If a capture folder were ever placed inside a project, the publisher would need 
 | **The existing launcher can't run a live recording** *(confirmed)* | No pause/stop control or live state; a recording would block preview and publish | Add a streaming launch path with its own slot and a graceful stop (9.1) |
 | Media from outside the recording brings licensing and accessibility obligations | Unlicensed music or images; uncaptioned video; missing alt text | Draw imports from the course asset library (source, creator, and licence recorded); the validator's rules apply; prompt for missing alt text, captions, or transcripts |
 | Audio description needs new features in OpenStage's course player (pop-up, described playback, pausing for extended description) | More OpenStage work in front of Release 1 | Scope it early alongside responsive output; the owner can revisit the decision if it proves large |
+| Practice and Assessment modes need new OpenStage features (a text-entry input, scoring from steps) *(confirmed)* | More OpenStage format and player work in front of Release 1 | Scope them early with the other prerequisites; the checkpoint in section 8 applies |
 | **One big first release** | A longer wait before anything ships; more to test at once; schedule risk | Build in the suggested order (section 8); freeze the Release 1 list; apply the speech-to-text fallback rule |
 | **OpenStage's SCORM 1.2 has never run in a real LMS** *(confirmed)* | Release 1's headline test could fail for reasons outside this module | Test OpenStage's current output in Brightspace and Moodle first (Canvas when access arrives), before building on it |
 | Raw recordings or interaction logs shipped inside published packages | Learners receive keystrokes, window titles, and raw footage | Exclude by default; explicit opt-in; checked in the acceptance tests (section 10) |

@@ -4,6 +4,8 @@
 **Source:** the [product brief](product-brief.md) (v0.17) and the [requirements document](prd.md) (v0.5), checked against the OpenStage Author repository (commit 23d53e5)
 **Purpose:** OpenStage Capture is a separate program, but a few things can only be changed inside OpenStage Author itself. This file lists every one of them: what is needed, why, where it lives, and how to tell it is done. Nothing here should be built without the owner's agreement, as CLAUDE.md requires for anything beyond the editor's first slice.
 
+> **Step-by-step version of five of these.** OS-1, OS-2, OS-3, OS-16, and OS-17 are written out in full, with exact text to change, in [openstage-session-handoff.md](openstage-session-handoff.md). Give that file to the OpenStage session.
+
 > **How to read this file.** Each request has an ID (OS-1, OS-2, and so on) so conversations can point at it. **Blocks Release 1** means Release 1 cannot ship without it. **Needed** means a Release 1 feature depends on it. **Recommended** means it is a safety improvement. "Size" is a rough guess by the author of this file, who has read the code but has not built any of it. Treat it as a hint, not an estimate.
 
 ## Summary

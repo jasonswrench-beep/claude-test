@@ -53,6 +53,18 @@ echo sound at all, type none.
 set "OUT="
 set /p OUT=Sound output number: 
 echo.
+echo BALANCE, optional. The mixed sound inside the video can make one sound
+echo quieter or louder. Type a number of decibels, for example -10 to make
+echo the computer's sound quieter, or just press Enter to leave it as heard.
+echo About 6 decibels is half the volume. The separate files mic.wav and
+echo system.wav are never changed, so you can always start again from them.
+set "SYSGAIN="
+set /p SYSGAIN=Computer sound change in decibels: 
+if "%SYSGAIN%"=="" set SYSGAIN=0
+set "MICGAIN="
+set /p MICGAIN=Microphone change in decibels: 
+if "%MICGAIN%"=="" set MICGAIN=0
+echo.
 echo WHAT TO DO:
 echo   - Keep something moving on your main screen the whole time, for
 echo     example drag a window around.
@@ -67,7 +79,7 @@ timeout /t 8 /nobreak >nul
 echo.
 
 if exist "%~dp0record-test-output" rmdir /s /q "%~dp0record-test-output"
-"%~dp0target\release\openstage-capture.exe" record --project "%~dp0record-test-output\lesson.capture" --source screen --microphone "%MIC%" --output "%OUT%" --countdown-ms 3000 --plain --demo-script "marker:first marker@5000;pause@7000;resume@9000;marker:after the pause@10000;stop@14000" > record-test-log.txt 2>&1
+"%~dp0target\release\openstage-capture.exe" record --project "%~dp0record-test-output\lesson.capture" --source screen --microphone "%MIC%" --output "%OUT%" --mic-gain-db %MICGAIN% --system-gain-db %SYSGAIN% --countdown-ms 3000 --plain --demo-script "marker:first marker@5000;pause@7000;resume@9000;marker:after the pause@10000;stop@14000" > record-test-log.txt 2>&1
 set RESULT=%errorlevel%
 
 echo ------------------------------------------------------------
@@ -101,8 +113,8 @@ echo   PASS. The recorder made a real recording and Windows can play it.
 echo ------------------------------------------------------------
 echo.
 echo Please tell me it passed, what the video looked like, and what you
-echo heard: your voice, the computer's sound, and whether they stayed
-echo together with the picture all the way through.
+echo heard: your voice, the computer's sound, whether they were well
+echo balanced, and whether they stayed together with the picture.
 goto done
 
 :no_rust

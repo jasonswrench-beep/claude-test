@@ -10,6 +10,7 @@
 //! pictures arrive, how steadily, and that they show the screen.
 
 mod audio;
+mod balance;
 mod bmp;
 mod echo;
 mod queue;
@@ -30,13 +31,18 @@ pub use audio::{
     AudioPlatform, AudioSource, AudioTestOptions, DeviceKind, FindOutputOptions, CHANNELS as AUDIO_CHANNELS,
     SAMPLE_RATE as AUDIO_SAMPLE_RATE,
 };
+pub use balance::{
+    balance_of_samples, check_balance_in_files, describe_balance, judge_balance, typical_level, BalanceFinding,
+    BalanceVerdict,
+};
 pub use bmp::write_bmp;
 pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, EchoFinding, EchoVerdict, Envelope};
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use queue::FrameQueue;
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
 pub use sound::{
-    check_sound_files, plan_sound, Sound, SoundFileReport, SoundPlan, MIC_FILE, MIXED_BITRATE_KBPS, SYSTEM_FILE,
+    check_sound_files, plan_sound, Sound, SoundFileReport, SoundPlan, MAX_GAIN_DB, MIC_FILE, MIN_GAIN_DB,
+    MIXED_BITRATE_KBPS, SYSTEM_FILE,
 };
 pub use stats::{FrameStats, FrameSummary};
 pub use video::{

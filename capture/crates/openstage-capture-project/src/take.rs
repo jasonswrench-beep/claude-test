@@ -32,6 +32,20 @@ pub struct MediaFile {
     /// How it is stored. `fragmented-mp4` is a crash-safe MP4: a setup box and then short,
     /// self-contained fragments, so a file cut off by a crash plays up to the last whole fragment.
     pub container: String,
+    /// For the video file: how its sound was mixed from the separate sound files. Absent when the
+    /// file holds no mixed sound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mix: Option<MixInfo>,
+}
+
+/// How the sound inside a video file was mixed. The separate sound files are never changed: these
+/// adjustments apply only to the mix, so the editor can start again from the untouched originals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MixInfo {
+    /// Louder (positive) or quieter (negative) by this many decibels when mixed. 0 means unchanged.
+    pub microphone_gain_db: i32,
+    pub system_gain_db: i32,
 }
 
 /// `take.json`.
@@ -240,12 +254,43 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
         assert!(read_take(dir.path(), 1).unwrap().media.is_empty());
 
-        let media =
-            vec![MediaFile { file: "screen.mp4".into(), kind: "screen".into(), container: "fragmented-mp4".into() }];
+        let media = vec![MediaFile {
+            file: "screen.mp4".into(),
+            kind: "screen".into(),
+            container: "fragmented-mp4".into(),
+            mix: None,
+        }];
         let take = create_take_with(dir.path(), 2, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
         assert_eq!(take.media, media);
         assert!(!take_dir(dir.path(), 2).join("segments").exists());
         assert_eq!(read_take(dir.path(), 2).unwrap().media, media);
+    }
+
+    #[test]
+    fn how_the_sound_was_mixed_is_written_down_and_old_files_without_it_still_read() {
+        let dir = tempfile::tempdir().unwrap();
+        create_project(dir.path(), "t", "en-US").unwrap();
+        let media = vec![
+            MediaFile {
+                file: "screen.mp4".into(),
+                kind: "screen".into(),
+                container: "fragmented-mp4".into(),
+                mix: Some(MixInfo { microphone_gain_db: 3, system_gain_db: -12 }),
+            },
+            MediaFile { file: "mic.wav".into(), kind: "microphone".into(), container: "wav".into(), mix: None },
+        ];
+        create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
+        let text = std::fs::read_to_string(take_dir(dir.path(), 1).join("take.json")).unwrap();
+        assert!(text.contains("\"microphoneGainDb\": 3") && text.contains("\"systemGainDb\": -12"), "{text}");
+        assert_eq!(text.matches("\"mix\"").count(), 1, "only the file that holds a mix says how it was mixed");
+        assert_eq!(read_take(dir.path(), 1).unwrap().media, media);
+
+        // A take.json from before the mix was written down has no "mix" key at all.
+        let old = r#"{"id":1,"state":"complete","startedAt":"2026-10-13T12:00:00Z","endedAt":null,"setAsideAt":null,
+            "sources":["screen:1"],"target":null,"flushMs":2000,"durationMs":1000,"maxLossMs":null,"segments":1,
+            "media":[{"file":"screen.mp4","kind":"screen","container":"fragmented-mp4"}]}"#;
+        std::fs::write(take_dir(dir.path(), 1).join("take.json"), old).unwrap();
+        assert_eq!(read_take(dir.path(), 1).unwrap().media[0].mix, None);
     }
 
     #[test]

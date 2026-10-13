@@ -502,7 +502,12 @@ pub fn run_audio_test_with(
         let broke = s.source.failure();
         let words = openstage_capture::describe_level(s.peak);
         let loss = if discontinuities > 0 {
-            format!(" Windows reported {discontinuities} moments where some sound was lost.")
+            if discontinuities == 1 {
+                " Windows reported 1 moment where some sound was lost (this often happens once as listening starts)."
+                    .to_string()
+            } else {
+                format!(" Windows reported {discontinuities} moments where some sound was lost.")
+            }
         } else {
             String::new()
         };
@@ -562,6 +567,8 @@ pub fn run_audio_test_with(
         let mic_env = crate::echo::envelope_of(&m.track, SAMPLE_RATE, CHANNELS);
         let system_env = crate::echo::envelope_of(&sy.track, SAMPLE_RATE, CHANNELS);
         say(crate::echo::describe_echo(&crate::echo::detect_echo(&mic_env, &system_env)).check);
+        // ...and how the two compare in loudness, since a voice that is quieter than the computer is hard to follow.
+        say(crate::balance::balance_of_samples(&m.track, &sy.track, SAMPLE_RATE, CHANNELS).check);
     }
 
     // Save what a recording would hold: every track as long as the real time, gaps filled with silence.
@@ -988,9 +995,12 @@ mod tests {
                 "system-audio",
                 "audio-clock",
                 "echo",
+                "balance",
                 "audio-saved"
             ]
         );
+        let balance = find(&checks, "balance");
+        assert!(balance.ok && balance.message.contains("6 decibels louder"), "{}", balance.message);
         let echo = find(&checks, "echo");
         assert!(
             echo.ok && echo.message.contains("Could not tell whether the microphone is hearing"),
@@ -1056,6 +1066,16 @@ mod tests {
         p.lost.set(3);
         let (_ok, checks, _dir) = run(&p);
         assert!(find(&checks, "microphone").message.contains("3 moments where some sound was lost"));
+    }
+
+    #[test]
+    fn a_single_lost_moment_is_said_in_the_singular_and_called_normal() {
+        let p = platform();
+        p.lost.set(1);
+        let (_ok, checks, _dir) = run(&p);
+        let m = &find(&checks, "microphone").message;
+        assert!(m.contains("1 moment where some sound was lost") && !m.contains("1 moments"), "{m}");
+        assert!(m.contains("often happens once as listening starts"), "{m}");
     }
 
     // ---- choosing devices ----

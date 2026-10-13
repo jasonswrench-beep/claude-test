@@ -18,7 +18,7 @@ use crate::audio::{CHANNELS, SAMPLE_RATE};
 use crate::video::VideoSink;
 use crate::{check, Check};
 use openstage_capture::{describe_level, SessionError};
-use openstage_capture_project::{wav_info, MediaFile, WavWriter};
+use openstage_capture_project::{wav_info, MediaFile, MixInfo, WavWriter};
 use std::cell::Cell;
 use std::path::Path;
 
@@ -28,6 +28,10 @@ pub const MIC_FILE: &str = "mic.wav";
 pub const SYSTEM_FILE: &str = "system.wav";
 /// How good the sound inside the video is, in kilobits per second.
 pub const MIXED_BITRATE_KBPS: u32 = 128;
+
+/// The quietest and loudest adjustment allowed when mixing, in decibels.
+pub const MIN_GAIN_DB: i32 = -40;
+pub const MAX_GAIN_DB: i32 = 20;
 
 /// Names used in `level` events.
 const MIC_LEVEL: &str = "mic";
@@ -44,11 +48,35 @@ pub struct SoundPlan {
     pub microphone: Option<AudioDevice>,
     /// The sound output whose sound is to be recorded, or none.
     pub system: Option<AudioDevice>,
+    /// Louder (positive) or quieter (negative) by this many decibels in the mix inside the video. The
+    /// separate sound files are never changed, so the original balance can always be recovered.
+    pub microphone_gain_db: i32,
+    pub system_gain_db: i32,
 }
 
 impl SoundPlan {
     pub fn is_empty(&self) -> bool {
         self.microphone.is_none() && self.system.is_none()
+    }
+
+    /// Set how loud each sound is in the mix inside the video, in whole decibels (negative is quieter,
+    /// 0 leaves it as heard). Every 6 decibels is about half or double the volume.
+    pub fn with_gains(mut self, microphone_db: i32, system_db: i32) -> Result<Self, String> {
+        for (what, db) in [("microphone", microphone_db), ("computer's sound", system_db)] {
+            if !(MIN_GAIN_DB..=MAX_GAIN_DB).contains(&db) {
+                return Err(format!(
+                    "The {what} cannot be changed by {db} decibels in the mix. Use a number from {MIN_GAIN_DB} to {MAX_GAIN_DB}; 0 leaves it as heard."
+                ));
+            }
+        }
+        self.microphone_gain_db = microphone_db;
+        self.system_gain_db = system_db;
+        Ok(self)
+    }
+
+    /// How the mix is made, as written into `take.json`.
+    pub fn mix_info(&self) -> MixInfo {
+        MixInfo { microphone_gain_db: self.microphone_gain_db, system_gain_db: self.system_gain_db }
     }
 
     /// The choice in words, so the author can see before recording what will be heard.
@@ -61,17 +89,40 @@ impl SoundPlan {
             Some(d) => format!("Recording the computer's sound from sound output {}, {}.", d.number, d.name),
             None => "Not recording the computer's sound.".to_string(),
         };
-        format!("{mic} {system}")
+        let mut text = format!("{mic} {system}");
+        let adjusted: Vec<String> =
+            [("your voice", self.microphone_gain_db), ("the computer's sound", self.system_gain_db)]
+                .into_iter()
+                .filter(|(_, db)| *db != 0)
+                .map(|(what, db)| format!("{what} {} decibels {}", db.abs(), if db < 0 { "quieter" } else { "louder" }))
+                .collect();
+        if !adjusted.is_empty() {
+            text.push_str(&format!(
+                " In the mix inside the video, {}. The separate files mic.wav and system.wav are not changed.",
+                adjusted.join(" and ")
+            ));
+        }
+        text
     }
 
     /// The sound files each take will hold.
     pub fn media_files(&self) -> Vec<MediaFile> {
         let mut files = Vec::new();
         if self.microphone.is_some() {
-            files.push(MediaFile { file: MIC_FILE.into(), kind: "microphone".into(), container: "wav".into() });
+            files.push(MediaFile {
+                file: MIC_FILE.into(),
+                kind: "microphone".into(),
+                container: "wav".into(),
+                mix: None,
+            });
         }
         if self.system.is_some() {
-            files.push(MediaFile { file: SYSTEM_FILE.into(), kind: "system-audio".into(), container: "wav".into() });
+            files.push(MediaFile {
+                file: SYSTEM_FILE.into(),
+                kind: "system-audio".into(),
+                container: "wav".into(),
+                mix: None,
+            });
         }
         files
     }
@@ -107,6 +158,8 @@ pub struct Sound {
 /// Sources that are listening, before the take's files exist.
 pub(crate) struct OpenSound {
     tracks: Vec<(Kind, Box<dyn AudioSource>)>,
+    /// How loud each sound is in the mix, in decibels: microphone, then computer's sound.
+    gains_db: (i32, i32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,7 +227,7 @@ impl Sound {
                 )));
             }
         }
-        Ok(OpenSound { tracks })
+        Ok(OpenSound { tracks, gains_db: (self.plan.microphone_gain_db, self.plan.system_gain_db) })
     }
 }
 
@@ -186,9 +239,11 @@ impl OpenSound {
             let path = take_dir.join(kind.file());
             let wav = WavWriter::create(&path, SAMPLE_RATE, CHANNELS)
                 .map_err(|e| media_error(format!("Could not create the sound file {}: {e}", path.display())))?;
+            let db = if kind == Kind::Microphone { self.gains_db.0 } else { self.gains_db.1 };
             tracks.push(Track {
                 kind,
                 source,
+                gain: 10f32.powf(db as f32 / 20.0),
                 aligner: AudioAligner::new(SAMPLE_RATE, CHANNELS),
                 wav,
                 ready: Vec::new(),
@@ -202,12 +257,19 @@ impl OpenSound {
 struct Track {
     kind: Kind,
     source: Box<dyn AudioSource>,
+    /// How much louder or quieter this sound is in the mix (1.0 leaves it as heard).
+    gain: f32,
     aligner: AudioAligner,
     wav: WavWriter,
     /// Sound laid on the recording clock but not yet mixed into the video's sound track.
     ready: Vec<i16>,
     /// The loudest moment since the level was last asked for.
     recent_peak: Cell<f32>,
+}
+
+/// One sample made louder or quieter, never wrapped around into noise.
+fn scaled(sample: i16, gain: f32) -> i16 {
+    (sample as f32 * gain).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 
 /// The sound of one take, while it is being recorded.
@@ -247,9 +309,14 @@ impl SoundTake {
         if n == 0 {
             return Ok(());
         }
-        let mut mixed: Vec<i16> = self.tracks[0].ready.drain(..n).collect();
+        // The separate files hold the sound exactly as heard; only the mix inside the video is adjusted.
+        let adjusted = |t: &mut Track| -> Vec<i16> {
+            let gain = t.gain;
+            t.ready.drain(..n).map(|v| if gain == 1.0 { v } else { scaled(v, gain) }).collect()
+        };
+        let mut mixed: Vec<i16> = adjusted(&mut self.tracks[0]);
         for t in &mut self.tracks[1..] {
-            let part: Vec<i16> = t.ready.drain(..n).collect();
+            let part = adjusted(t);
             mixed = mix(&mixed, &part);
         }
         let pts = (self.mixed_frames * 10_000_000 / SAMPLE_RATE as u64) as i64;
@@ -874,5 +941,62 @@ mod tests {
         saved_track(dir.path(), "mic.wav", 1, 8000);
         let report = check_sound_files(dir.path(), &plan.unwrap(), 1000);
         assert_eq!(report.checks.len(), 1);
+    }
+
+    // ---- balancing the mix ----
+
+    #[test]
+    fn the_mix_can_make_the_computer_quieter_while_the_separate_files_stay_as_heard() {
+        let (clock, platform, plan) = choose(Some("default"), Some("default"));
+        let plan = plan.unwrap().with_gains(0, -6).unwrap(); // 6 decibels down is about half
+        let sound = Sound::new(Box::new(platform), plan);
+        let dir = tempfile::tempdir().unwrap();
+        let (chunks, result) = record(&clock, &sound, dir.path(), 1);
+        result.unwrap();
+        // The microphone (1000) and half of the computer's sound (2000 becomes about 1002).
+        assert!(!chunks.is_empty());
+        assert!(chunks.iter().all(|(_, s)| s.iter().all(|v| (2000..=2004).contains(v))), "{:?}", &chunks[0].1[..4]);
+        assert!((wav_info(&dir.path().join("system.wav")).unwrap().peak - 2000.0 / 32768.0).abs() < 0.001);
+        assert!((wav_info(&dir.path().join("mic.wav")).unwrap().peak - 1000.0 / 32768.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_louder_mix_never_wraps_around_into_noise() {
+        let (clock, mut platform, plan) = choose(Some("default"), None);
+        platform.mic = Rc::new(|_| 30000);
+        let plan = plan.unwrap().with_gains(20, 0).unwrap(); // ten times louder
+        let sound = Sound::new(Box::new(platform), plan);
+        let dir = tempfile::tempdir().unwrap();
+        let (chunks, result) = record(&clock, &sound, dir.path(), 1);
+        result.unwrap();
+        assert!(chunks.iter().all(|(_, s)| s.iter().all(|v| *v == i16::MAX)), "held at the loudest value");
+    }
+
+    #[test]
+    fn a_change_beyond_the_allowed_range_is_refused_in_words() {
+        let (_c, _p, plan) = choose(Some("default"), Some("default"));
+        let plan = plan.unwrap();
+        let why = plan.clone().with_gains(0, -80).unwrap_err();
+        assert!(
+            why.contains("computer's sound cannot be changed by -80 decibels") && why.contains("-40 to 20"),
+            "{why}"
+        );
+        assert!(plan.clone().with_gains(25, 0).unwrap_err().contains("microphone cannot be changed by 25"));
+        assert!(plan.with_gains(-40, 20).is_ok(), "the ends of the range are allowed");
+    }
+
+    #[test]
+    fn the_adjustment_is_said_in_words_and_written_down_for_the_editor() {
+        let (_c, _p, plan) = choose(Some("default"), Some("default"));
+        let plan = plan.unwrap();
+        assert!(!plan.describe().contains("In the mix"), "no sentence about the mix when nothing is changed");
+        let plan = plan.with_gains(3, -12).unwrap();
+        let text = plan.describe();
+        assert!(
+            text.contains("your voice 3 decibels louder and the computer's sound 12 decibels quieter")
+                && text.contains("mic.wav and system.wav are not changed"),
+            "{text}"
+        );
+        assert_eq!((plan.mix_info().microphone_gain_db, plan.mix_info().system_gain_db), (3, -12));
     }
 }

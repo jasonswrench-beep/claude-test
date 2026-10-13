@@ -304,6 +304,32 @@ fn probe_lists_the_test_source_and_says_windows_capture_is_not_built() {
     assert!(sources.iter().any(|s| s.id == "windows" && !s.available));
 }
 
+#[cfg(not(windows))]
+#[test]
+fn screen_test_says_it_needs_windows_and_exits_with_2() {
+    let (status, events) = run_once(&["screen-test", "--seconds", "1"]);
+    assert_eq!(status.code(), Some(2));
+    assert!(matches!(&events[0], Event::Hello { .. }));
+    let checks: Vec<_> = events
+        .iter()
+        .filter_map(|e| if let Event::Check { ok, message, .. } = e { Some((*ok, message.clone())) } else { None })
+        .collect();
+    assert_eq!(checks.len(), 1, "stops at the first problem: {checks:?}");
+    assert!(!checks[0].0 && checks[0].1.contains("only works on Windows"));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn screen_test_plain_prints_sentences_not_json() {
+    let out = Command::new(BIN).args(["screen-test", "--plain"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.first(), Some(&"PROBLEM: Screen capture only works on Windows."));
+    assert_eq!(lines.last(), Some(&"At least one check found a problem."));
+    assert!(!text.contains('{'), "no JSON in plain mode: {text}");
+}
+
 #[test]
 fn render_says_it_is_not_built_yet_and_exits_with_2() {
     let dir = tempfile::tempdir().unwrap();

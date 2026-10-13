@@ -198,8 +198,9 @@ Updated as work lands. "Tested here" means the automated tests pass in the cloud
 | Phase | State |
 |---|---|
 | 0 Foundations | Mostly built. Done: workspace, rule checker, [protocol spec](capture-protocol-spec.md), [project format](capture-project-format.md), [requests to OpenStage](openstage-requests.md), automatic-checks file. **Not done:** draft accessibility statement; the OpenStage-side items (OS-1 to OS-3, OS-16, OS-17). |
-| 1 Walking skeleton | Built and tested. **Checkpoint CP-1 passed on 2026-10-13:** the owner ran `TEST CAPTURE.bat` on Windows and all 65 tests passed there, including the real kill-and-recover test, and a short test recording ran and finished cleanly. (The Windows version was not recorded in the log; see the note below.) A later fix and its test bring the total to 66; they have passed here but have not yet been re-run on Windows. |
-| 2 to 8 | Not started. |
+| 1 Walking skeleton | Built and tested. **Checkpoint CP-1 passed on 2026-10-13:** the owner ran `TEST CAPTURE.bat` on Windows and all 65 tests passed there, including the real kill-and-recover test, and a short test recording ran and finished cleanly. (The Windows version was not recorded in the log; see the note below.) The take-number fix and its test were added afterwards and have not yet been re-run on Windows. |
+| 2 Real capture on Windows | **Started: slice 2.1, screen capture proof.** Built: finding displays, capturing one with Windows Graphics Capture, a `screen-test` command, a plain-language report, and `TEST SCREEN CAPTURE.bat`. The Windows-only code type-checks and lints cleanly for Windows, and everything around it is tested here (85 automated tests in all). **It has never been run.** Owner action: double-click `capture/TEST SCREEN CAPTURE.bat` and report what it says. Next slices, in order: encode to video segments (Media Foundation), then window and region capture, then audio, then webcam, interaction log, and setup checks. |
+| 3 to 8 | Not started. |
 
 Two real bugs were found in Phase 1 and fixed, each with a regression test that fails without the fix:
 

@@ -29,6 +29,7 @@ This page describes how OpenStage talks to the recording program, `openstage-cap
 openstage-capture probe
 openstage-capture record --project <folder> [options]
 openstage-capture recover --project <folder>
+openstage-capture screen-test [options]                          (Windows only; tries screen capture)
 openstage-capture render --project <folder> --out <file>        (not built yet)
 ```
 
@@ -38,7 +39,23 @@ openstage-capture render --project <folder> --out <file>        (not built yet)
 |---|---|
 | 0 | It worked. |
 | 1 | Something went wrong (a `fatal` error event was printed first). |
-| 2 | Not available: an unknown source, or a command not built yet (`render`). |
+| 2 | Not available: an unknown source, a command not built yet (`render`), or `screen-test` on a computer that is not running Windows. |
+
+### Options for `screen-test`
+
+Tries screen capture on this computer and reports each finding as a `check` event. It does not make a capture project.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--display` | 1 | Which display to capture. Display 1 is the main display; the others follow left to right. |
+| `--seconds` | 5 | How long to capture (between 0.5 and 600). |
+| `--out` | `screen-test-output` | Folder for `first.bmp` and `last.bmp`, the first and last pictures. They show the screen, so they are private. |
+| `--with-cursor` | off | Draw the mouse pointer in the pictures. Off by default because the pointer is recorded separately, so it can be enlarged or highlighted when editing. |
+| `--plain` | off | Print sentences for a person (`OK: ...` or `PROBLEM: ...`) instead of JSON events. No `hello` line is printed in this mode. |
+
+The checks, in order: `windows-version`, `capture-support`, `displays`, `screen-capture`, `frame-rate`, `pictures-saved`. It stops at the first check that makes the rest meaningless (for example, no screen capture support). Exit code 0 means every check was fine, 1 means at least one found a problem.
+
+Windows sends a new picture only when something on the screen changes, so a still screen gives few pictures. The `frame-rate` check therefore needs something moving on screen, and says so when it reports a low rate.
 
 ### Options for `record`
 
@@ -65,7 +82,7 @@ Always the first line.
 ```
 
 ### `probe`
-The answer to the `probe` command. Lists each source and whether it can be used on this computer. `note` is plain language for people.
+The answer to the `probe` command. Lists each source and whether it can be used on this computer. `note` is plain language for people. On Windows, each real display is listed as `display:1`, `display:2`, and so on. Until recording real screens is built, they are listed with `available` set to false and a note saying they were found but cannot be recorded into a project yet.
 ```json
 {"event":"probe","platform":"windows","sources":[{"id":"synthetic","available":true,"note":"A built-in test source."}]}
 ```
@@ -114,6 +131,13 @@ The author started again. The old take is **set aside, not erased**, and a new o
 ```json
 {"event":"recovered","take":1,"durationMs":4000,"maxLossMs":1000,"segments":3}
 ```
+
+### `check`
+One finding from a test or setup check, in plain language. Sent by `screen-test`, and later by the setup checks of the recorder.
+```json
+{"event":"check","check":"screen-capture","ok":true,"message":"Received 151 pictures in 5.0 seconds from Display 1, 1920 by 1080, main display. Each picture is 1920 by 1080 pixels."}
+```
+`check` names what was checked, `ok` says whether it was fine, and `message` says what that means for a person.
 
 ### `result`
 The last line of a `record` or `recover` run.

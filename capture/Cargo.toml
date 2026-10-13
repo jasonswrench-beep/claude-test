@@ -4,6 +4,7 @@ members = [
     "crates/openstage-capture-protocol",
     "crates/openstage-capture-project",
     "crates/openstage-capture",
+    "crates/openstage-capture-windows",
     "crates/openstage-capture-cli",
 ]
 

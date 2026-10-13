@@ -10,22 +10,29 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 
 | Works and is tested | Not built yet |
 |---|---|
-| The conversation with OpenStage (the protocol) | Recording your real screen, window, or region |
+| The conversation with OpenStage (the protocol) | Recording a real screen, window, or region into a project |
 | The capture project folder and its crash-safe files | Recording your real microphone, system sound, or webcam |
 | Countdown, record, pause, resume, stop, markers | Cursor and click effects, interaction capture |
 | Start again (the old take is kept, never erased) | Turning a recording into an MP4 (`render`) |
 | Killing the program mid-recording and repairing it | The editor panels inside OpenStage |
 | Sound levels with plain-language text | Captions, audio description, step-by-step output |
-| License and rule checks | Everything that needs Windows-only code |
+| License and rule checks | Encoding the pictures into video (the next slice) |
 
-**What "tested" means here.** The 66 automated tests pass on Linux. On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 66th test (it covers the take-number fix described in the roadmap) has passed on Linux and has not yet been re-run on Windows. Only the test source (fake picture and sound) has been run on Windows, so nothing here is claimed to record a real screen or microphone.
+**What "tested" means here.** The 85 automated tests pass on Linux. On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 20 tests added since then (the take-number fix and the screen capture checks) have passed on Linux and have not yet been run on Windows. Only the test source (fake picture and sound) has been run on Windows, so nothing here is claimed to record a real screen or microphone.
+
+## Phase 2 has started: screen capture
+
+The first Windows-only piece is in `crates/openstage-capture-windows`. It finds your displays and captures one with Windows Graphics Capture (the same Windows service the Snipping Tool uses), then reports in plain words how steadily pictures arrived. It does not record to a project yet.
+
+**It has never been run.** Its Windows-only code has been checked by the Rust compiler and linter for Windows, and everything around it is tested here with a fake display, but whether Windows actually hands it pictures on your computer is not known until you run the test below.
 
 ## What to do on Windows (no typing needed)
 
 1. Double-click **`BUILD CAPTURE.bat`**. It checks that Rust is installed (and explains how to install it if not), builds the program, and says plainly whether it worked.
 2. Double-click **`TEST CAPTURE.bat`**. It runs every test, then makes a short test recording, and says PASS or FAIL.
+3. Double-click **`TEST SCREEN CAPTURE.bat`**. It watches your main screen for 8 seconds (keep a window moving), saves two still pictures of it, opens one, and says PASS or lists what went wrong. The pictures show your screen, so they stay on your computer and you do not need to send them.
 
-If either one fails, send the log file it names (`build-log.txt` or `test-log.txt`, saved in this folder).
+If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, or `screen-test-log.txt`, saved in this folder).
 
 ## How the pieces fit
 
@@ -35,6 +42,7 @@ capture/
     openstage-capture-protocol/   the messages between OpenStage and the program
     openstage-capture-project/    the project folder, takes, crash-safe segments, recovery
     openstage-capture/            the engine: the recording state machine and sources
+    openstage-capture-windows/    screen capture for Windows, and the checks that prove it works
     openstage-capture-cli/        the program itself (openstage-capture)
   tools/check_rules.py            license, FFmpeg, header, and writing-style checks
   ci/capture.yml                  automatic checks, to be copied into .github/workflows
@@ -53,6 +61,7 @@ The two format documents are the source of truth. Change them in the same commit
 openstage-capture probe                       say what can be recorded on this computer
 openstage-capture record --project <folder>   record, taking one-line JSON commands on standard input
 openstage-capture recover --project <folder>  repair a recording that was interrupted
+openstage-capture screen-test                 try capturing the screen (Windows only)
 openstage-capture render ...                  not built yet (Phase 3)
 ```
 

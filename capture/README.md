@@ -18,7 +18,7 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 | Sound levels with plain-language text | Captions, audio description, step-by-step output |
 | License and rule checks | Encoding the pictures into video (the next slice) |
 
-**What "tested" means here.** The 123 automated tests pass on Linux. On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 58 tests added since then (the take-number fix, the screen capture, video, and crash checks) have passed on Linux and have not yet been run on Windows. On Windows, the fake test source and the real screen capture test (`screen-test`) have been run. Making video, recording sound, and recording a real screen into a project have not, so none of that is claimed to work.
+**What "tested" means here.** The 123 automated tests pass on Linux (a Windows computer runs 124, because one test only exists on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 58 tests added since then (the take-number fix, the screen capture, video, and crash checks) have passed on Linux and have not yet been run on Windows. On Windows, the fake test source and the real screen capture test (`screen-test`) have been run. Making video, recording sound, and recording a real screen into a project have not, so none of that is claimed to work.
 
 ## Phase 2 has started: screen capture
 
@@ -28,7 +28,7 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 
 **The video test has passed on the owner's computer** (240 pictures at 30 per second, none skipped, about 51 percent of one processor core, with a graphics card encoder available). Whether the saved video looked right to the eye has not been confirmed yet.
 
-**The crash safety test has never been run.** `TEST VIDEO CRASH.bat` records a video, stops the program without warning, and reports how many seconds survived. Its result decides how recordings are saved.
+**The crash safety test has run once, with a promising but incomplete result:** after a sudden stop the file held 8 complete fragments (about 8 seconds) and ended cleanly, but our own checker failed to read it back because of a bug (since fixed), so the exact loss was not measured. Run `TEST VIDEO CRASH.bat` again from the newest ZIP. Its result decides how recordings are saved.
 
 ## What to do on Windows (no typing needed)
 

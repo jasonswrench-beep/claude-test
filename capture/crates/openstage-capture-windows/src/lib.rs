@@ -44,7 +44,7 @@ pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, Ech
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use queue::FrameQueue;
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
-pub use report::{summarize, RecordingReport, TrackReport};
+pub use report::{summarize, OutputMove, RecordingReport, TrackReport};
 pub use sound::{
     check_sound_files, output_may_have_changed, plan_sound, Sound, SoundFileReport, SoundPlan, MAX_GAIN_DB, MIC_FILE,
     MIN_GAIN_DB, MIXED_BITRATE_KBPS, SYSTEM_FILE,

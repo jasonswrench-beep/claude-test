@@ -69,7 +69,8 @@ enum Cmd {
         microphone: String,
         /// With `--source screen`: which sound output's sound to record (the computer's own sound,
         /// including a screen reader's speech). Its number from `audio-devices`, part of its name,
-        /// `default`, or `none` to record none of it.
+        /// `default`, or `none` to record none of it. With `default` the recording follows Windows if
+        /// the sound moves to another output (headphones plugged in); a number or name is kept to.
         #[arg(long, default_value = "default")]
         output: String,
         /// With `--source screen`: make the microphone louder (positive) or quieter (negative) by this
@@ -557,9 +558,10 @@ fn main() -> ExitCode {
                             sink.emit(Event::Check { check: check.check, ok: check.ok, message: check.message });
                         }
                         let mut warnings = files.warnings;
-                        // If Windows now sends sound to a different output than the one recorded, say so: the
-                        // recorder listens to one output, so the rest of the computer's sound would be missing.
-                        if let Some(chosen) = &sound_plan.system {
+                        // If Windows now sends sound to a different output than the one chosen, say so: the
+                        // recorder kept to that output, so the rest of the computer's sound would be missing.
+                        // An output left as the default is followed, so this only concerns one chosen by number or name.
+                        if let Some(chosen) = sound_plan.system.as_ref().filter(|_| !sound_plan.follow_default_output) {
                             if let Ok(list) = system_audio_platform().list_devices() {
                                 if let Some(message) = output_may_have_changed(&list, chosen) {
                                     warnings.push(("output-changed".to_string(), message));

@@ -20,3 +20,5 @@ recorder-crash-log.txt
 recorder-crash-output/
 switch-test-log.txt
 switch-test-output/
+cue-test-log.txt
+cue-test-output/

@@ -81,6 +81,10 @@ Measures, for `--seconds` (default 10), how late the picture and the sound reach
 
 Starts the real recorder (`record --source screen`) with the chosen microphone and sound output, records through a 2 second pause, kills it without warning after `--seconds-before-kill` (default 12, at least 8), then repairs the project the way `recover` does and looks at every file. Options: `--display`, `--microphone`, `--output` (a number, part of a name, `default`, or `none`), `--out` (default `recorder-crash-output`), `--plain`. The recording is real, so the folder is private. The recorder's own diagnostic notes are saved in `recorder-diagnostics.txt` there. The checks: `crash-test` (what was chosen, then how long it recorded), `crash-recover` (the take was recovered; anything repair reported), `crash-video` (Windows reads the repaired video), `crash-video-sound` (it has a sound track), `crash-microphone-file` and `crash-system-file` (each WAV file plays), `crash-loss` (the shortest saved file against the recording time: fine within 3 seconds, the product allows 10), and `crash-in-step` (the saved files within 2.5 seconds of each other in length). Exit codes are as for `screen-test`.
 
+### `cue-test`
+
+Plays the recorder's own cue sounds one at a time, in the order a recording uses them, and says in words what each is before it sounds. Options: `--volume` (0 to 100, default 70), `--out` (default `cue-test-output`: each sound is also saved there as a small WAV file, so it can be opened in any player; this works on every system), `--plain`. The checks: `cue-volume`, then for each of `cue-countdown`, `cue-start`, `cue-pause`, `cue-resume`, `cue-stop` and `cue-error` a sentence ("Next: the start sound. It is three rising notes... It lasts 340 milliseconds.") sent before the sound, and `cue-files`. A sound Windows would not play is a failed check (`cue-<name>-played`). Exit codes are as for `screen-test`; on a system that is not Windows the files are still written and the exit code is 2.
+
 ### `video-info`
 
 Opens a saved video the way a player would and reports how many pictures and seconds it holds, as one `check` named `video-info`. Exit codes are as for `screen-test`.
@@ -144,6 +148,8 @@ The checks, in order: `crash-test` (the recording ran and was killed), `crash-sc
 | `--strict` | off | Count the summary findings (see `run-*` below) as part of passing or failing, for long test recordings. Without it they are only reported. |
 | `--system-gain-db` | 0 | The same for the computer's sound, for example `-10` to make it quieter. `system.wav` is never changed. A number outside the range is refused with `bad-option` and exit code 2. |
 | `--output` | `default` | With `--source screen`: whose sound to record: the sound that a sound output is playing (the computer's own sound, including a screen reader's speech). Chosen the same way; `none` records none of it. Left as `default`, the recording follows Windows when it moves the sound to another output during the take (headphones plugged in or out): it asks Windows every 250 ms which output is the default and moves when two looks agree, or at once when the output being listened to breaks, ending the take only if no other output appears within 5 seconds. A number or part of a name is kept to, with an `output-changed` warning afterwards if Windows moved the sound. |
+| `--cues` | `on` | Whether the recorder makes a short sound for each step, so an author who cannot see the screen always knows what it is doing (story A4). `on` or `off`; anything else is refused with `bad-option` and exit code 2. See "The cue sounds" below. OpenStage may pass `off` if it plays sounds of its own. |
+| `--cue-volume` | 70 | How loud the cue sounds are, 0 (silent) to 100. A number above 100 is refused. |
 | `--plain` | off | Print sentences for a person instead of JSON events. No `hello` line is printed in this mode. |
 | `--demo-script` | none | Instead of reading commands on standard input, follow a script such as `pause@7000;resume@9000;marker:look here@11000;stop@13000`: commands with times in milliseconds from the start of the session (the countdown included). For demos and tests. |
 | `--countdown-ms` | 3000 | Countdown before recording starts. 0 turns it off. With `--source screen` the countdown is also when the program gets ready: it starts the screen capture and the sound and wakes the video encoder (by making and throwing away a small file in the computer's temporary folder), so that recording starts when the countdown ends. A problem with the screen or a sound device is therefore reported when the countdown starts, before any take exists. With no countdown, all of that happens at the start of the take instead. |
@@ -153,6 +159,27 @@ The checks, in order: `crash-test` (the recording ran and was killed), `crash-sc
 | `--ignore-stdin-eof` | off | Keep recording if standard input closes. By default, closing standard input stops the recording cleanly. |
 | `--title` | empty | Title stored in a new project. |
 | `--language` | `en-US` | Language stored in a new project. |
+
+### The cue sounds
+
+With `--cues on` (the default) the recorder makes a short sound for each step, itself, because OpenStage's own announcements may not be heard while another program is in front. Each is under 400 milliseconds and plays through the computer's default sound output at `--cue-volume`. They are told apart by shape, not only by pitch:
+
+| Sound | What it is | What it sounds like | Length |
+|---|---|---|---|
+| countdown | once a second from the start of the countdown | one very short high beep | 50 ms |
+| start | the countdown is over; recording begins when it ends | three rising notes, the last longer | 340 ms |
+| pause | recording is paused | two falling notes | 240 ms |
+| resume | recording carries on | two rising notes | 240 ms |
+| stop | the recording is finished and closed | three falling notes, the last low and long | 340 ms |
+| error | something went wrong and the recording ended | two low, rough buzzes | 340 ms |
+
+Rules the program keeps:
+
+* **No cue is ever played while recording time is running**, so none is recorded. The countdown beeps play during the countdown; the start sound plays at the end of the countdown and recording begins only after it has ended (plus 60 ms); the pause sound plays once the recording is paused; the resume sound plays while still paused and recording carries on only after it has ended; the stop and error sounds play after every file has been closed. Whatever the microphone and the computer's sound captured meanwhile is thrown away, as at any start-up.
+* Waiting for the start and resume sounds is not recording time. `--countdown-ms` is the time before the start sound, so recording begins about 0.4 seconds after the countdown ends. With `--cues off` there is no such wait.
+* Starting again (`restart`) counts down again, with beeps, once the old take is closed. A marker makes no sound. Stopping during the countdown plays the stop sound and no start sound.
+* A cue that cannot be played never stops a recording. The `state` events remain the primary signal; the sounds are an addition, and `cue-test` lets a person hear them without recording.
+* Before the countdown, `record --source screen` sends one `check` named `cues` saying that the sounds are on and at what volume.
 
 ## 3. Events (program to OpenStage)
 

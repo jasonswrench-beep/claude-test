@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/openstage-capture-protocol",
+    "crates/openstage-capture-project",
+    "crates/openstage-capture",
+    "crates/openstage-capture-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["OpenStage Capture contributors"]
+repository = "https://github.com/jasonswrench-beep/claude-test"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+crc32fast = "1"
+clap = { version = "4", features = ["derive"] }
+time = { version = "0.3", features = ["formatting"] }
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

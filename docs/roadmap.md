@@ -190,3 +190,15 @@ Every requirement story appears below, so none is forgotten.
 ## 7. The first build
 
 Phases 0 and 1 are built first. They need nothing from the OpenStage repository, can be fully tested in the cloud build environment, and settle the shape of everything after them. Phase 2 comes next; it needs the owner's Windows machine for testing.
+
+## 8. Progress
+
+Updated as work lands. "Tested here" means the automated tests pass in the cloud build environment (Linux). Nothing is called working on Windows until the owner has run the Windows scripts and reported the result.
+
+| Phase | State |
+|---|---|
+| 0 Foundations | Mostly built. Done: workspace, rule checker, [protocol spec](capture-protocol-spec.md), [project format](capture-project-format.md), [requests to OpenStage](openstage-requests.md), automatic-checks file. **Not done:** draft accessibility statement; the OpenStage-side items (OS-1 to OS-3, OS-16, OS-17). |
+| 1 Walking skeleton | Built and tested here (65 automated tests, including a real kill-and-recover test). **Checkpoint CP-1 is not passed yet:** the same tests have not been run on Windows. Owner action: double-click `capture/TEST CAPTURE.bat` and report PASS or FAIL. |
+| 2 to 8 | Not started. |
+
+One real bug was found by the Phase 1 tests and fixed: a time subtraction that could overflow when handling a command took longer than the recorder's own step. It is covered by a regression test that fails without the fix.

@@ -1,0 +1,4 @@
+target/
+build-log.txt
+test-log.txt
+demo-log.txt

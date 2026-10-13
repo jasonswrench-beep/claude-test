@@ -1,0 +1,89 @@
+# OpenStage Capture (the recording program)
+
+This folder holds the code for **OpenStage Capture**: the program that records the screen, microphone, and system sound for OpenStage Author. It is free and open source under the Apache License 2.0.
+
+The program is called `openstage-capture`. It has **no window of its own**. OpenStage starts it, tells it what to do, and shows the author what it reports. This keeps the recorder small, safe, and easy to test, and it means the recording controls can be built to be fully accessible inside OpenStage.
+
+## Where this stands (honest status)
+
+**Phase 1, the "walking skeleton," is built.** That means the whole path from "start recording" to "recover a crashed recording" works, using a built-in **fake** source of picture and sound.
+
+| Works and is tested | Not built yet |
+|---|---|
+| The conversation with OpenStage (the protocol) | Recording your real screen, window, or region |
+| The capture project folder and its crash-safe files | Recording your real microphone, system sound, or webcam |
+| Countdown, record, pause, resume, stop, markers | Cursor and click effects, interaction capture |
+| Start again (the old take is kept, never erased) | Turning a recording into an MP4 (`render`) |
+| Killing the program mid-recording and repairing it | The editor panels inside OpenStage |
+| Sound levels with plain-language text | Captions, audio description, step-by-step output |
+| License and rule checks | Everything that needs Windows-only code |
+
+**What "tested" means here.** The 65 automated tests pass on Linux, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. **They have not yet been run on Windows.** Double-click `TEST CAPTURE.bat` on a Windows computer to run them there; until that is done and reported, nothing in this folder is claimed to work on Windows.
+
+## What to do on Windows (no typing needed)
+
+1. Double-click **`BUILD CAPTURE.bat`**. It checks that Rust is installed (and explains how to install it if not), builds the program, and says plainly whether it worked.
+2. Double-click **`TEST CAPTURE.bat`**. It runs every test, then makes a short test recording, and says PASS or FAIL.
+
+If either one fails, send the log file it names (`build-log.txt` or `test-log.txt`, saved in this folder).
+
+## How the pieces fit
+
+```
+capture/
+  crates/
+    openstage-capture-protocol/   the messages between OpenStage and the program
+    openstage-capture-project/    the project folder, takes, crash-safe segments, recovery
+    openstage-capture/            the engine: the recording state machine and sources
+    openstage-capture-cli/        the program itself (openstage-capture)
+  tools/check_rules.py            license, FFmpeg, header, and writing-style checks
+  ci/capture.yml                  automatic checks, to be copied into .github/workflows
+  THIRD-PARTY.md                  every library built in, with its license (generated)
+```
+
+The two format documents are the source of truth. Change them in the same commit as any code that reads or writes the format.
+
+- [Protocol specification](../docs/capture-protocol-spec.md)
+- [Project format](../docs/capture-project-format.md)
+- [Product brief](../docs/product-brief.md), [requirements](../docs/prd.md), [roadmap](../docs/roadmap.md)
+
+## The program
+
+```
+openstage-capture probe                       say what can be recorded on this computer
+openstage-capture record --project <folder>   record, taking one-line JSON commands on standard input
+openstage-capture recover --project <folder>  repair a recording that was interrupted
+openstage-capture render ...                  not built yet (Phase 3)
+```
+
+Events come out on standard output as one JSON object per line, and commands go in on standard input the same way:
+
+```
+> {"cmd":"pause"}
+< {"event":"state","state":"paused","elapsedMs":4000,"take":1}
+```
+
+## For developers
+
+You need Rust (stable) and Python 3.
+
+```
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+python -I tools/check_rules.py
+```
+
+`tools/check_rules.py` fails the build if a dependency has a license outside the allowlist, if FFmpeg is added as a dependency, if a build flag turns on GPL or non-free code, if a source file lacks its license header, or if prose uses em dashes (a house style rule). `python -I tools/check_rules.py --write-third-party` regenerates `THIRD-PARTY.md`.
+
+## Rules that shape the code
+
+- **A crash costs seconds, not the recording.** Data is written in small checksummed pieces and forced to disk every second.
+- **Nothing is erased by the software.** Start again sets a take aside.
+- **No GPL, and no bundled FFmpeg.** Everything built in must be permissively licensed.
+- **Raw recordings stay out of published courses.** The capture folder lives beside the course, never inside it.
+- **Accessibility is built in from the start.** Every state and sound level has a text equivalent, so nothing depends on seeing a screen.
+
+## License
+
+Apache License 2.0. See [`../LICENSE`](../LICENSE).

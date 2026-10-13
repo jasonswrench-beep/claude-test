@@ -2,7 +2,7 @@
 
 *(formerly the working title "OpenScreen"; see [Naming](#13-naming))*
 
-**Status:** v0.15, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
+**Status:** v0.16, checked against the OpenStage Author repository; requirements drafted in [prd.md](prd.md), with open items in section 12
 **License:** Apache-2.0 (hard constraint; see [Licensing & dependency policy](#7-licensing--dependency-policy))
 **Context:** A module of **OpenStage Author** ("OpenStage" for short), a Tauri v2 desktop app (Rust shell, plain TypeScript + HTML interface) at [github.com/jasonswrench-beep/openstage-author](https://github.com/jasonswrench-beep/openstage-author). Delivered as a **separate capture process** that OpenStage's interface drives.
 **Accessibility:** First-class requirement, for the tool *and* for everything it produces (see [section 6](#6-accessibility-requirements))
@@ -155,7 +155,7 @@ The recorder and editor are OpenStage HTML, so they inherit OpenStage's accessib
 - **Follow OpenStage's schema rules for everything Capture adds.** Every object carries `altText`, `role`, `tabOrder`, and `decorative`, never optional and never filled silently with empty defaults *(confirmed, CLAUDE.md)*. Auto-generated alt text is allowed because it is not empty, but it is flagged unreviewed.
 - **Text the learner reads needs an audio route.** OpenStage's rule: if it is text the learner is meant to read, audio should be available for it. Step text, callout text, and captions that Capture introduces must be narratable from a script, and the editor should make that easy; say so wherever a new kind of text has no audio route yet *(confirmed, CLAUDE.md)*.
 - **A video object must have a caption file or a narration script.** The format and validator already require it (`format-spec.md`, `schema/object.schema.json`), so a recording cannot be inserted without one *(confirmed)*.
-- **Audio description track** (WCAG 1.2.3 / 1.2.5): written as text and voiced through the same script-to-speech route; support extended description (pausing video) in interactive output. Delivery to learners is a pop-up that opens when the learner asks for it (owner decision; see the PRD, story D5).
+- **Audio description track** (WCAG 1.2.3 / 1.2.5): written as text and voiced through the same script-to-speech route; support extended description (pausing video) in interactive output. Delivery to learners is a pop-up that opens when the learner asks for it, where they can read the description, listen to it, or play the video with the description voiced in time (owner decisions; see the PRD, story D5).
 - **Alt text for non-text content** (callouts, shapes, images, hotspots), with a prompt rather than silent omission. Pre-fill from the Windows UI Automation tree where available, for example "Button: Save".
 - **Motion and flashing safeguards.** Zooms, click effects, and transitions must not exceed three flashes per second (WCAG 2.3.1); respect reduced motion in the player.
 - **Contrast and legibility checks** for callouts, captions, cursor highlights, and annotations (WCAG 1.4.3 / 1.4.11).
@@ -249,6 +249,7 @@ Release 1 does not ship until these OpenStage Author items are done. They are Op
 2. **SCORM 1.2 verified in a real LMS** (Brightspace and Moodle, then Canvas). This is already open on OpenStage's own roadmap and release gate.
 3. **The streaming launch path** in OpenStage's Rust shell (section 9.1). Built as part of this project and agreed with the owner first.
 4. **A baseline screen-reader pass** on the editor patterns Capture reuses (6.3).
+5. **Player support for audio description** in OpenStage's course player: the pop-up, playing the video with the description voiced in time, and pausing for extended description. Today the player uses the browser's own controls for video.
 
 Not prerequisites: timing that follows a video (a roadmap request only, open item 8), and macOS, Linux, JAWS, or VoiceOver work.
 
@@ -259,7 +260,7 @@ Not prerequisites: timing that follows a video (a roadmap request only, open ite
 **Recording**
 - Capture on Windows: screen/window/region + microphone + system audio + webcam
 - Interaction logging: cursor position, clicks, key events, active window; opt-in, with a clear on-screen and audible indicator
-- Recorder panel in native HTML, global hotkeys, audible state cues
+- Recorder panel in native HTML, global hotkeys, audible state cues, and a Start again action that sets a bad take aside (nothing is erased)
 - Process protocol and crash-safe recording with a `recover` command (section 9)
 
 **Editing**
@@ -273,7 +274,7 @@ Not prerequisites: timing that follows a video (a roadmap request only, open ite
 **Accessible content**
 - Captions from the narration script, and WebVTT/SRT import and export
 - **Local speech-to-text** for human-recorded audio (see the fallback rule below)
-- Transcripts, alt text, audio description track (script → speech)
+- Transcripts, alt text, audio description track (script → speech), delivered in a pop-up the learner opens, including playing the video with the description voiced in time
 - Accessibility checker pane
 
 **Interactive training**
@@ -330,7 +331,7 @@ This is a modest but real change inside OpenStage Author, not in the Capture pro
 
 **The capture program** follows the established pattern, with two differences because a recording is long-running and interactive:
 - **Events stream as JSON lines on stdout**: a first line with the protocol version, then `state` (idle/countdown/recording/paused/stopped), elapsed time, throttled audio levels, warnings, errors, and a final `result` with the project path. Logs go to stderr.
-- **Control comes in as JSON lines on stdin**: `pause`, `resume`, `stop`, `marker`. **`stop` is graceful** (finalize the file); **cancel is the existing kill-the-tree** behavior. Because cancel is abrupt, **recording must be crash-safe**: write in segments (for example fragmented MP4) with an append-only `events.jsonl`, flush regularly, and offer `recover` to repair an interrupted project. A killed recording should lose seconds, not the take.
+- **Control comes in as JSON lines on stdin**: `pause`, `resume`, `stop`, `restart`, `marker`. **`stop` is graceful** (finalize the file); **cancel is the existing kill-the-tree** behavior. Because cancel is abrupt, **recording must be crash-safe**: write in segments (for example fragmented MP4) with an append-only `events.jsonl`, flush regularly, and offer `recover` to repair an interrupted project. A killed recording should lose seconds, not the take.
 - **Why a separate process:** it holds its own OS permission prompts (screen capture, microphone, accessibility), a crash can't take the editor down, and anything with a stricter license stays out of OpenStage's own code.
 - **Naming follows OpenStage's conventions** *(confirmed, CLAUDE.md)*: the program is `openstage-capture.exe` (as `openstage-editor.exe`), and an `OPENSTAGE_CAPTURE` setting overrides its location. The project keeps the short `OPENSTAGE_*` prefix on purpose.
 - **Protocol as contract.** CLAUDE.md names three plugin contracts (audio from text, captions from media, image from prompt) as a rule, but the roadmap shows no general plugin API built yet *(confirmed)*. This protocol, versioned and documented, could become the pattern for them.
@@ -402,6 +403,7 @@ If a capture folder were ever placed inside a project, the publisher would need 
 | **Capture departs from OpenStage Author's own rules** (video editor, cross-platform, TypeScript) *(confirmed)* | Work done against the host project's stated scope until CLAUDE.md says otherwise | The owner has accepted all three exceptions; record them in CLAUDE.md before building |
 | **The existing launcher can't run a live recording** *(confirmed)* | No pause/stop control or live state; a recording would block preview and publish | Add a streaming launch path with its own slot and a graceful stop (9.1) |
 | Media from outside the recording brings licensing and accessibility obligations | Unlicensed music or images; uncaptioned video; missing alt text | Draw imports from the course asset library (source, creator, and licence recorded); the validator's rules apply; prompt for missing alt text, captions, or transcripts |
+| Audio description needs new features in OpenStage's course player (pop-up, described playback, pausing for extended description) | More OpenStage work in front of Release 1 | Scope it early alongside responsive output; the owner can revisit the decision if it proves large |
 | **One big first release** | A longer wait before anything ships; more to test at once; schedule risk | Build in the suggested order (section 8); freeze the Release 1 list; apply the speech-to-text fallback rule |
 | **OpenStage's SCORM 1.2 has never run in a real LMS** *(confirmed)* | Release 1's headline test could fail for reasons outside this module | Test OpenStage's current output in Brightspace and Moodle first (Canvas when access arrives), before building on it |
 | Raw recordings or interaction logs shipped inside published packages | Learners receive keystrokes, window titles, and raw footage | Exclude by default; explicit opt-in; checked in the acceptance tests (section 10) |

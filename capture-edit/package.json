@@ -1,0 +1,17 @@
+{
+  "name": "openstage-capture-edit",
+  "version": "0.1.0",
+  "description": "The edit model of OpenStage Capture: tracks, clips, trim, split, join, reorder, undo and redo, all in plain words, with no screen. TypeScript, no runtime dependencies.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.6" },
+  "scripts": {
+    "check": "tsc -p .",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.8"
+  }
+}

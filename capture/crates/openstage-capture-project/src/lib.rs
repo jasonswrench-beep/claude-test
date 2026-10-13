@@ -20,6 +20,7 @@
 //!
 //! The format is described in `docs/capture-project-format.md`.
 
+mod edit;
 mod error;
 mod events_log;
 pub mod fmp4;
@@ -30,6 +31,11 @@ mod segment;
 mod take;
 pub mod wav;
 
+pub use edit::{
+    describe_time, parse_edit, validate as validate_edit, Clip as EditClip, Edit, ParsedEdit, Problem as EditProblem,
+    Severity as EditSeverity, SourceInfo as EditSourceInfo, SourceKind as EditSourceKind, SourceRef as EditSourceRef,
+    Track as EditTrack, TrackKind as EditTrackKind, EDIT_FORMAT,
+};
 pub use error::ProjectError;
 pub use events_log::{read_log, trim_incomplete_tail, EventLogWriter, LogEvent, LogLine};
 pub use fsutil::{new_id, utc_now_iso, write_atomic};

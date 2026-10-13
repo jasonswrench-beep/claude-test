@@ -1,0 +1,156 @@
+{
+  "format": "openstage-capture-edit",
+  "schemaVersion": "0.1.0",
+  "nextId": 10,
+  "sources": [
+    {
+      "ref": {
+        "kind": "take",
+        "take": 1,
+        "media": "screen.mp4"
+      },
+      "kind": "screen",
+      "name": "Screen of take 1",
+      "durationMs": 60000
+    },
+    {
+      "ref": {
+        "kind": "take",
+        "take": 1,
+        "media": "mic.wav"
+      },
+      "kind": "microphone",
+      "name": "Microphone of take 1",
+      "durationMs": 60000
+    },
+    {
+      "ref": {
+        "kind": "take",
+        "take": 1,
+        "media": "system.wav"
+      },
+      "kind": "system-audio",
+      "name": "Computer sound of take 1",
+      "durationMs": 60000
+    }
+  ],
+  "tracks": [
+    {
+      "id": "track-1",
+      "kind": "screen",
+      "name": "Screen",
+      "clips": [
+        {
+          "id": "clip-4",
+          "name": "Lesson",
+          "source": {
+            "kind": "take",
+            "take": 1,
+            "media": "screen.mp4"
+          },
+          "sourceStartMs": 0,
+          "sourceEndMs": 20000,
+          "startMs": 0,
+          "muted": false,
+          "volumeDb": 0,
+          "fadeInMs": 0,
+          "fadeOutMs": 0
+        },
+        {
+          "id": "clip-7",
+          "name": "Lesson",
+          "source": {
+            "kind": "take",
+            "take": 1,
+            "media": "screen.mp4"
+          },
+          "sourceStartMs": 20000,
+          "sourceEndMs": 20050,
+          "startMs": 20000,
+          "muted": false,
+          "volumeDb": 0,
+          "fadeInMs": 0,
+          "fadeOutMs": 0
+        }
+      ]
+    },
+    {
+      "id": "track-2",
+      "kind": "audio",
+      "name": "Voice",
+      "clips": [
+        {
+          "id": "clip-5",
+          "name": "Voice",
+          "source": {
+            "kind": "take",
+            "take": 1,
+            "media": "mic.wav"
+          },
+          "sourceStartMs": 0,
+          "sourceEndMs": 20000,
+          "startMs": 0,
+          "muted": false,
+          "volumeDb": 0,
+          "fadeInMs": 0,
+          "fadeOutMs": 0
+        },
+        {
+          "id": "clip-8",
+          "name": "Voice",
+          "source": {
+            "kind": "take",
+            "take": 1,
+            "media": "mic.wav"
+          },
+          "sourceStartMs": 20000,
+          "sourceEndMs": 60000,
+          "startMs": 20000,
+          "muted": false,
+          "volumeDb": 0,
+          "fadeInMs": 0,
+          "fadeOutMs": 0
+        }
+      ]
+    },
+    {
+      "id": "track-3",
+      "kind": "audio",
+      "name": "Computer sound",
+      "clips": [
+        {
+          "id": "clip-6",
+          "name": "Computer sound",
+          "source": {
+            "kind": "take",
+            "take": 1,
+            "media": "system.wav"
+          },
+          "sourceStartMs": 0,
+          "sourceEndMs": 20000,
+          "startMs": 0,
+          "muted": false,
+          "volumeDb": 0,
+          "fadeInMs": 0,
+          "fadeOutMs": 0
+        },
+        {
+          "id": "clip-9",
+          "name": "Computer sound",
+          "source": {
+            "kind": "take",
+            "take": 1,
+            "media": "system.wav"
+          },
+          "sourceStartMs": 20000,
+          "sourceEndMs": 60000,
+          "startMs": 20000,
+          "muted": false,
+          "volumeDb": 0,
+          "fadeInMs": 0,
+          "fadeOutMs": 0
+        }
+      ]
+    }
+  ]
+}

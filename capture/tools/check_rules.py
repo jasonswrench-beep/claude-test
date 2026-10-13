@@ -32,6 +32,8 @@ ALLOWED = {
 
 SKIP_DIRS = {"target", ".git", "node_modules"}
 HEADER_SUFFIXES = {".rs", ".py"}
+EDIT = REPO / "capture-edit"  # the TypeScript edit model
+EDIT_HEADER_SUFFIXES = {".ts"}
 FLAG_SUFFIXES = {".toml", ".rs", ".bat", ".cmd", ".sh", ".yml", ".yaml", ".py", ".lock"}
 STYLE_SUFFIXES = {".md", ".rs", ".bat", ".py", ".yml", ".yaml", ".toml"}
 EM_DASH = chr(0x2014)  # built from its code so this file does not trip its own check
@@ -133,6 +135,11 @@ def check_headers():
         head = "\n".join(path.read_text(encoding="utf-8").splitlines()[:5])
         if "SPDX-License-Identifier: Apache-2.0" not in head:
             missing.append(str(path.relative_to(REPO)))
+    if EDIT.is_dir():
+        for path in files(EDIT, EDIT_HEADER_SUFFIXES):
+            head = "\n".join(path.read_text(encoding="utf-8").splitlines()[:5])
+            if "SPDX-License-Identifier: Apache-2.0" not in head:
+                missing.append(str(path.relative_to(REPO)))
     if missing:
         record("FAIL", "license headers", "missing SPDX header: " + ", ".join(missing))
     else:
@@ -161,8 +168,10 @@ def check_ffmpeg_flags():
 
 def check_style():
     found = []
-    for base in (ROOT, REPO / "docs"):
-        for path in files(base, STYLE_SUFFIXES):
+    for base in (ROOT, REPO / "docs", EDIT):
+        if not base.is_dir():
+            continue
+        for path in files(base, STYLE_SUFFIXES | {".ts", ".json"}):
             if EM_DASH in path.read_text(encoding="utf-8", errors="replace"):
                 found.append(str(path.relative_to(REPO)))
     readme = REPO / "README.md"
@@ -193,6 +202,19 @@ def batch_block_problems(text):
         if line.startswith(")") and depth > 0:
             depth -= 1
     return problems
+
+
+def check_edit_package():
+    """The TypeScript edit model ships with no runtime dependencies at all, so there is nothing to license-check."""
+    manifest = EDIT / "package.json"
+    if not manifest.exists():
+        return
+    package = json.loads(manifest.read_text(encoding="utf-8"))
+    runtime = package.get("dependencies") or {}
+    if runtime:
+        record("FAIL", "edit model has no runtime dependencies", "found: " + ", ".join(sorted(runtime)))
+    else:
+        record("PASS", "edit model has no runtime dependencies")
 
 
 def check_batch_files():
@@ -231,6 +253,7 @@ def main():
     check_ffmpeg_flags()
     check_style()
     check_batch_files()
+    check_edit_package()
     if "--write-third-party" in sys.argv and packages:
         write_third_party(packages)
 

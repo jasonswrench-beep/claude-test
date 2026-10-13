@@ -42,14 +42,19 @@ fn failed(what: &str, e: windows::core::Error) -> ScreenError {
 }
 
 /// Get Windows ready: pictures in real pixels (not scaled by display zoom), and the Windows
-/// Runtime started. Safe to call more than once.
+/// Runtime started on the calling thread. Safe to call as often as you like, and every entry point
+/// that uses Windows' capture or video tools must call it first: Windows' components fail with
+/// "CoInitialize has not been called" on a thread that has not been prepared.
 pub(crate) fn prepare() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| unsafe {
-        // Both can "fail" harmlessly: the program may already have chosen these.
+        // This can "fail" harmlessly: the program may already have chosen it.
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        let _ = RoInitialize(RO_INIT_MULTITHREADED);
     });
+    // Starting the runtime is per thread, so it is done every time. A second call on the same thread is harmless.
+    unsafe {
+        let _ = RoInitialize(RO_INIT_MULTITHREADED);
+    }
 }
 
 pub struct WindowsPlatform;

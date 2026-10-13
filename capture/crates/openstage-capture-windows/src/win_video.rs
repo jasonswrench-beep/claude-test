@@ -14,13 +14,12 @@ use windows::core::{Interface, GUID, HSTRING};
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::Media::MediaFoundation::{
     eAVEncH264VProfile_High, IMFActivate, IMFAttributes, IMFMediaType, IMFSinkWriter, MFCreateAttributes,
-    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Video, MFShutdown,
-    MFStartup, MFTEnumEx, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264, MFVideoFormat_RGB32,
-    MFVideoInterlace_Progressive, MFSTARTUP_FULL, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE,
-    MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE,
-    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
-    MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SINK_WRITER_DISABLE_THROTTLING, MF_VERSION,
+    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Video, MFStartup,
+    MFTEnumEx, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive,
+    MFSTARTUP_FULL, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
+    MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE,
+    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO,
+    MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_DISABLE_THROTTLING, MF_VERSION,
 };
 use windows::Win32::Media::MediaFoundation::{
     MFCreateSourceReaderFromURL, MFTranscodeContainerType_FMPEG4, MF_MPEG4SINK_MIN_FRAGMENT_DURATION,
@@ -57,12 +56,14 @@ impl VideoPlatform for WindowsVideo {
     }
 
     fn h264_encoders(&self) -> Result<Vec<EncoderInfo>, ScreenError> {
+        crate::win::prepare();
         let mut found = enumerate(true)?;
         found.extend(enumerate(false)?);
         Ok(found)
     }
 
     fn create_sink(&self, spec: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError> {
+        crate::win::prepare();
         let (width, height) = (spec.width, spec.height);
         // First let Windows use the graphics card's encoder. If that setup is refused, try the processor's.
         match unsafe { build_writer(spec, true) } {
@@ -85,6 +86,8 @@ impl VideoPlatform for WindowsVideo {
     }
 
     fn inspect_video(&self, path: &Path) -> Result<VideoInspection, ScreenError> {
+        // This is also called on its own (by the crash test), so start Windows' video tools here too.
+        self.start_media()?;
         // Open the file the way a player would, and read every video sample without decoding it.
         let reader = unsafe { MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), None) }
             .map_err(|e| failed("Windows could not open the video file", e))?;
@@ -282,10 +285,9 @@ impl VideoSink for Mp4Sink {
         let writer =
             self.writer.take().ok_or_else(|| ScreenError::Failed("The video file is already closed.".into()))?;
         let result = unsafe { writer.Finalize() }.map_err(|e| failed("Windows could not complete the video file", e));
+        // Media Foundation is deliberately left running: reading the finished file back needs it, and
+        // Windows tidies it up when the program ends.
         drop(writer);
-        unsafe {
-            let _ = MFShutdown();
-        }
         result
     }
 }
@@ -293,3 +295,32 @@ impl VideoSink for Mp4Sink {
 // Silence an unused-import warning on the trait that makes `.cast()` and friends available on COM objects.
 #[allow(dead_code)]
 fn _uses_interface<T: Interface>(_: &T) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// On a brand new thread, with nothing prepared in advance, the video tools must still start. This
+    /// guards against "CoInitialize has not been called", which the crash test once hit.
+    #[test]
+    fn windows_video_tools_work_from_a_thread_nobody_prepared() {
+        let outcome = std::thread::spawn(|| {
+            let video = WindowsVideo;
+            let missing = video.inspect_video(Path::new("this-file-does-not-exist.mp4"));
+            let encoders = video.h264_encoders();
+            (missing, encoders)
+        })
+        .join()
+        .unwrap();
+
+        match outcome.0 {
+            Ok(_) => panic!("a missing file cannot have pictures"),
+            Err(e) => {
+                let text = e.to_string();
+                assert!(!text.contains("CoInitialize has not been called"), "the thread was not prepared: {text}");
+            }
+        }
+        // Finding encoders needs the tools started, so it succeeds (with possibly zero encoders) rather than failing to start.
+        assert!(outcome.1.is_ok(), "{:?}", outcome.1.err());
+    }
+}

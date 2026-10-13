@@ -19,10 +19,14 @@ pub struct TrackReport {
     pub padded_ms: u64,
     /// Sound dropped because the sound card ran ahead of the computer, in milliseconds.
     pub trimmed_ms: u64,
-    /// At worst, the sound was held back this long, so it played this much later than its picture.
+    /// At worst, the sound was held back this long, so it played this much later than its picture, and when.
     pub worst_later_ms: u64,
-    /// At worst, the sound was this far short when it was due, so it played this much earlier than its picture.
+    pub worst_later_at_ms: u64,
+    /// At worst, the sound was this far short when it was due, so it played this much earlier than its
+    /// picture, and when. Only meaningful for a source that sends sound all the time (a microphone): a
+    /// quiet computer sends nothing, which looks the same.
     pub worst_earlier_ms: u64,
+    pub worst_earlier_at_ms: u64,
     /// How many times Windows reported lost sound.
     pub lost_moments: u64,
 }
@@ -43,6 +47,35 @@ pub struct RecordingReport {
     pub memory_first_mb: Option<f64>,
     pub memory_peak_mb: Option<f64>,
     pub tracks: Vec<TrackReport>,
+    /// How regularly the program looked at the screen and the sound while recording.
+    pub looks: LookStats,
+}
+
+/// One moment when the program went a long time without looking at the screen and the sound.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SlowMoment {
+    /// When, in recording time, in milliseconds.
+    pub at_ms: u64,
+    /// How long it went without looking.
+    pub gap_ms: u64,
+    /// How long the look just before took for the picture, and for the sound.
+    pub picture_ms: u64,
+    pub sound_ms: u64,
+    /// How long saving to disk took in the gap.
+    pub saving_ms: u64,
+}
+
+/// How regularly the program looked at the screen and the sound. It needs to look at least every 33
+/// milliseconds to keep a steady 30 pictures a second.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LookStats {
+    pub looks: u64,
+    pub average_gap_ms: f64,
+    pub longest_gap_ms: u64,
+    pub gaps_over_50_ms: u64,
+    pub gaps_over_100_ms: u64,
+    /// The worst few, longest first.
+    pub slow_moments: Vec<SlowMoment>,
 }
 
 pub(crate) fn clock(ms: u64) -> String {
@@ -65,14 +98,56 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
         "run-summary",
         skipped_percent <= 1.0,
         format!(
-            "Recorded {}. {} pictures were written. {} steps of the steady 30 pictures a second ({skipped_percent:.1} percent) had to be skipped because the program was late, and Windows threw away {} pictures that were not taken in time.{}",
+            "Recorded {}. {} pictures were written. {} steps of the steady 30 pictures a second ({skipped_percent:.1} percent) had to be skipped because the program was late, and Windows threw away {} pictures that were not taken in time while recording.{}{}",
             clock(r.recorded_ms),
             r.pictures_written,
             r.beats_skipped,
             r.pictures_replaced,
-            if skipped_percent > 1.0 { " More than 1 percent skipped means the video may look jerky." } else { "" }
+            if skipped_percent > 1.0 { " More than 1 percent skipped means the video may look jerky." } else { "" },
+            if skipped_percent > 1.0 && r.looks.looks > 0 {
+                format!(
+                    " The program looked at the screen every {:.0} ms on average (it must be at least every 33 ms), and {} of the {} looks were more than 50 ms apart.",
+                    r.looks.average_gap_ms, r.looks.gaps_over_50_ms, r.looks.looks
+                )
+            } else {
+                String::new()
+            }
         ),
     ));
+
+    // Did the program ever go quiet for a long moment?
+    if r.looks.looks > 0 {
+        let minutes = (r.recorded_ms as f64 / 60_000.0).max(1.0);
+        let calm = r.looks.longest_gap_ms <= 250 && r.looks.gaps_over_100_ms as f64 <= minutes;
+        let worst: Vec<String> = r
+            .looks
+            .slow_moments
+            .iter()
+            .take(3)
+            .map(|m| {
+                format!(
+                    "{} ms at {} (the picture took {} ms and the sound {} ms just before; saving to disk took {} ms; the rest was waiting or other work)",
+                    m.gap_ms,
+                    clock(m.at_ms),
+                    m.picture_ms,
+                    m.sound_ms,
+                    m.saving_ms
+                )
+            })
+            .collect();
+        out.push(check(
+            "run-stalls",
+            calm,
+            format!(
+                "The program went more than 100 ms without looking at the screen {} time(s) (more than 50 ms: {}). The longest wait was {} ms.{}{}",
+                r.looks.gaps_over_100_ms,
+                r.looks.gaps_over_50_ms,
+                r.looks.longest_gap_ms,
+                if worst.is_empty() { String::new() } else { format!(" The worst: {}.", worst.join("; ")) },
+                if calm { "" } else { " That is more than one long wait a minute, or one longer than 250 ms, which is what makes video jerky." }
+            ),
+        ));
+    }
 
     // How hard did the computer work?
     if let Some(cpu) = r.cpu_seconds.filter(|_| r.wall_seconds > 0.0) {
@@ -84,7 +159,7 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
             "run-cpu",
             machine_percent <= CPU_TARGET_PERCENT,
             format!(
-                "While recording, the program used about {core_percent:.0} percent of one processor core on average. That is {machine_percent:.1} percent of this computer's {} cores. If a computer with 4 cores had to do the same work, it would be about {laptop_percent:.0} percent, against a target of {CPU_TARGET_PERCENT:.0} percent{}",
+                "While recording, the program used about {core_percent:.0} percent of one processor core on average. That is {machine_percent:.1} percent of this computer's {} cores. If a computer with 4 cores had to do the same work, it would be about {laptop_percent:.1} percent, against a target of {CPU_TARGET_PERCENT:.0} percent{}",
                 r.logical_cores,
                 if laptop_percent > CPU_TARGET_PERCENT {
                     ". That projection is above the target, so a 4-core laptop may struggle; it needs a real measurement on one, or a faster way to move the pictures."
@@ -114,7 +189,10 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
     for t in &r.tracks {
         let name = if t.microphone { "microphone" } else { "computer's sound" };
         let check_name = if t.microphone { "run-sound-microphone" } else { "run-sound-system" };
-        let within = t.worst_later_ms as f64 <= MAX_OFFSET_MS && t.worst_earlier_ms as f64 <= MAX_OFFSET_MS;
+        // A quiet computer sends no sound at all, which looks like sound arriving too early, so only a
+        // microphone (which sends sound all the time) can be judged on that.
+        let within =
+            t.worst_later_ms as f64 <= MAX_OFFSET_MS && (!t.microphone || t.worst_earlier_ms as f64 <= MAX_OFFSET_MS);
         let lost = if t.lost_moments > 0 {
             format!(
                 " Windows reported {} moment{} of lost sound.",
@@ -124,30 +202,27 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
         } else {
             String::new()
         };
+        let later = format!("{} ms later than its picture (at {})", t.worst_later_ms, clock(t.worst_later_at_ms));
+        let too_far = if within { String::new() } else { format!(", more than the {MAX_OFFSET_MS:.0} ms allowed") };
         let message = if t.microphone {
             // A microphone sends sound all the time, so its sound card's speed against the computer's clock can be told.
             let net = t.heard_ms as i64 - r.recorded_ms as i64;
             let ppm = if r.recorded_ms == 0 { 0.0 } else { net as f64 * 1_000_000.0 / r.recorded_ms as f64 };
             format!(
-                "The {name}'s sound card ran {} the computer's clock by {} ms over the recording ({:.0} parts per million). The program corrected this by dropping {} ms of sound and filling in {} ms of silence. At worst the sound played {} ms later, and {} ms earlier, than its picture{}.{lost}",
+                "The {name}'s sound card ran {} the computer's clock by {} ms over the recording ({:.0} parts per million). The program corrected this by dropping {} ms of sound and filling in {} ms of silence. At worst the sound played {later}, and {} ms earlier (at {}){too_far}.{lost}",
                 if net >= 0 { "faster than" } else { "slower than" },
                 net.abs(),
                 ppm.abs(),
                 t.trimmed_ms,
                 t.padded_ms,
-                t.worst_later_ms,
                 t.worst_earlier_ms,
-                if within { String::new() } else { format!(", more than the {MAX_OFFSET_MS:.0} ms allowed") },
+                clock(t.worst_earlier_at_ms),
             )
         } else {
             // The computer sends nothing while it is quiet, so silence is filled in and says nothing about the clock.
             format!(
-                "The {name}: {} ms was filled in as silence while the computer was quiet, and {} ms of surplus was dropped. At worst the sound played {} ms later, and {} ms earlier, than its picture{}.{lost}",
-                t.padded_ms,
-                t.trimmed_ms,
-                t.worst_later_ms,
-                t.worst_earlier_ms,
-                if within { String::new() } else { format!(", more than the {MAX_OFFSET_MS:.0} ms allowed") },
+                "The {name}: {} ms was filled in as silence while the computer was quiet, and {} ms of surplus was dropped. At worst the sound played {later}{too_far}.{lost}",
+                t.padded_ms, t.trimmed_ms,
             )
         };
         out.push(check(check_name, within, message));
@@ -177,7 +252,9 @@ mod tests {
                     padded_ms: 0,
                     trimmed_ms: 160,
                     worst_later_ms: 38,
+                    worst_later_at_ms: 125_000,
                     worst_earlier_ms: 12,
+                    worst_earlier_at_ms: 2_000_000,
                     lost_moments: 1,
                 },
                 TrackReport {
@@ -186,10 +263,20 @@ mod tests {
                     padded_ms: 1_600_000,
                     trimmed_ms: 0,
                     worst_later_ms: 0,
-                    worst_earlier_ms: 30,
+                    worst_later_at_ms: 0,
+                    worst_earlier_ms: 900,
+                    worst_earlier_at_ms: 61_000,
                     lost_moments: 1,
                 },
             ],
+            looks: LookStats {
+                looks: 700_000,
+                average_gap_ms: 5.1,
+                longest_gap_ms: 90,
+                gaps_over_50_ms: 20,
+                gaps_over_100_ms: 0,
+                slow_moments: vec![],
+            },
         }
     }
 
@@ -210,27 +297,65 @@ mod tests {
             "{cpu}"
         );
         assert!(
-            cpu.contains("about 12 percent, against a target of 10 percent") && cpu.contains("may struggle"),
+            cpu.contains("about 12.5 percent, against a target of 10 percent") && cpu.contains("may struggle"),
             "{cpu}"
         );
         let memory = &find(&checks, "run-memory").message;
         assert!(memory.contains("180 megabytes of memory at the start and 260 at most"), "{memory}");
+        let stalls = &find(&checks, "run-stalls").message;
+        assert!(stalls.contains("0 time(s)") && stalls.contains("longest wait was 90 ms"), "{stalls}");
         let mic = &find(&checks, "run-sound-microphone").message;
         assert!(
             mic.contains("ran faster than the computer's clock by 180 ms") && mic.contains("50 parts per million"),
             "{mic}"
         );
-        assert!(mic.contains("38 ms later, and 12 ms earlier") && !mic.contains("more than"), "{mic}");
+        assert!(
+            mic.contains("38 ms later than its picture (at 2:05), and 12 ms earlier (at 33:20)")
+                && !mic.contains("more than"),
+            "{mic}"
+        );
         let system = &find(&checks, "run-sound-system").message;
         assert!(system.contains("1600000 ms was filled in as silence while the computer was quiet"), "{system}");
+        assert!(
+            find(&checks, "run-sound-system").ok,
+            "a quiet computer sends nothing, which must not be taken for sound arriving early"
+        );
+        assert!(!system.contains("earlier"), "{system}");
     }
 
     #[test]
-    fn a_program_that_fell_behind_says_the_video_may_look_jerky() {
-        let r = RecordingReport { beats_skipped: 5_000, ..good() };
+    fn a_program_that_fell_behind_says_the_video_may_look_jerky_and_how_often_it_looked() {
+        let mut r = RecordingReport { beats_skipped: 5_000, ..good() };
+        r.looks.average_gap_ms = 38.0;
+        r.looks.gaps_over_50_ms = 900;
         let c = summarize(&r);
         let s = find(&c, "run-summary");
         assert!(!s.ok && s.message.contains("may look jerky"), "{}", s.message);
+        assert!(
+            s.message.contains("looked at the screen every 38 ms on average")
+                && s.message.contains("900 of the 700000 looks"),
+            "{}",
+            s.message
+        );
+    }
+
+    #[test]
+    fn long_waits_are_listed_with_what_the_program_was_doing() {
+        let mut r = good();
+        r.looks.longest_gap_ms = 650;
+        r.looks.gaps_over_100_ms = 31;
+        r.looks.slow_moments =
+            vec![SlowMoment { at_ms: 192_000, gap_ms: 650, picture_ms: 3, sound_ms: 1, saving_ms: 640 }];
+        let c = summarize(&r);
+        let stalls = find(&c, "run-stalls");
+        assert!(!stalls.ok);
+        assert!(
+            stalls.message.contains("31 time(s)")
+                && stalls.message.contains("650 ms at 3:12")
+                && stalls.message.contains("saving to disk took 640 ms"),
+            "{}",
+            stalls.message
+        );
     }
 
     #[test]
@@ -250,13 +375,16 @@ mod tests {
     }
 
     #[test]
-    fn sound_that_wandered_too_far_from_its_picture_fails_with_the_numbers() {
+    fn a_microphone_that_wandered_too_far_from_its_picture_fails_with_the_numbers_and_when() {
         let mut r = good();
         r.tracks[0].worst_later_ms = 75;
+        r.tracks[0].worst_later_at_ms = 61_000;
         let c = summarize(&r);
         let m = find(&c, "run-sound-microphone");
         assert!(
-            !m.ok && m.message.contains("75 ms later") && m.message.contains("more than the 40 ms allowed"),
+            !m.ok
+                && m.message.contains("75 ms later than its picture (at 1:01)")
+                && m.message.contains("more than the 40 ms allowed"),
             "{}",
             m.message
         );
@@ -264,10 +392,19 @@ mod tests {
     }
 
     #[test]
+    fn the_computers_sound_is_judged_only_on_playing_late_not_on_silence() {
+        let mut r = good();
+        r.tracks[1].worst_later_ms = 120;
+        let c = summarize(&r);
+        let m = find(&c, "run-sound-system");
+        assert!(!m.ok && m.message.contains("120 ms later than its picture"), "{}", m.message);
+    }
+
+    #[test]
     fn a_short_recording_with_nothing_measured_still_reports_what_it_can() {
         let r = RecordingReport { recorded_ms: 5_000, pictures_written: 150, ..RecordingReport::default() };
         let c = summarize(&r);
-        assert_eq!(c.len(), 1, "no cpu, memory or sound numbers were measured, so none are claimed");
+        assert_eq!(c.len(), 1, "no cpu, memory, look or sound numbers were measured, so none are claimed");
         assert!(c[0].message.starts_with("Recorded 0:05."));
     }
 

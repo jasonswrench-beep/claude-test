@@ -12,7 +12,7 @@
 //! steady frame rate (see [`Pacer`]).
 
 use crate::audio::{AudioPlatform, CHANNELS, SAMPLE_RATE};
-use crate::report::RecordingReport;
+use crate::report::{LookStats, RecordingReport, SlowMoment};
 use crate::sound::{Sound, SoundPlan, SoundTake, MIXED_BITRATE_KBPS};
 use crate::video::{AudioSpec, Pacer};
 use crate::{Frame, FrameSource, Platform, SinkSpec, VideoPlatform, VideoSink};
@@ -135,6 +135,7 @@ impl MediaFactory for ScreenMedia {
         };
         let prepared_at = started.elapsed();
         let Prepared { source, first, listening, .. } = prepared;
+        let dropped_at_start = source.dropped();
 
         let spec = SinkSpec {
             path: take_dir.join(SCREEN_FILE),
@@ -182,6 +183,8 @@ impl MediaFactory for ScreenMedia {
             memory_peak_mb: memory_now,
             next_sample_ms: SAMPLE_EVERY_MS,
             pictures_replaced: 0,
+            dropped_at_start,
+            looks: LookTracker::default(),
         }))
     }
 }
@@ -287,6 +290,77 @@ struct ScreenTake {
     memory_peak_mb: Option<f64>,
     next_sample_ms: u64,
     pictures_replaced: u64,
+    /// Pictures Windows had already thrown away before recording began (while the countdown ran, nobody was taking them).
+    dropped_at_start: u64,
+    looks: LookTracker,
+}
+
+/// Keeps track of how regularly the program looks at the screen and the sound, and what it was busy
+/// with when it went a long time without.
+#[derive(Default)]
+struct LookTracker {
+    last: Option<Instant>,
+    count: u64,
+    total_gap: Duration,
+    longest: Duration,
+    over_50: u64,
+    over_100: u64,
+    slow: Vec<SlowMoment>,
+    /// How long the previous look took for the picture and for the sound.
+    last_picture: Duration,
+    last_sound: Duration,
+    /// How long saving to disk has taken since the previous look.
+    saving_since: Duration,
+}
+
+/// How many of the longest waits are remembered.
+const SLOW_MOMENTS_KEPT: usize = 6;
+
+impl LookTracker {
+    /// The program looks now, at recording time `media_ms`.
+    fn looked_at(&mut self, now: Instant, media_ms: u64) {
+        if let Some(previous) = self.last {
+            let gap = now.saturating_duration_since(previous);
+            self.count += 1;
+            self.total_gap += gap;
+            self.longest = self.longest.max(gap);
+            self.over_50 += (gap > Duration::from_millis(50)) as u64;
+            if gap > Duration::from_millis(100) {
+                self.over_100 += 1;
+                self.slow.push(SlowMoment {
+                    at_ms: media_ms,
+                    gap_ms: gap.as_millis() as u64,
+                    picture_ms: self.last_picture.as_millis() as u64,
+                    sound_ms: self.last_sound.as_millis() as u64,
+                    saving_ms: self.saving_since.as_millis() as u64,
+                });
+                self.slow.sort_by_key(|m| std::cmp::Reverse(m.gap_ms));
+                self.slow.truncate(SLOW_MOMENTS_KEPT);
+            }
+        }
+        self.last = Some(now);
+        self.saving_since = Duration::ZERO;
+    }
+
+    /// Recording was paused: the long wait until the next look is the pause, not a stall.
+    fn forget(&mut self) {
+        self.last = None;
+    }
+
+    fn stats(self) -> LookStats {
+        LookStats {
+            looks: self.count,
+            average_gap_ms: if self.count == 0 {
+                0.0
+            } else {
+                self.total_gap.as_secs_f64() * 1000.0 / self.count as f64
+            },
+            longest_gap_ms: self.longest.as_millis() as u64,
+            gaps_over_50_ms: self.over_50,
+            gaps_over_100_ms: self.over_100,
+            slow_moments: self.slow,
+        }
+    }
 }
 
 /// How often memory use is looked at, in recording time.
@@ -325,6 +399,8 @@ impl ScreenTake {
 
 impl TakeMedia for ScreenTake {
     fn pump(&mut self, media_ms: u64) -> Result<(), SessionError> {
+        self.looks.looked_at(Instant::now(), media_ms);
+        let picture_started = Instant::now();
         if let Some(source) = self.source.as_mut() {
             while let Some(newer) = source.next_frame(Duration::ZERO) {
                 self.latest = newer;
@@ -333,9 +409,12 @@ impl TakeMedia for ScreenTake {
         if let Some(beat) = self.pacer.due(Duration::from_millis(media_ms)) {
             self.write_beat(beat)?;
         }
+        self.looks.last_picture = picture_started.elapsed();
+        let sound_started = Instant::now();
         if let (Some(sound), Some(sink)) = (self.sound.as_mut(), self.sink.as_mut()) {
             sound.pump(media_ms, sink.as_mut())?;
         }
+        self.looks.last_sound = sound_started.elapsed();
         if media_ms >= self.next_sample_ms {
             self.next_sample_ms = media_ms - media_ms % SAMPLE_EVERY_MS + SAMPLE_EVERY_MS;
             self.sample_resources(media_ms);
@@ -346,10 +425,13 @@ impl TakeMedia for ScreenTake {
     fn flush(&mut self) -> Result<(), SessionError> {
         // Windows' writer closes a fragment about once a second by itself; the separate sound files are
         // pushed to the disk here, with their lengths recorded, so a crash costs about a second of them.
-        match self.sound.as_mut() {
+        let started = Instant::now();
+        let result = match self.sound.as_mut() {
             Some(sound) => sound.sync(),
             None => Ok(()),
-        }
+        };
+        self.looks.saving_since += started.elapsed();
+        result
     }
 
     fn levels(&self, _media_ms: u64) -> Vec<(&'static str, f32)> {
@@ -357,6 +439,7 @@ impl TakeMedia for ScreenTake {
     }
 
     fn paused(&mut self) {
+        self.looks.forget();
         // The microphone keeps running while recording time stands still; what it hears is not kept.
         if let Some(sound) = self.sound.as_mut() {
             sound.pause();
@@ -364,6 +447,7 @@ impl TakeMedia for ScreenTake {
     }
 
     fn resumed(&mut self) {
+        self.looks.forget();
         if let Some(sound) = self.sound.as_mut() {
             sound.resume();
         }
@@ -371,7 +455,7 @@ impl TakeMedia for ScreenTake {
 
     fn finish(mut self: Box<Self>, media_ms: u64) -> Result<u32, SessionError> {
         // Stop taking pictures first, so nothing arrives while the file is being completed.
-        self.pictures_replaced = self.source.as_ref().map_or(0, |s| s.dropped());
+        self.pictures_replaced = self.source.as_ref().map_or(0, |s| s.dropped()).saturating_sub(self.dropped_at_start);
         self.source = None;
         if self.written == 0 {
             // A recording stopped at once still gets one picture, so the file is a valid video.
@@ -399,6 +483,7 @@ impl TakeMedia for ScreenTake {
             memory_first_mb: self.memory_first_mb,
             memory_peak_mb: self.memory_peak_mb,
             tracks,
+            looks: std::mem::take(&mut self.looks).stats(),
         });
         sink.finish().map_err(|e| media_error(format!("The video file could not be completed: {e}")))?;
         Ok(files)
@@ -950,7 +1035,7 @@ mod tests {
 
         let checks = crate::summarize(&r);
         let names: Vec<_> = checks.iter().map(|c| c.check.as_str()).collect();
-        assert_eq!(names, ["run-summary", "run-memory", "run-sound-microphone", "run-sound-system"]);
+        assert_eq!(names, ["run-summary", "run-stalls", "run-memory", "run-sound-microphone", "run-sound-system"]);
     }
 
     #[test]
@@ -1081,5 +1166,74 @@ mod tests {
         let out = run_session(&cfg, &media, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
         assert!(out.ok, "the real recording went ahead");
         assert_eq!(files.0.borrow().len(), 1);
+    }
+
+    // ---- watching how regularly the program looks ----
+
+    #[test]
+    fn steady_looks_are_counted_and_long_waits_are_remembered_with_what_filled_them() {
+        let base = Instant::now();
+        let at = |ms: u64| base + Duration::from_millis(ms);
+        let mut t = LookTracker::default();
+        t.looked_at(at(0), 0);
+        t.looked_at(at(20), 20);
+        t.looked_at(at(60), 60); // 40 ms: late, but not a stall
+        t.last_picture = Duration::from_millis(3);
+        t.last_sound = Duration::from_millis(1);
+        t.saving_since = Duration::from_millis(640);
+        t.looked_at(at(710), 710); // a wait of 650 ms
+        t.looked_at(at(730), 730);
+        let s = t.stats();
+        assert_eq!(s.looks, 4);
+        assert_eq!((s.gaps_over_50_ms, s.gaps_over_100_ms, s.longest_gap_ms), (1, 1, 650));
+        assert!((s.average_gap_ms - 182.5).abs() < 0.1, "{}", s.average_gap_ms);
+        assert_eq!(
+            s.slow_moments,
+            vec![SlowMoment { at_ms: 710, gap_ms: 650, picture_ms: 3, sound_ms: 1, saving_ms: 640 }]
+        );
+    }
+
+    #[test]
+    fn the_time_spent_paused_is_not_counted_as_a_stall() {
+        let base = Instant::now();
+        let at = |ms: u64| base + Duration::from_millis(ms);
+        let mut t = LookTracker::default();
+        t.looked_at(at(0), 0);
+        t.looked_at(at(20), 20);
+        t.forget(); // paused
+        t.looked_at(at(20_000), 20); // resumed twenty seconds later
+        t.looked_at(at(20_020), 40);
+        let s = t.stats();
+        assert_eq!((s.looks, s.gaps_over_100_ms, s.longest_gap_ms), (2, 0, 20));
+    }
+
+    #[test]
+    fn only_the_worst_few_long_waits_are_kept_longest_first() {
+        let base = Instant::now();
+        let mut t = LookTracker::default();
+        let mut now = 0;
+        t.looked_at(base, 0);
+        for gap in [200u64, 900, 300, 150, 700, 400, 250, 120] {
+            now += gap;
+            t.looked_at(base + Duration::from_millis(now), now);
+        }
+        let s = t.stats();
+        assert_eq!(s.gaps_over_100_ms, 8);
+        let kept: Vec<u64> = s.slow_moments.iter().map(|m| m.gap_ms).collect();
+        assert_eq!(kept, vec![900, 700, 400, 300, 250, 200]);
+    }
+
+    #[test]
+    fn the_report_of_a_take_says_how_regularly_it_looked_and_ignores_the_countdown_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 1000;
+        let (media, _files) = factory(good_screen());
+        let report = media.report_handle();
+        let mut input = ScriptedInput::new(vec![(4000, Input::Command(Command::Stop))]);
+        run_session(&cfg, &media, &mut input, &mut VecSink::default(), &ManualClock::new()).unwrap();
+        let r = report.borrow().clone().unwrap();
+        assert!(r.looks.looks > 100, "the program looked at the screen over and over: {}", r.looks.looks);
+        assert_eq!(r.pictures_replaced, 0, "nothing was thrown away while recording");
     }
 }

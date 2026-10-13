@@ -24,7 +24,7 @@ use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
     describe_devices, plan_sound, run_audio_test, run_find_output, run_screen_test, run_timing_test, run_video_test,
     summarize, system_audio_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check,
-    DeviceKind, FindOutputOptions, ScreenMedia, ScreenTestOptions, SoundPlan, TimingTestOptions, VideoTestOptions,
+    DeviceKind, FindOutputOptions, Mix, ScreenMedia, ScreenTestOptions, SoundPlan, TimingTestOptions, VideoTestOptions,
     MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
@@ -517,6 +517,11 @@ fn main() -> ExitCode {
             cfg.flush_ms = flush_ms.max(1);
             cfg.max_duration_ms = duration_ms;
             cfg.stop_when_input_closes = !ignore_stdin_eof;
+            if source == "screen" {
+                // Look at the screen and the sound every 5 ms, not every 20: a steady 30 pictures a second needs
+                // a look at least every 33 ms, and Windows' sleeping is coarse, so a 20 ms wait can become 30 or 45.
+                cfg.tick_ms = 5;
+            }
 
             let mut input: Box<dyn InputSource> = match demo_script {
                 Some(script) => match demo::parse(&script) {
@@ -557,7 +562,14 @@ fn main() -> ExitCode {
                         // change the exit code.
                         if sound_plan.microphone.is_some() && sound_plan.system.is_some() {
                             // How loud the two were next to each other, and what to change if the voice is hard to hear.
-                            match check_balance_in_files(&dir.join(MIC_FILE), &dir.join(SYSTEM_FILE)) {
+                            match check_balance_in_files(
+                                &dir.join(MIC_FILE),
+                                &dir.join(SYSTEM_FILE),
+                                Mix {
+                                    microphone_db: sound_plan.microphone_gain_db,
+                                    system_db: sound_plan.system_gain_db,
+                                },
+                            ) {
                                 Ok(finding) => {
                                     sink.emit(Event::Check {
                                         check: finding.check.check,

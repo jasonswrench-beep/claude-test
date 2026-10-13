@@ -34,6 +34,9 @@ pub const MIXED_BITRATE_KBPS: u32 = 128;
 pub const MIN_GAIN_DB: i32 = -40;
 pub const MAX_GAIN_DB: i32 = 20;
 
+/// How often the sound files are made certain to be on the disk itself, not only handed to the operating system.
+const DISK_SYNC_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Names used in `level` events.
 const MIC_LEVEL: &str = "mic";
 const SYSTEM_LEVEL: &str = "system";
@@ -252,7 +255,7 @@ impl OpenSound {
                 captured_frames: 0,
             });
         }
-        Ok(SoundTake { tracks, mixed_frames: 0 })
+        Ok(SoundTake { tracks, mixed_frames: 0, last_disk_sync: std::time::Instant::now() })
     }
 }
 
@@ -279,6 +282,8 @@ fn scaled(sample: i16, gain: f32) -> i16 {
 /// The sound of one take, while it is being recorded.
 pub(crate) struct SoundTake {
     tracks: Vec<Track>,
+    /// When the sound files were last made certain to be on the disk itself.
+    last_disk_sync: std::time::Instant,
     /// How much mixed sound has gone into the video, in frames.
     mixed_frames: u64,
 }
@@ -333,8 +338,15 @@ impl SoundTake {
 
     /// Push everything written so far to the disk, so a crash loses only what came after.
     pub(crate) fn sync(&mut self) -> Result<(), SessionError> {
+        // Every time: hand the sound to the operating system and record its length. Now and then: wait for
+        // the disk too. Waiting for the disk every second can stall everything else on a slow disk.
+        let to_disk = self.last_disk_sync.elapsed() >= DISK_SYNC_EVERY;
         for t in &mut self.tracks {
-            t.wav.sync().map_err(|e| media_error(format!("Saving the {} file failed: {e}", t.kind.label())))?;
+            let result = if to_disk { t.wav.sync_to_disk() } else { t.wav.sync() };
+            result.map_err(|e| media_error(format!("Saving the {} file failed: {e}", t.kind.label())))?;
+        }
+        if to_disk {
+            self.last_disk_sync = std::time::Instant::now();
         }
         Ok(())
     }
@@ -374,7 +386,9 @@ impl SoundTake {
                 padded_ms: t.aligner.padded_ms(),
                 trimmed_ms: t.aligner.trimmed_ms(),
                 worst_later_ms: t.aligner.worst_ahead_ms(),
+                worst_later_at_ms: t.aligner.worst_ahead_at_ms(),
                 worst_earlier_ms: t.aligner.worst_late_ms(),
+                worst_earlier_at_ms: t.aligner.worst_late_at_ms(),
                 lost_moments: t.source.discontinuities(),
             })
             .collect()

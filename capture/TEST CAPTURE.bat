@@ -83,6 +83,13 @@ echo ------------------------------------------------------------
 echo.
 echo That is useful news, not a disaster: it means a problem was found
 echo before anyone relied on this. Nothing on your computer was harmed.
+echo.
+echo HINT: if the error says something was not found, or that a variant is
+echo missing, this folder is probably a MIX of old and new files. That can
+echo happen when a new ZIP is extracted over an old folder and some files
+echo are skipped. Fix: extract the ZIP into a NEW, empty folder and run the
+echo script from there.
+echo.
 echo Please send me the file test-log.txt from this folder. The last
 echo lines are shown below.
 echo.

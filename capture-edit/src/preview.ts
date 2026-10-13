@@ -5,14 +5,27 @@
  * moment (story C4), so the result can be checked without seeing it.
  */
 
-import { clipEndMs, clipLengthMs, findSource, modelLengthMs, type Clip, type Model, type Track } from "./model.ts";
+import {
+  clipEndMs,
+  clipLengthMs,
+  findItem,
+  findSource,
+  itemEndMs,
+  modelLengthMs,
+  type Clip,
+  type Item,
+  type Model,
+  type Track,
+} from "./model.ts";
+import { describeMagnification, describePlace } from "./regions.ts";
 import { describeLength, describeTime, wholeMs } from "./time.ts";
-import { validate } from "./validate.ts";
+import { itemKindName, validate } from "./validate.ts";
 
 /** One row of the clip list. */
 export interface Row {
   readonly trackId: string;
   readonly trackName: string;
+  /** The id of the clip, or of the overlay or zoom (the list holds both). */
   readonly clipId: string;
   readonly name: string;
   /** What the clip holds, such as "Screen" or "Image". */
@@ -20,8 +33,25 @@ export interface Row {
   readonly startMs: number;
   readonly lengthMs: number;
   readonly endMs: number;
-  /** In words: "ready", "muted", "needs attention" or "has a problem". */
+  /** In words: "ready", "muted", "needs attention", "has a warning" or "has a problem". */
   readonly state: string;
+}
+
+function stateOf(problems: readonly { severity: string }[], muted: boolean): string {
+  return problems.some((p) => p.severity === "error")
+    ? "has a problem"
+    : problems.some((p) => p.severity === "needs-attention")
+      ? "needs attention"
+      : problems.some((p) => p.severity === "warning")
+        ? "has a warning"
+        : muted
+          ? "muted"
+          : "ready";
+}
+
+function itemTypeName(item: Item): string {
+  const name = itemKindName(item);
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 /** The column headers of the list, in order. */
@@ -56,13 +86,7 @@ export function listRows(model: Model): Row[] {
   for (const track of model.tracks) {
     for (const clip of track.clips) {
       const mine = problems.filter((p) => p.clipId === clip.id);
-      const state = mine.some((p) => p.severity === "error")
-        ? "has a problem"
-        : mine.length > 0
-          ? "needs attention"
-          : clip.muted
-            ? "muted"
-            : "ready";
+      const state = stateOf(mine, clip.muted);
       rows.push({
         trackId: track.id,
         trackName: track.name,
@@ -75,6 +99,22 @@ export function listRows(model: Model): Row[] {
         state,
       });
     }
+    for (const item of track.items) {
+      rows.push({
+        trackId: track.id,
+        trackName: track.name,
+        clipId: item.id,
+        name: item.name,
+        type: itemTypeName(item),
+        startMs: item.startMs,
+        lengthMs: item.durationMs,
+        endMs: itemEndMs(item),
+        state: stateOf(
+          problems.filter((p) => p.itemId === item.id),
+          false,
+        ),
+      });
+    }
   }
   return rows;
 }
@@ -82,8 +122,10 @@ export function listRows(model: Model): Row[] {
 /** A caption for the list: how much it holds. */
 export function listCaption(model: Model): string {
   const clips = model.tracks.reduce((n, t) => n + t.clips.length, 0);
+  const items = model.tracks.reduce((n, t) => n + t.items.length, 0);
   const tracks = model.tracks.length;
-  return `Tracks and clips: ${clips} ${clips === 1 ? "clip" : "clips"} on ${tracks} ${tracks === 1 ? "track" : "tracks"}, ${describeLength(modelLengthMs(model))} long.`;
+  const extra = items > 0 ? `, ${items} ${items === 1 ? "overlay or zoom" : "overlays and zooms"}` : "";
+  return `Tracks and clips: ${clips} ${clips === 1 ? "clip" : "clips"}${extra} on ${tracks} ${tracks === 1 ? "track" : "tracks"}, ${describeLength(modelLengthMs(model))} long.`;
 }
 
 /** One clip in a sentence, as it is read when it takes focus. */
@@ -105,7 +147,38 @@ export function describeClip(model: Model, clipId: string): string {
     if (row !== undefined && row.state !== "ready" && row.state !== "muted") parts.push(row.state);
     return parts.join(", ") + ".";
   }
+  const found = findItem(model, clipId);
+  if (found !== undefined) return describeItem(found.item, found.track.name, model);
   return `There is no clip with the id ${clipId}.`;
+}
+
+/** An overlay or zoom in one sentence, as it is read when it takes focus. */
+export function describeItem(item: Item, trackName: string, model?: Model): string {
+  const parts = [
+    `${item.name}, ${itemKindName(item)} on the ${trackName} track`,
+    `starts at ${describeTime(item.startMs)}`,
+    `${describeLength(item.durationMs)} long`,
+    `ends at ${describeTime(itemEndMs(item))}`,
+  ];
+  switch (item.kind) {
+    case "text":
+      parts.push(`says: ${item.text}`, `in ${describePlace(item.rect)} of the picture`);
+      break;
+    case "zoom":
+      parts.push(`${describeMagnification(item.rect)} on ${describePlace(item.rect)} of the picture`);
+      if (item.description !== "") parts.push(item.description);
+      break;
+    case "shape":
+    case "arrow":
+      if (item.decorative === true) parts.push("decorative");
+      else if (item.altText !== undefined && item.altText !== "") parts.push(item.altText);
+      break;
+    default:
+      parts.push(`over ${describePlace(item.rect)} of the picture`);
+  }
+  const state = model === undefined ? undefined : stateOf(validate(model).filter((p) => p.itemId === item.id), false);
+  if (state !== undefined && state !== "ready") parts.push(state);
+  return parts.join(", ") + ".";
 }
 
 /** What other parts of the editor know about the picture at a moment. Each is optional. */
@@ -155,13 +228,31 @@ export function describeAt(model: Model, timeMs: number, context: PreviewContext
   }
   if (context.window !== undefined) sentences.push(`Window in front: ${context.window}.`);
   if (context.cursorTarget !== undefined) sentences.push(`The cursor is over ${context.cursorTarget}.`);
-  sentences.push(
-    context.overlays === undefined || context.overlays.length === 0
-      ? "No overlays showing."
-      : `Overlays showing: ${context.overlays.join("; ")}.`,
-  );
+
+  // Overlays and the zoom come from the edit itself; the rest of the editor may add to them.
+  const showing: string[] = [];
+  let zoom: string | undefined;
+  for (const track of model.tracks) {
+    for (const item of track.items) {
+      if (!(item.startMs <= at && at < itemEndMs(item))) continue;
+      if (item.kind === "zoom") {
+        zoom = `${describeMagnification(item.rect)} on ${describePlace(item.rect)} of the picture${item.description === "" ? "" : `, showing ${item.description}`}`;
+      } else if (item.kind === "text") {
+        showing.push(`text "${item.text}"`);
+      } else if (item.kind === "blur") {
+        showing.push(`a blur over ${describePlace(item.rect)} of the picture`);
+      } else if (item.kind === "redact") {
+        showing.push(`a redaction over ${describePlace(item.rect)} of the picture`);
+      } else {
+        showing.push(`${itemKindName(item)}${item.decorative === true || item.altText === undefined || item.altText === "" ? "" : `: ${item.altText}`}`);
+      }
+    }
+  }
+  showing.push(...(context.overlays ?? []));
+  sentences.push(showing.length === 0 ? "No overlays showing." : `Overlays showing: ${showing.join("; ")}.`);
   sentences.push(context.caption === undefined ? "No caption showing." : `Caption: ${context.caption}`);
-  sentences.push(context.zoom === undefined ? "Zoom: none." : `Zoom: ${context.zoom}.`);
+  const zoomText = context.zoom ?? zoom;
+  sentences.push(zoomText === undefined ? "Zoom: none." : `Zoom: ${zoomText}.`);
   return sentences.join(" ");
 }
 

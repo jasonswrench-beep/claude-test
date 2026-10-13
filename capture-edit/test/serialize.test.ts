@@ -58,7 +58,7 @@ test("a file that is not an edit, or is a version this program does not read, is
     ["not json at all", /not a readable edit file/],
     ["[]", /not an OpenStage Capture edit file/],
     ['{"format":"something-else"}', /not an OpenStage Capture edit file/],
-    ['{"format":"openstage-capture-edit","schemaVersion":"0.2.0"}', /version 0.2.0, and this program reads version 0.1 only/],
+    ['{"format":"openstage-capture-edit","schemaVersion":"0.3.0"}', /version 0.3.0, and this program reads versions 0.1 and 0.2/],
     ['{"format":"openstage-capture-edit"}', /version undefined/],
     ['{"format":"openstage-capture-edit","schemaVersion":"0.1.0","nextId":1,"sources":[],"tracks":[{"id":"t","kind":"hologram","name":"x","clips":[]}]}', /does not know: hologram/],
     ['{"format":"openstage-capture-edit","schemaVersion":"0.1.0","nextId":"x","sources":[],"tracks":[]}', /nextId is missing or is not a number/],

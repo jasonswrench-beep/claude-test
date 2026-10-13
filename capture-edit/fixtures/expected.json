@@ -1,61 +1,28 @@
 {
   "comment": "What every reader of an edit file must find in each fixture: whether it can be read, and the problems as code:severity, sorted. Written by hand from what each fixture is meant to show; the TypeScript and Rust readers must both agree with it.",
   "fixtures": {
-    "valid-basic.json": {
-      "readable": true,
-      "problems": []
-    },
-    "valid-with-imports.json": {
-      "readable": true,
-      "problems": []
-    },
-    "needs-attention.json": {
+    "bad-color.json": {
       "readable": true,
       "problems": [
-        "needs-alt-text:needs-attention",
-        "needs-text-alternative:needs-attention"
+        "bad-color:error"
       ]
     },
-    "overlap.json": {
+    "bad-item-time.json": {
       "readable": true,
       "problems": [
-        "overlap:error"
+        "bad-time:error"
       ]
     },
-    "unsorted.json": {
+    "bad-rect.json": {
       "readable": true,
       "problems": [
-        "unsorted:error"
+        "bad-rect:error"
       ]
     },
-    "beyond-source.json": {
+    "bad-style.json": {
       "readable": true,
       "problems": [
-        "beyond-source:error"
-      ]
-    },
-    "unknown-source.json": {
-      "readable": true,
-      "problems": [
-        "unknown-source:error"
-      ]
-    },
-    "source-not-allowed.json": {
-      "readable": true,
-      "problems": [
-        "source-not-allowed:error"
-      ]
-    },
-    "fade-too-long.json": {
-      "readable": true,
-      "problems": [
-        "fade-too-long:error"
-      ]
-    },
-    "volume-range.json": {
-      "readable": true,
-      "problems": [
-        "volume-range:error"
+        "bad-style:error"
       ]
     },
     "bad-time.json": {
@@ -64,10 +31,14 @@
         "bad-time:error"
       ]
     },
-    "too-short.json": {
+    "bad-track-kind.json": {
+      "readable": false,
+      "problems": []
+    },
+    "beyond-source.json": {
       "readable": true,
       "problems": [
-        "too-short:error"
+        "beyond-source:error"
       ]
     },
     "duplicate-id.json": {
@@ -76,23 +47,141 @@
         "duplicate-id:error"
       ]
     },
+    "fade-too-long.json": {
+      "readable": true,
+      "problems": [
+        "fade-too-long:error"
+      ]
+    },
+    "future-version.json": {
+      "readable": false,
+      "problems": []
+    },
     "imported-video-too-long.json": {
       "readable": true,
       "problems": [
         "imported-video-too-long:error"
       ]
     },
+    "item-too-short.json": {
+      "readable": true,
+      "problems": [
+        "too-short:error"
+      ]
+    },
+    "item-wrong-track.json": {
+      "readable": true,
+      "problems": [
+        "item-wrong-track:error"
+      ]
+    },
+    "needs-attention.json": {
+      "readable": true,
+      "problems": [
+        "needs-alt-text:needs-attention",
+        "needs-text-alternative:needs-attention"
+      ]
+    },
+    "needs-item-attention.json": {
+      "readable": true,
+      "problems": [
+        "needs-alt-text:needs-attention",
+        "needs-description:needs-attention"
+      ]
+    },
     "not-an-edit.json": {
       "readable": false,
       "problems": []
     },
-    "future-version.json": {
+    "overlap.json": {
+      "readable": true,
+      "problems": [
+        "overlap:error"
+      ]
+    },
+    "source-not-allowed.json": {
+      "readable": true,
+      "problems": [
+        "source-not-allowed:error"
+      ]
+    },
+    "text-empty.json": {
+      "readable": true,
+      "problems": [
+        "text-empty:error"
+      ]
+    },
+    "too-many-zooms.json": {
+      "readable": true,
+      "problems": [
+        "too-many-zooms:error"
+      ]
+    },
+    "too-short.json": {
+      "readable": true,
+      "problems": [
+        "too-short:error"
+      ]
+    },
+    "transition-too-long.json": {
+      "readable": true,
+      "problems": [
+        "transition-too-long:error"
+      ]
+    },
+    "unknown-item-kind.json": {
       "readable": false,
       "problems": []
     },
-    "bad-track-kind.json": {
-      "readable": false,
+    "unknown-source.json": {
+      "readable": true,
+      "problems": [
+        "unknown-source:error"
+      ]
+    },
+    "unsorted-items.json": {
+      "readable": true,
+      "problems": [
+        "unsorted:error"
+      ]
+    },
+    "unsorted.json": {
+      "readable": true,
+      "problems": [
+        "unsorted:error"
+      ]
+    },
+    "valid-basic.json": {
+      "readable": true,
       "problems": []
+    },
+    "valid-with-imports.json": {
+      "readable": true,
+      "problems": []
+    },
+    "valid-with-overlays.json": {
+      "readable": true,
+      "problems": []
+    },
+    "volume-range.json": {
+      "readable": true,
+      "problems": [
+        "volume-range:error"
+      ]
+    },
+    "warnings.json": {
+      "readable": true,
+      "problems": [
+        "low-contrast:warning",
+        "text-too-small:warning",
+        "zoom-aspect:warning"
+      ]
+    },
+    "zoom-overlap.json": {
+      "readable": true,
+      "problems": [
+        "overlap:error"
+      ]
     }
   }
 }

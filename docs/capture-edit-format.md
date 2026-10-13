@@ -1,8 +1,8 @@
 # OpenStage Capture: Edit Format and Edit Model
 
-**Status:** v0.1 (matches the code in `capture-edit/` and `capture/crates/openstage-capture-project/src/edit.rs`)
+**Status:** v0.2 (matches the code in `capture-edit/` and `capture/crates/openstage-capture-project/src/edit.rs`)
 **Format name:** `openstage-capture-edit`
-**Schema version:** `0.1.0`
+**Schema version:** `0.2.0` (files at `0.1.x` still open and are brought up to date: see section 7)
 
 This is the file that records what the author has done to a recording: which parts of the recording
 are kept, where they sit on a timeline, and how loud they are. It is called an *edit decision list*. The
@@ -47,14 +47,29 @@ indents and a closing new line, so saving the same edit twice gives the same byt
 
 | Field | Meaning |
 |---|---|
-| `format`, `schemaVersion` | A reader refuses a file whose `format` is not this one, and one whose version does not start with `0.1.`. The message says so in words. |
+| `format`, `schemaVersion` | A reader refuses a file whose `format` is not this one, and one whose version does not start with `0.1.` or `0.2.`. The message says so in words. |
 | `nextId` | The number the next track or clip id is made from (`track-4`, `clip-9`). Ids are never reused. |
 | `sources` | Every file the clips may use, with what it is and how long it is. `ref` is either a file of a recording (`take` and `media`, as listed in that take's `take.json`) or a file from the course's assets (`asset`). `kind` is `screen`, `webcam`, `microphone`, `system-audio`, `image`, `audio` or `video`. `durationMs` is its natural length, or `null` for a still image, which can be shown for any length. `hasTextAlternative` (imported video and sound only) says whether it has captions, a narration script or a transcript. |
-| `tracks` | In the order shown. `kind` is `screen`, `webcam`, `audio` or `media` (imported images, sound and short video). A track takes only some kinds of source: screen takes `screen`; webcam takes `webcam`; audio takes `microphone`, `system-audio` and `audio`; media takes `image`, `video` and `audio`. |
+| `tracks` | In the order shown. `kind` is `screen`, `webcam`, `audio` or `media` (imported images, sound and short video), which hold `clips`; or `overlay` or `zoom`, which hold `items` (new in 0.2: see section 3). A clip track takes only some kinds of source: screen takes `screen`; webcam takes `webcam`; audio takes `microphone`, `system-audio` and `audio`; media takes `image`, `video` and `audio`. |
 | clip `source`, `sourceStartMs`, `sourceEndMs` | The part of the source that is used, in the source's own time. A still image always has `sourceStartMs` 0 and a `sourceEndMs` equal to how long it is shown. |
 | clip `startMs` | Where on the timeline the clip begins. It ends `sourceEndMs - sourceStartMs` later. A track's clips are in order of start and never overlap. |
 | clip `muted`, `volumeDb`, `fadeInMs`, `fadeOutMs` | Basic sound settings (story C9): off, louder or quieter in whole decibels from -40 to 20 (about 6 decibels is double or half), and fades. The fades together cannot be longer than the clip. |
 | clip `altText`, `decorative` | For an image: what it shows, or that it is decorative. One of them is required (story C10). |
+
+### Overlays and zooms (new in 0.2)
+
+An `overlay` track holds text, shapes, arrows, blur and redaction; a `zoom` track holds zooms. They are not cut from a recording, so they are `items`, not clips: each has an `id`, a `kind`, a `name`, a `startMs` and a `durationMs`. Overlays on one track may overlap in time (later ones are drawn on top); zooms may not.
+
+Positions are **rectangles in ten-thousandths of the picture's width and height**, measured from its top left corner (`{"x": 2500, "y": 2500, "width": 5000, "height": 5000}` is the middle quarter). That means the same thing at any video size and is always a whole number. Authors type pixels; the editor converts. Colours are written `#RRGGBB`.
+
+| Kind | Fields besides the common ones |
+|---|---|
+| `text` (story C7) | `text`, `rect`, `fontSizeBp` (height of a line, in ten-thousandths of the picture's height), `color`, `background` (a colour or `null`), `bold`, `align` (`left`, `center`, `right`). The text is also part of the transcript. |
+| `shape` (C8) | `shape` (`rectangle` or `ellipse`), `rect`, `outline`, `fill` (or `null`), `lineWidthBp`, and `altText` or `decorative`. |
+| `arrow` (C8) | `from` and `to` (points `{x, y}`), `color`, `lineWidthBp`, and `altText` or `decorative`. |
+| `blur` (C8) | `rect`. A blur in the exported video cannot be undone by the viewer, and the editor says so. |
+| `redact` (C8) | `rect`, `color`. The same. |
+| `zoom` (C5) | `rect` (the part that fills the frame), `transitionMs` (how long moving in and moving out each take; 500 by default), `description` (what it shows, in words, so a zoom is not only a picture). |
 
 ## 3. What is checked
 
@@ -77,6 +92,22 @@ still missing; the author is asked for it, and export refuses to finish until it
 | `imported-video-too-long` | error | An imported video clip is over 30 seconds (story C10). |
 | `needs-alt-text` | needs-attention | An image has no alt text and is not marked decorative. |
 | `needs-text-alternative` | needs-attention | An imported video or sound has no captions, script or transcript. |
+| `item-wrong-track` | error | An overlay or zoom is on the wrong kind of track. |
+| `bad-rect` | error | A rectangle or point is not whole numbers inside the picture, or has no size. |
+| `bad-color` | error | A colour is not written `#RRGGBB`. |
+| `bad-style` | error | A text size or line thickness is outside what can be drawn. |
+| `text-empty` | error | A text overlay has no text. |
+| `transition-too-long` | error | A zoom's moves in and out do not fit in its length. |
+| `too-many-zooms` | error | More than 3 zooms start within one second. |
+| `needs-alt-text` | needs-attention | (also) A shape or arrow has no alt text and is not marked decorative. |
+| `needs-description` | needs-attention | A zoom has no description. |
+| `low-contrast` | warning | Text and its own background differ by less than 4.5 to 1 (3 to 1 for large text, 24 pixels or more on a 1080 pixel picture, or 18.7 if bold). Text with no background is not checked: there is nothing to compare it with. |
+| `text-too-small` | warning | Text is under about 16 pixels on a 1080 pixel picture. |
+| `zoom-aspect` | warning | A zoom's rectangle is not the shape of the picture, so the zoomed view would have bars. |
+
+(`bad-time`, `too-short`, `unsorted` and `overlap` apply to items as well as clips; `duplicate-id` applies to tracks, clips and items alike.)
+
+A `warning` is advice: the edit is sound and complete, but the thing is likely to be hard to see or read. The editor adds it to the sentence it says when the change is made, so the author hears about it straight away.
 
 The examples in `capture-edit/fixtures/` (one per code, plus files that cannot be read at all) are shared:
 `expected.json` says what each must produce, and both the TypeScript tests and the Rust tests read them,
@@ -100,6 +131,8 @@ label that undo and redo announce.
 | join | Joins a clip with the next when they are the same file, touch, and continue one into the other. Otherwise says which of those is false. | Joined 2 clips into one clip of 1 minute. |
 | reorder | Moves a clip to another place in its track's order and lays the clips out again, one after another, keeping the gaps where they were. | Clip "Lesson" moved to number 1 of 3; the clips on the Screen track were laid out again in the new order. |
 | rename, mute, volume, fades, alt text | Settings of a clip. | Clip "Voice" is now 6 decibels quieter than recorded. |
+| add text, shape, arrow, blur, redaction, zoom | Puts an overlay or zoom on its track. Refuses an unfitting track, a bad colour or rectangle, an overlapping or too-busy zoom. Adds warnings and what is still needed to the sentence. | Added the text overlay "Welcome" to the Overlays track at 5 seconds, 3 seconds long. Warning: ... is hard to read: ... contrast of 1.1 to 1, and 3.0 to 1 is needed. |
+| move, trim start, trim end, delete, set position, set text, set look, set zoom, alt text | Change an overlay or zoom. A change that would make the edit unsound is refused and changes nothing. | Zoom "Zoom" now shows the top left of the picture at 2 times. |
 
 An action that would change nothing (a key pressed at the end of its range) gives back the same edit, so
 the undo history skips it.
@@ -131,11 +164,15 @@ Made on the owner's delegation; each can be changed.
 6. **No clip is shorter than 0.1 seconds**, matching the 0.1 second grip step.
 7. **Overlapping clips on one track are not allowed.** Overlap (a picture-in-picture, a title over the screen) is done with another track.
 8. **Whole milliseconds, no frame grid.** The renderer places clips on its own frame rate.
+9. **Positions are fractions of the picture, not pixels**, so an edit does not depend on the video's size. The cost is that a pixel position typed by an author is rounded to the nearest ten-thousandth (about 0.2 of a pixel at 1080p).
+10. **Overlays may overlap in time; zooms may not**, and no more than 3 zooms may start within one second. This is a safe-motion limit chosen to match the requirement that animations never flash more than three times a second. Zooms are also not allowed to be shorter than their own moves.
+11. **Contrast is checked against the overlay's own background only**, and the thresholds for large and very small text assume a picture 1080 pixels high.
+12. **Blur and redaction need no alt text**; shapes and arrows do (or must be marked decorative). A text overlay's own text serves as its text equivalent.
 
 ## 6. Not here yet
 
-Text overlays, callouts, shapes, blur and redaction (C7, C8), zoom and pan (C5), cursor effects (C6, which come from the recorded events at render time), caption tracks (D1), and speed changes. Each will be added as a new kind of track or item with its own version bump and, if needed, a migration; a reader refuses a version it does not know rather than half understand it.
+Cursor effects (C6, which come from the recorded events at render time), suggested zooms from clicks (C5, which needs the interaction log), caption tracks (D1), zoom that follows a moving point, text that animates, and speed changes. Each will be added as a new kind of track or item with its own version bump and, if needed, a migration; a reader refuses a version it does not know rather than half understand it.
 
 ## 7. Versions
 
-`0.1.0` is the first version. Any change to the format bumps the version and ships a migration.
+`0.1.0` was the first version. `0.2.0` adds the `overlay` and `zoom` track kinds and their `items` (a track now always has an `items` list, empty for clip tracks). The migration from `0.1` is to give every track an empty `items` list, which the reader does when it opens an old file; saving then writes `0.2.0`. A reader refuses any other version with a plain message. Any change to the format bumps the version and ships a migration.

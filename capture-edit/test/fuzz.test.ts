@@ -5,8 +5,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   History,
+  addArrow,
+  addBlur,
   addClip,
+  addShape,
+  addText,
   addTrack,
+  addZoom,
+  deleteItem,
+  moveItem,
+  setItemRect,
+  setTextStyle,
+  trimItemEnd,
+  trimItemStart,
   clipEndMs,
   deleteClip,
   deleteRange,
@@ -45,7 +56,7 @@ function random(seed: number): () => number {
 function start(): { model: Model; ids: string[] } {
   let m = createModel(SOURCES);
   const ids: string[] = [];
-  for (const kind of ["screen", "audio", "audio", "media"] as const) {
+  for (const kind of ["screen", "audio", "audio", "media", "overlay", "zoom"] as const) {
     const t = addTrack(m, kind);
     m = t.model;
     ids.push(t.focus?.[0] ?? "");
@@ -73,7 +84,12 @@ test("random editing sessions keep the edit sound, the sentences clean, and undo
       const clip = clips[pick(Math.max(1, clips.length))];
       const clipId = clip?.id ?? "clip-none";
       const time = pick(65_000);
-      const kind = pick(14);
+      const kind = pick(24);
+      const items = model.tracks.flatMap((t) => t.items);
+      const itemId = items[pick(Math.max(1, items.length))]?.id ?? "item-none";
+      const rect = { x: pick(9000), y: pick(9000), width: 100 + pick(5000), height: 100 + pick(5000) };
+      const colors = ["#000000", "#FFFFFF", "#777777", "#FFD400"] as const;
+      const color = () => colors[pick(4)] ?? "#000000";
       const closeGap = rnd() < 0.5;
       const run = (): Result => {
         switch (kind) {
@@ -103,8 +119,28 @@ test("random editing sessions keep the edit sound, the sentences clean, and undo
             return setVolume(model, clipId, pick(61) - 40);
           case 12:
             return setMuted(model, clipId, rnd() < 0.5);
-          default:
+          case 13:
             return addClip(model, ids[3] ?? "", { source: rnd() < 0.5 ? LOGO : SHORT_VIDEO, startMs: pick(60_000), lengthMs: 100 + pick(8000), decorative: true });
+          case 14:
+            return addText(model, ids[4] ?? "", { startMs: pick(60_000), durationMs: 100 + pick(8000), text: "Words", rect, fontSizeBp: 50 + pick(500), color: color(), background: rnd() < 0.3 ? null : color() });
+          case 15:
+            return addShape(model, ids[4] ?? "", { startMs: pick(60_000), durationMs: 100 + pick(8000), rect, decorative: true });
+          case 16:
+            return addArrow(model, ids[4] ?? "", { startMs: pick(60_000), durationMs: 100 + pick(8000), from: { x: pick(10_000), y: pick(10_000) }, to: { x: pick(10_000), y: pick(10_000) }, altText: "points" });
+          case 17:
+            return addBlur(model, ids[4] ?? "", { startMs: pick(60_000), durationMs: 100 + pick(8000), rect });
+          case 18:
+            return addZoom(model, ids[5] ?? "", { startMs: pick(60_000), durationMs: 1000 + pick(8000), rect, transitionMs: pick(1000), description: "something" });
+          case 19:
+            return moveItem(model, itemId, time);
+          case 20:
+            return trimItemStart(model, itemId, time);
+          case 21:
+            return trimItemEnd(model, itemId, time);
+          case 22:
+            return rnd() < 0.5 ? deleteItem(model, itemId) : setItemRect(model, itemId, rect);
+          default:
+            return setTextStyle(model, itemId, { color: color(), background: color(), fontSizeBp: 50 + pick(500) });
         }
       };
       const result = history.run(run);
@@ -132,7 +168,8 @@ test("random editing sessions keep the edit sound, the sentences clean, and undo
     // Saved and read back, it is the same edit.
     const text = serialize(history.model);
     const back = parse(text);
-    assert.ok(back.ok && JSON.stringify(back.model) === JSON.stringify(history.model), `seed ${seed}: save and reopen`);
+    assert.ok(back.ok, `seed ${seed}: the saved edit reads`);
+    assert.deepEqual(back.model, history.model, `seed ${seed}: save and reopen`);
     assert.equal(back.ok && serialize(back.model), text);
     // Undo everything, then redo everything.
     const final = history.model;

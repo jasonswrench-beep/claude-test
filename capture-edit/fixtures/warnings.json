@@ -1,0 +1,195 @@
+{
+  "format": "openstage-capture-edit",
+  "schemaVersion": "0.2.0",
+  "nextId": 11,
+  "sources": [
+    {
+      "ref": {
+        "kind": "take",
+        "take": 1,
+        "media": "screen.mp4"
+      },
+      "kind": "screen",
+      "name": "Screen of take 1",
+      "durationMs": 60000
+    },
+    {
+      "ref": {
+        "kind": "take",
+        "take": 1,
+        "media": "mic.wav"
+      },
+      "kind": "microphone",
+      "name": "Microphone of take 1",
+      "durationMs": 60000
+    },
+    {
+      "ref": {
+        "kind": "take",
+        "take": 1,
+        "media": "system.wav"
+      },
+      "kind": "system-audio",
+      "name": "Computer sound of take 1",
+      "durationMs": 60000
+    }
+  ],
+  "tracks": [
+    {
+      "id": "track-1",
+      "kind": "screen",
+      "name": "Screen",
+      "clips": [
+        {
+          "id": "clip-4",
+          "name": "Screen of take 1",
+          "source": {
+            "kind": "take",
+            "take": 1,
+            "media": "screen.mp4"
+          },
+          "sourceStartMs": 0,
+          "sourceEndMs": 60000,
+          "startMs": 0,
+          "muted": false,
+          "volumeDb": 0,
+          "fadeInMs": 0,
+          "fadeOutMs": 0
+        }
+      ],
+      "items": []
+    },
+    {
+      "id": "track-2",
+      "kind": "overlay",
+      "name": "Overlays",
+      "clips": [],
+      "items": [
+        {
+          "id": "item-5",
+          "kind": "text",
+          "name": "Title",
+          "startMs": 5000,
+          "durationMs": 3000,
+          "text": "Welcome to the course",
+          "rect": {
+            "x": 500,
+            "y": 7800,
+            "width": 9000,
+            "height": 1400
+          },
+          "fontSizeBp": 200,
+          "color": "#777777",
+          "background": "#808080",
+          "bold": false,
+          "align": "left"
+        },
+        {
+          "id": "item-6",
+          "kind": "shape",
+          "name": "Ellipse",
+          "startMs": 6000,
+          "durationMs": 2000,
+          "shape": "ellipse",
+          "rect": {
+            "x": 2500,
+            "y": 2500,
+            "width": 5000,
+            "height": 5000
+          },
+          "outline": "#FFD400",
+          "fill": null,
+          "lineWidthBp": 40,
+          "altText": "The Start button"
+        },
+        {
+          "id": "item-7",
+          "kind": "arrow",
+          "name": "Arrow",
+          "startMs": 6000,
+          "durationMs": 2000,
+          "from": {
+            "x": 1000,
+            "y": 1000
+          },
+          "to": {
+            "x": 4000,
+            "y": 4000
+          },
+          "color": "#FFD400",
+          "lineWidthBp": 40,
+          "decorative": true
+        },
+        {
+          "id": "item-8",
+          "kind": "blur",
+          "name": "Blur",
+          "startMs": 10000,
+          "durationMs": 4000,
+          "rect": {
+            "x": 100,
+            "y": 100,
+            "width": 2000,
+            "height": 500
+          }
+        },
+        {
+          "id": "item-9",
+          "kind": "redact",
+          "name": "Redaction",
+          "startMs": 10000,
+          "durationMs": 4000,
+          "rect": {
+            "x": 100,
+            "y": 700,
+            "width": 2000,
+            "height": 500
+          },
+          "color": "#222222"
+        },
+        {
+          "id": "item-90",
+          "kind": "text",
+          "name": "Tiny",
+          "startMs": 15000,
+          "durationMs": 3000,
+          "text": "Welcome to the course",
+          "rect": {
+            "x": 500,
+            "y": 7800,
+            "width": 9000,
+            "height": 1400
+          },
+          "fontSizeBp": 100,
+          "color": "#FFFFFF",
+          "background": "#000000",
+          "bold": false,
+          "align": "left"
+        }
+      ]
+    },
+    {
+      "id": "track-3",
+      "kind": "zoom",
+      "name": "Zoom",
+      "clips": [],
+      "items": [
+        {
+          "id": "item-10",
+          "kind": "zoom",
+          "name": "Zoom",
+          "startMs": 20000,
+          "durationMs": 5000,
+          "rect": {
+            "x": 1000,
+            "y": 1000,
+            "width": 4000,
+            "height": 2000
+          },
+          "transitionMs": 500,
+          "description": "The settings menu"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "comment": "What every reader of an edit file must find in each fixture: whether it can be read, and the problems as code:severity, sorted. Written by hand from what each fixture is meant to show; the TypeScript and Rust readers must both agree with it.",
+  "fixtures": {
+    "valid-basic.json": {
+      "readable": true,
+      "problems": []
+    },
+    "valid-with-imports.json": {
+      "readable": true,
+      "problems": []
+    },
+    "needs-attention.json": {
+      "readable": true,
+      "problems": [
+        "needs-alt-text:needs-attention",
+        "needs-text-alternative:needs-attention"
+      ]
+    },
+    "overlap.json": {
+      "readable": true,
+      "problems": [
+        "overlap:error"
+      ]
+    },
+    "unsorted.json": {
+      "readable": true,
+      "problems": [
+        "unsorted:error"
+      ]
+    },
+    "beyond-source.json": {
+      "readable": true,
+      "problems": [
+        "beyond-source:error"
+      ]
+    },
+    "unknown-source.json": {
+      "readable": true,
+      "problems": [
+        "unknown-source:error"
+      ]
+    },
+    "source-not-allowed.json": {
+      "readable": true,
+      "problems": [
+        "source-not-allowed:error"
+      ]
+    },
+    "fade-too-long.json": {
+      "readable": true,
+      "problems": [
+        "fade-too-long:error"
+      ]
+    },
+    "volume-range.json": {
+      "readable": true,
+      "problems": [
+        "volume-range:error"
+      ]
+    },
+    "bad-time.json": {
+      "readable": true,
+      "problems": [
+        "bad-time:error"
+      ]
+    },
+    "too-short.json": {
+      "readable": true,
+      "problems": [
+        "too-short:error"
+      ]
+    },
+    "duplicate-id.json": {
+      "readable": true,
+      "problems": [
+        "duplicate-id:error"
+      ]
+    },
+    "imported-video-too-long.json": {
+      "readable": true,
+      "problems": [
+        "imported-video-too-long:error"
+      ]
+    },
+    "not-an-edit.json": {
+      "readable": false,
+      "problems": []
+    },
+    "future-version.json": {
+      "readable": false,
+      "problems": []
+    },
+    "bad-track-kind.json": {
+      "readable": false,
+      "problems": []
+    }
+  }
+}

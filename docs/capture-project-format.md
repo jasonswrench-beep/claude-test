@@ -11,6 +11,7 @@ A recording lives in its own folder, named `something.capture`, **beside** the c
 ```
 lesson.capture/
   capture.json                  the manifest (small, rarely changes)
+  edit.json                     the edit decisions (trims, splits, where clips sit); absent until the first edit
   takes/
     take-001/                   a real screen recording
       take.json                 the only record of this take's state; lists its media files
@@ -57,7 +58,7 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
 | `title`, `language` | Set when the project is made. `language` is a BCP 47 tag, for captions and speech. |
 | `created` | UTC time, ISO 8601. |
 | `tracks` | The accessibility tracks. They exist from version one so captions, transcript, audio description, and alt text are never an afterthought. Their contents are defined in later versions; in 0.1 they are empty. |
-| `edit` | Reserved for the edit decision list (trims, splits, overlays, zooms). `null` until editing exists. |
+| `edit` | Reserved and unused: the edit decision list is the separate file `edit.json`, described in `capture-edit-format.md`. Its presence is the truth, so the two cannot disagree. Stays `null`. |
 
 **The manifest never lists takes.** The folder `takes/` is the list. This keeps a crash from leaving two records that disagree.
 

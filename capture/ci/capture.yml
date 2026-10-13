@@ -10,9 +10,9 @@ name: capture
 
 on:
   push:
-    paths: ["capture/**", "docs/**", ".github/workflows/capture.yml"]
+    paths: ["capture/**", "capture-edit/**", "docs/**", ".github/workflows/capture.yml"]
   pull_request:
-    paths: ["capture/**", "docs/**", ".github/workflows/capture.yml"]
+    paths: ["capture/**", "capture-edit/**", "docs/**", ".github/workflows/capture.yml"]
 
 permissions:
   contents: read
@@ -49,3 +49,18 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+  edit-model:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: capture-edit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Type check
+        run: npx --yes -p typescript@5 -p @types/node@22 tsc -p .
+      - name: Tests
+        run: node --test "test/*.test.ts"

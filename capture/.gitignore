@@ -22,3 +22,5 @@ switch-test-log.txt
 switch-test-output/
 cue-test-log.txt
 cue-test-output/
+region-test-log.txt
+region-test-output/

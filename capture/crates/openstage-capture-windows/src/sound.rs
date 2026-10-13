@@ -141,6 +141,7 @@ impl SoundPlan {
                 kind: "microphone".into(),
                 container: "wav".into(),
                 mix: None,
+                region: None,
             });
         }
         if self.system.is_some() {
@@ -149,6 +150,7 @@ impl SoundPlan {
                 kind: "system-audio".into(),
                 container: "wav".into(),
                 mix: None,
+                region: None,
             });
         }
         files

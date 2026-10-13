@@ -70,6 +70,8 @@ pub struct VideoInspection {
     pub duration_ms: u64,
     /// The sound track, if the file has one.
     pub audio: Option<AudioInspection>,
+    /// The width and height of the pictures, if the file says.
+    pub size: Option<(u32, u32)>,
 }
 
 /// What Windows finds when it reads a file's sound track back.
@@ -546,6 +548,34 @@ pub fn compare_readback(read: Result<VideoInspection, ScreenError>, recorded_ms:
     }
 }
 
+/// Compare the size of the pictures Windows reads back from a saved recording with the size that was asked
+/// for (a region). A file that does not say its size is reported, not failed: the size is a convenience check.
+pub fn compare_size_readback(read: &Result<VideoInspection, ScreenError>, wanted: (u32, u32)) -> Check {
+    match read {
+        Ok(VideoInspection { size: Some(got), .. }) if *got == wanted => check(
+            "video-size",
+            true,
+            format!("The saved video is {} by {} pixels, the size of the region.", got.0, got.1),
+        ),
+        Ok(VideoInspection { size: Some(got), .. }) => check(
+            "video-size",
+            false,
+            format!(
+                "The saved video is {} by {} pixels, but the region is {} by {}.",
+                got.0, got.1, wanted.0, wanted.1
+            ),
+        ),
+        Ok(_) => check(
+            "video-size",
+            true,
+            "The saved video does not say how big its pictures are, so the size was not compared.",
+        ),
+        Err(e) => {
+            check("video-size", false, format!("Windows could not read the saved video back to check its size: {e}"))
+        }
+    }
+}
+
 /// Compare the sound track Windows reads back from a saved recording with how long the recording ran.
 /// Reports only on the sound; [`compare_readback`] reports on the picture. A recording made with
 /// sound must have a sound track about as long as the recording (up to 0.7 seconds apart is fine).
@@ -928,7 +958,7 @@ mod tests {
             match &self.inspect {
                 Inspect::WhatWasWritten => {
                     let frames = self.written.borrow().beats.len() as u64;
-                    Ok(VideoInspection { frames, duration_ms: frames * 1000 / 30, audio: None })
+                    Ok(VideoInspection { frames, duration_ms: frames * 1000 / 30, audio: None, size: None })
                 }
                 Inspect::Fragments { tolerant } => {
                     let scan = scan_file(path).map_err(|e| ScreenError::Failed(e.to_string()))?;
@@ -939,6 +969,7 @@ mod tests {
                         frames: scan.fragments as u64 * 30,
                         duration_ms: scan.fragments as u64 * 1000,
                         audio: None,
+                        size: None,
                     })
                 }
                 Inspect::Nothing => Err(ScreenError::Failed("not a video file".into())),
@@ -1139,7 +1170,7 @@ mod tests {
 
     #[test]
     fn a_saved_video_that_matches_the_recording_time_passes_and_a_mismatch_does_not() {
-        let info = |frames, duration_ms| Ok(VideoInspection { frames, duration_ms, audio: None });
+        let info = |frames, duration_ms| Ok(VideoInspection { frames, duration_ms, audio: None, size: None });
         let c = compare_readback(info(222, 7400), 7480);
         assert!(
             c.ok && c.message.contains("222 pictures, 7.4 seconds long")
@@ -1300,5 +1331,18 @@ mod tests {
         let mut checks = Vec::new();
         assert!(!run_video_test(&opts, &mut |c| checks.push(c)));
         assert!(checks[0].message.contains("only works on Windows"));
+    }
+
+    #[test]
+    fn the_size_of_a_saved_video_is_compared_with_the_region() {
+        let with = |size| Ok(VideoInspection { frames: 10, duration_ms: 300, audio: None, size });
+        let ok = compare_size_readback(&with(Some((1280, 720))), (1280, 720));
+        assert!(ok.ok && ok.message.contains("1280 by 720 pixels, the size of the region"), "{}", ok.message);
+        let wrong = compare_size_readback(&with(Some((1920, 1080))), (1280, 720));
+        assert!(!wrong.ok && wrong.message.contains("1920 by 1080") && wrong.message.contains("region is 1280 by 720"));
+        let unknown = compare_size_readback(&with(None), (1280, 720));
+        assert!(unknown.ok && unknown.message.contains("so the size was not compared"), "{}", unknown.message);
+        let failed = compare_size_readback(&Err(ScreenError::Failed("nope".into())), (1280, 720));
+        assert!(!failed.ok && failed.message.contains("nope"));
     }
 }

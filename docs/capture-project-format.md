@@ -2,7 +2,7 @@
 
 **Status:** v0.3 (matches the code in `capture/crates/openstage-capture-project`)
 **Format name:** `openstage-capture-project`
-**Schema version:** `0.2.2` (projects at `0.1.x`, `0.2.0` and `0.2.1` still open unchanged: see section 7)
+**Schema version:** `0.2.3` (projects at `0.1.x`, `0.2.0`, `0.2.1` and `0.2.2` still open unchanged: see section 7)
 
 A recording lives in its own folder, named `something.capture`, **beside** the course (the `.osproj`), never inside it. This matters: OpenStage's publisher zips the project into `source/`, and raw footage and the interaction log (which can contain private information) must never ship to learners. Only the exported, edited video becomes part of the course.
 
@@ -78,7 +78,8 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
   "segments": 3,
   "media": [
     { "file": "screen.mp4", "kind": "screen", "container": "fragmented-mp4",
-      "mix": { "microphoneGainDb": 0, "systemGainDb": -10 } },
+      "mix": { "microphoneGainDb": 0, "systemGainDb": -10 },
+      "region": { "display": 1, "x": 100, "y": 200, "width": 1280, "height": 720 } },
     { "file": "mic.wav", "kind": "microphone", "container": "wav" },
     { "file": "system.wav", "kind": "system-audio", "container": "wav" }
   ]
@@ -98,7 +99,9 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
 | `flushMs` | The most recording a crash can cost with this kind of media. Segment takes force data to disk this often (1000 by default). For `fragmented-mp4` takes it is 2000: Windows closes a fragment about every second, and a measured crash on Windows 11 lost 1.1 seconds. |
 | `durationMs` | How long the recording ran, not counting time spent paused. For a recovered file take it is an **estimate** (about one second per whole fragment); the exact length is read when the video is opened. |
 | `segments` | How many media files the take holds (segment files, or video files). |
-| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`; its optional `mix` says how the sound inside it was mixed, see section 4: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4). Absent in older projects. A reader ignores kinds it does not know. |
+| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`; its optional `mix` says how the sound inside it was mixed, see section 4, and its optional `region` says which part of the display it shows, see below: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4). Absent in older projects. A reader ignores kinds it does not know. |
+
+**`region`** (new in 0.2.3) is present on the video's entry only when less than the whole display was recorded. `display` is the display's number (1 is the main display, as in `sources`); `x` and `y` are how many pixels the picture's top left corner is from the display's top left corner; `width` and `height` are the size of the video in pixels, which is the size actually recorded (an odd size entered by the author is made one pixel smaller, because H.264 needs an even size, and this field holds the smaller size). Anything recorded in display coordinates, such as the cursor and clicks, is placed on the video by subtracting `x` and `y`. A reader that does not know `region` shows the video as it is. The program also refuses a region that reaches past the display or is smaller than 64 by 64 pixels before anything is recorded.
 
 `take.json` is written atomically (to a temporary file, then renamed), so a crash never leaves half a file. It is the **only** place a take's state is recorded. Take folders are numbered `take-001`, `take-002`, and so on; numbers are never reused.
 
@@ -200,7 +203,7 @@ Interaction capture is **off unless the author turns it on** (this is a requirem
 
 ## 7. Versions
 
-`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. `0.2.2` adds the optional `mix` on the video's entry in that list. Projects at `0.1.x`, `0.2.0` and `0.2.1` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
+`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. `0.2.2` adds the optional `mix` on the video's entry in that list. `0.2.3` adds the optional `region` on the video's entry. Projects at `0.1.x`, `0.2.0`, `0.2.1` and `0.2.2` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
 
 ## 8. Rules this format keeps
 

@@ -22,11 +22,11 @@ use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
-    describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_cue_test, run_find_output,
-    run_screen_test, run_timing_test, run_video_test, summarize, system_audio_platform, system_cue_player,
-    system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check, CueTestOptions, DeviceKind,
-    FindOutputOptions, Mix, ScreenMedia, ScreenTestOptions, SoundPlan, TimingTestOptions, VideoTestOptions, MIC_FILE,
-    SCREEN_FILE, SYSTEM_FILE,
+    compare_size_readback, describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_cue_test,
+    run_find_output, run_screen_test, run_timing_test, run_video_test, summarize, system_audio_platform,
+    system_cue_player, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check, CueTestOptions,
+    DeviceKind, FindOutputOptions, Mix, Region, ScreenMedia, ScreenTestOptions, SoundPlan, TimingTestOptions,
+    VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -58,6 +58,11 @@ enum Cmd {
         /// With `--source screen`: which display to record (1 is the main display).
         #[arg(long, default_value_t = 1)]
         display: u32,
+        /// With `--source screen`: record only part of the display, as four whole numbers in pixels from
+        /// the display's top left corner: how far from the left, how far from the top, the width and the
+        /// height, for example `100,200,1280,720`. An odd width or height is made one pixel smaller.
+        #[arg(long)]
+        region: Option<String>,
         /// With `--source screen`: pictures per second in the video.
         #[arg(long, default_value_t = 30)]
         fps: u32,
@@ -461,6 +466,7 @@ fn main() -> ExitCode {
             project,
             source,
             display,
+            region,
             fps,
             bitrate_kbps,
             microphone,
@@ -497,6 +503,7 @@ fn main() -> ExitCode {
                 }
             };
             let mut sound_plan = SoundPlan::default();
+            let mut chosen_region: Option<Region> = None;
             let mut report_handle = None;
             let factory: Box<dyn MediaFactory> = match source.as_str() {
                 "synthetic" => Box::new(|| -> Box<dyn Source> { Box::new(SyntheticSource::new()) }),
@@ -522,8 +529,36 @@ fn main() -> ExitCode {
                         }
                     };
                     sink.emit(Event::Check { check: "sound-devices".into(), ok: true, message: sound_plan.describe() });
-                    let media = ScreenMedia::for_this_computer(display, fps, bitrate_kbps)
+                    // A region is checked against the display now, so a mistake is explained before the countdown.
+                    if let Some(text) = &region {
+                        let fitted = Region::parse(text).and_then(|r| {
+                            let displays = system_platform().list_displays().map_err(|e| e.to_string())?;
+                            let shown = displays.iter().find(|d| d.number == display).ok_or_else(|| {
+                                format!("There is no Display {display}. Choose a number from 1 to {}.", displays.len())
+                            })?;
+                            r.fit(shown.width, shown.height).map(|(fitted, notes)| (fitted, notes, shown.number))
+                        });
+                        match fitted {
+                            Ok((fitted, notes, number)) => {
+                                let mut message = format!("Recording {} of Display {number}.", fitted.describe());
+                                for note in notes {
+                                    message.push(' ');
+                                    message.push_str(&note);
+                                }
+                                sink.emit(Event::Check { check: "region".into(), ok: true, message });
+                                chosen_region = Some(fitted);
+                            }
+                            Err(message) => {
+                                sink.emit(Event::Error { code: "bad-option".into(), message, fatal: true });
+                                return ExitCode::from(2);
+                            }
+                        }
+                    }
+                    let mut media = ScreenMedia::for_this_computer(display, fps, bitrate_kbps)
                         .with_sound(platform, sound_plan.clone());
+                    if let Some(r) = chosen_region {
+                        media = media.with_region(r);
+                    }
                     report_handle = Some(media.report_handle());
                     Box::new(media)
                 }
@@ -600,6 +635,9 @@ fn main() -> ExitCode {
                         let dir = take_dir(&project, outcome.take);
                         let inspection = system_video_platform().inspect_video(&dir.join(SCREEN_FILE));
                         let mut findings: Vec<Check> = Vec::new();
+                        if let Some(r) = chosen_region {
+                            findings.push(compare_size_readback(&inspection, (r.width, r.height)));
+                        }
                         if !sound_plan.is_empty() {
                             findings.push(compare_audio_readback(&inspection, outcome.duration_ms));
                         }

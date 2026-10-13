@@ -587,6 +587,22 @@ pub fn output_may_have_changed(devices: &[AudioDevice], recorded: &AudioDevice) 
     ))
 }
 
+/// How long a silent end of the computer's sound has to be before it is worth mentioning.
+const MIN_QUIET_ENDING_MS: u64 = 60_000;
+/// Loudness (0 to 1) below which a 20 ms stretch counts as silent. A computer that plays nothing sends
+/// exact silence, so this is far below any real sound.
+const SILENT_LEVEL: f32 = 0.001;
+
+/// If sound was heard but then stopped for a long time until the end of the recording: when it went
+/// quiet and for how long, in milliseconds. This is what it looks like when the computer's sound moved
+/// to another output that was not being listened to.
+pub fn quiet_ending(envelope: &[f32]) -> Option<(u64, u64)> {
+    let last_loud = envelope.iter().rposition(|v| *v >= SILENT_LEVEL)?;
+    let window = crate::echo::WINDOW_MS as u64;
+    let quiet_ms = (envelope.len() - 1 - last_loud) as u64 * window;
+    (quiet_ms >= MIN_QUIET_ENDING_MS).then(|| ((last_loud as u64 + 1) * window, quiet_ms))
+}
+
 /// What looking at the saved sound files found.
 #[derive(Debug, Default)]
 pub struct SoundFileReport {
@@ -636,6 +652,25 @@ pub fn check_sound_files(take_dir: &Path, plan: &SoundPlan, recorded_ms: u64) ->
                             device.name
                         ),
                     ));
+                } else if kind == Kind::System {
+                    // Sound that stops for the rest of the recording is how a move to another output looks.
+                    if let Some((from_ms, for_ms)) =
+                        crate::echo::envelope_of_file(&path).ok().and_then(|e| quiet_ending(&e))
+                    {
+                        report.warnings.push((
+                            "sound-went-quiet".to_string(),
+                            format!(
+                                "The {label} was heard until {} and was silent for the last {} of the recording. If something was meant to play, it may have gone to a different sound output: {}",
+                                crate::report::clock(from_ms),
+                                crate::report::clock(for_ms),
+                                if plan.follow_default_output {
+                                    "this recording follows Windows when it moves the sound, so look at the run-sound-system finding for what it did."
+                                } else {
+                                    "this recording kept to the output you chose. Leave the sound output as the default to follow Windows when the sound moves."
+                                }
+                            ),
+                        ));
+                    }
                 }
             }
             Ok(info) => report.checks.push(check(
@@ -1467,5 +1502,56 @@ mod tests {
         assert_eq!(r.output_moves.len(), 1);
         assert!((4000..=6200).contains(&r.output_moves[0].at_ms), "made once possible, at {}", r.output_moves[0].at_ms);
         assert!(r.follow_problem.is_none(), "an old problem is not kept once the move worked");
+    }
+
+    #[test]
+    fn sound_that_stops_for_the_rest_of_the_recording_is_flagged_with_when_and_for_how_long() {
+        let (_c, _p, plan) = choose(Some("default"), Some("default"));
+        let dir = tempfile::tempdir().unwrap();
+        saved_track(dir.path(), "mic.wav", 100, 8000);
+        let mut w = WavWriter::create(&dir.path().join("system.wav"), 48_000, 2).unwrap();
+        w.append(&vec![2000i16; 133 * 48_000 * 2]).unwrap(); // 2:13 of sound
+        w.append(&vec![0i16; 67 * 48_000 * 2]).unwrap(); // then silence to 3:20
+        w.finish().unwrap();
+        let report = check_sound_files(dir.path(), &plan.unwrap(), 200_000);
+        let w = report.warnings.iter().find(|w| w.0 == "sound-went-quiet").expect("a warning");
+        assert!(
+            w.1.contains("heard until 2:13")
+                && w.1.contains("silent for the last 1:07")
+                && w.1.contains("follows Windows"),
+            "{}",
+            w.1
+        );
+    }
+
+    #[test]
+    fn a_short_quiet_ending_or_a_quiet_start_is_not_flagged() {
+        let (_c, _p, plan) = choose(Some("default"), Some("2"));
+        let plan = plan.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        saved_track(dir.path(), "mic.wav", 100, 8000);
+        let mut w = WavWriter::create(&dir.path().join("system.wav"), 48_000, 2).unwrap();
+        w.append(&vec![0i16; 80 * 48_000 * 2]).unwrap(); // a long quiet start is normal
+        w.append(&vec![2000i16; 10 * 48_000 * 2]).unwrap();
+        w.append(&vec![0i16; 10 * 48_000 * 2]).unwrap(); // a short quiet end
+        w.finish().unwrap();
+        let report = check_sound_files(dir.path(), &plan, 100_000);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(quiet_ending(&[]), None);
+        assert_eq!(quiet_ending(&[0.0; 10]), None, "never heard is the track-silent case");
+    }
+
+    #[test]
+    fn a_quiet_ending_on_an_output_that_was_chosen_says_so_differently() {
+        let (_c, _p, plan) = choose(Some("default"), Some("2"));
+        let dir = tempfile::tempdir().unwrap();
+        saved_track(dir.path(), "mic.wav", 100, 8000);
+        let mut w = WavWriter::create(&dir.path().join("system.wav"), 48_000, 2).unwrap();
+        w.append(&vec![2000i16; 20 * 48_000 * 2]).unwrap();
+        w.append(&vec![0i16; 80 * 48_000 * 2]).unwrap();
+        w.finish().unwrap();
+        let report = check_sound_files(dir.path(), &plan.unwrap(), 100_000);
+        let w = report.warnings.iter().find(|w| w.0 == "sound-went-quiet").expect("a warning");
+        assert!(w.1.contains("kept to the output you chose"), "{}", w.1);
     }
 }

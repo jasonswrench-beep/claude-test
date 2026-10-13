@@ -198,7 +198,12 @@ Updated as work lands. "Tested here" means the automated tests pass in the cloud
 | Phase | State |
 |---|---|
 | 0 Foundations | Mostly built. Done: workspace, rule checker, [protocol spec](capture-protocol-spec.md), [project format](capture-project-format.md), [requests to OpenStage](openstage-requests.md), automatic-checks file. **Not done:** draft accessibility statement; the OpenStage-side items (OS-1 to OS-3, OS-16, OS-17). |
-| 1 Walking skeleton | Built and tested here (65 automated tests, including a real kill-and-recover test). **Checkpoint CP-1 is not passed yet:** the same tests have not been run on Windows. Owner action: double-click `capture/TEST CAPTURE.bat` and report PASS or FAIL. |
+| 1 Walking skeleton | Built and tested. **Checkpoint CP-1 passed on 2026-10-13:** the owner ran `TEST CAPTURE.bat` on Windows and all 65 tests passed there, including the real kill-and-recover test, and a short test recording ran and finished cleanly. (The Windows version was not recorded in the log; see the note below.) A later fix and its test bring the total to 66; they have passed here but have not yet been re-run on Windows. |
 | 2 to 8 | Not started. |
 
-One real bug was found by the Phase 1 tests and fixed: a time subtraction that could overflow when handling a command took longer than the recorder's own step. It is covered by a regression test that fails without the fix.
+Two real bugs were found in Phase 1 and fixed, each with a regression test that fails without the fix:
+
+1. A time subtraction could overflow when handling a command took longer than the recorder's own step (found by the integration tests in the cloud).
+2. After a recording stopped, the `stopped` state named the *next* take (take 2) instead of the one just finished (take 1). It was spotted by reading the owner's first Windows log, and would have made a screen reader announce the wrong take number.
+
+**Note on Windows version.** The log records that the platform is Windows but not whether it is Windows 11. Release 1 targets Windows 11 and later. `TEST CAPTURE.bat` now saves the Windows version at the top of `test-log.txt` (this change has not yet been run on Windows).

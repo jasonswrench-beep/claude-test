@@ -75,7 +75,7 @@ The recorder changed state, or is repeating its state (about once a second, so a
 ```json
 {"event":"state","state":"recording","elapsedMs":1500,"take":1}
 ```
-`state` is one of `idle`, `countdown`, `recording`, `paused`, `stopping`, `stopped`, `error`. `elapsedMs` counts recording time only: **time spent paused is not counted**. During the countdown it is 0. `take` is the take number (starting at 1).
+`state` is one of `idle`, `countdown`, `recording`, `paused`, `stopping`, `stopped`, `error`. `elapsedMs` counts recording time only: **time spent paused is not counted**. During the countdown it is 0. `take` is the take number (starting at 1) that the report belongs to: during a countdown it is the take about to begin, and in `stopped` and `error` it is the take just finished. It is 0 only if the program stopped before any take began.
 
 ### `level`
 A sound level, sent while recording. `source` is `mic` or `system`. `peak` runs from 0.0 (silence) to 1.0 (loudest). `text` is a plain-language description for people who cannot see a meter: `silent`, `quiet`, `good`, `loud`, or `too loud`.

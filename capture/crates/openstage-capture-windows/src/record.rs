@@ -73,8 +73,12 @@ impl MediaFactory for ScreenMedia {
     }
 
     fn media_files(&self) -> Vec<MediaFile> {
-        let mut files =
-            vec![MediaFile { file: SCREEN_FILE.into(), kind: "screen".into(), container: "fragmented-mp4".into() }];
+        let mut files = vec![MediaFile {
+            file: SCREEN_FILE.into(),
+            kind: "screen".into(),
+            container: "fragmented-mp4".into(),
+            mix: self.sound.as_ref().map(|s| s.plan().mix_info()),
+        }];
         if let Some(sound) = &self.sound {
             files.extend(sound.plan().media_files());
         }
@@ -723,5 +727,25 @@ mod tests {
             .collect();
         assert!(mic.len() >= 3 && mic.iter().all(|t| *t == "good"), "{mic:?}");
         assert!(system.len() >= 3 && system.iter().all(|t| *t == "quiet"), "{system:?}");
+    }
+
+    #[test]
+    fn take_json_says_how_the_sound_inside_the_video_was_mixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let platform = FakePlatform::new(&clock);
+        let plan = plan_sound(&platform, Some(&AudioChoice::Default), Some(&AudioChoice::Default))
+            .unwrap()
+            .with_gains(2, -9)
+            .unwrap();
+        let (media, _files) = factory(good_screen());
+        let media = media.with_sound(Box::new(platform) as Box<dyn AudioPlatform>, plan);
+        let mut input = ScriptedInput::new(vec![(500, Input::Command(Command::Stop))]);
+        run_session(&cfg, &media, &mut input, &mut VecSink::default(), clock.as_ref()).unwrap();
+        let take = read_take(&cfg.project, 1).unwrap();
+        let mix = take.media[0].mix.expect("the video says how its sound was mixed");
+        assert_eq!((mix.microphone_gain_db, mix.system_gain_db), (2, -9));
+        assert!(take.media[1..].iter().all(|m| m.mix.is_none()), "the separate files are untouched");
     }
 }

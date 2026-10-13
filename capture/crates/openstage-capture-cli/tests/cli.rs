@@ -381,6 +381,10 @@ fn the_sound_choices_are_accepted_and_do_not_disturb_the_test_source() {
         "none",
         "--output",
         "2",
+        "--mic-gain-db",
+        "3",
+        "--system-gain-db",
+        "-10",
     ]);
     assert_eq!(status.code(), Some(0));
     assert!(events.iter().any(|e| matches!(e, Event::Result { ok: true, .. })));

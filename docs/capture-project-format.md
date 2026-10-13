@@ -2,7 +2,7 @@
 
 **Status:** v0.3 (matches the code in `capture/crates/openstage-capture-project`)
 **Format name:** `openstage-capture-project`
-**Schema version:** `0.2.1` (projects at `0.1.x` and `0.2.0` still open unchanged: see section 7)
+**Schema version:** `0.2.2` (projects at `0.1.x`, `0.2.0` and `0.2.1` still open unchanged: see section 7)
 
 A recording lives in its own folder, named `something.capture`, **beside** the course (the `.osproj`), never inside it. This matters: OpenStage's publisher zips the project into `source/`, and raw footage and the interaction log (which can contain private information) must never ship to learners. Only the exported, edited video becomes part of the course.
 
@@ -77,7 +77,8 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
   "maxLossMs": null,
   "segments": 3,
   "media": [
-    { "file": "screen.mp4", "kind": "screen", "container": "fragmented-mp4" },
+    { "file": "screen.mp4", "kind": "screen", "container": "fragmented-mp4",
+      "mix": { "microphoneGainDb": 0, "systemGainDb": -10 } },
     { "file": "mic.wav", "kind": "microphone", "container": "wav" },
     { "file": "system.wav", "kind": "system-audio", "container": "wav" }
   ]
@@ -97,7 +98,7 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
 | `flushMs` | The most recording a crash can cost with this kind of media. Segment takes force data to disk this often (1000 by default). For `fragmented-mp4` takes it is 2000: Windows closes a fragment about every second, and a measured crash on Windows 11 lost 1.1 seconds. |
 | `durationMs` | How long the recording ran, not counting time spent paused. For a recovered file take it is an **estimate** (about one second per whole fragment); the exact length is read when the video is opened. |
 | `segments` | How many media files the take holds (segment files, or video files). |
-| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4). Absent in older projects. A reader ignores kinds it does not know. |
+| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`; its optional `mix` says how the sound inside it was mixed, see section 4: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4). Absent in older projects. A reader ignores kinds it does not know. |
 
 `take.json` is written atomically (to a temporary file, then renamed), so a crash never leaves half a file. It is the **only** place a take's state is recorded. Take folders are numbered `take-001`, `take-002`, and so on; numbers are never reused.
 
@@ -113,6 +114,8 @@ Sound is recorded as 16-bit stereo at 48,000 samples per second and is stored **
 
 1. **Mixed, inside `screen.mp4`**, as one AAC sound track (128 kilobits per second) beside the picture. This is what every player plays. It is the microphone and the computer's sound added together.
 2. **Separately, as WAV files**: `mic.wav` (the microphone alone) and `system.wav` (the computer's own sound alone, including a screen reader's speech). The editor needs them apart, for example to remove an echo when the microphone also heard the speakers. A take lists a WAV file only if that sound was recorded.
+
+The mix inside the video can be adjusted without touching the originals: `microphoneGainDb` and `systemGainDb` (whole decibels from -40 to 20, 0 meaning as heard; about 6 decibels is half or double the volume) are applied only to the mix, and `take.json` records them in the video's `mix`. `mic.wav` and `system.wav` always hold the sound exactly as heard, so the editor can start again from them and set the balance by ear. Windows' own MP4 writer accepts only one sound stream per file (one picture, one sound), which is why the two sounds are kept apart as WAV files and not as two tracks inside the MP4.
 
 Every sound track is as long as the recording, to within a few hundredths of a second. The recording clock stands still while paused, so sound heard during a pause is thrown away, and so is any sound heard while the recorder was still starting up. If the computer plays nothing, Windows sends no sound at all for that time; the recorder fills the gap with silence so the track keeps its length.
 
@@ -197,7 +200,7 @@ Interaction capture is **off unless the author turns it on** (this is a requirem
 
 ## 7. Versions
 
-`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. Projects at `0.1.x` and `0.2.0` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
+`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. `0.2.2` adds the optional `mix` on the video's entry in that list. Projects at `0.1.x`, `0.2.0` and `0.2.1` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
 
 ## 8. Rules this format keeps
 

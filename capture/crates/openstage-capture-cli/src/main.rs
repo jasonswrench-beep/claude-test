@@ -21,10 +21,10 @@ use openstage_capture::{
 use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
-    check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback, describe_devices, plan_sound,
-    run_audio_test, run_find_output, run_screen_test, run_video_test, system_audio_platform, system_platform,
-    system_video_platform, AudioChoice, AudioTestOptions, Check, DeviceKind, FindOutputOptions, ScreenMedia,
-    ScreenTestOptions, SoundPlan, VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
+    check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
+    describe_devices, plan_sound, run_audio_test, run_find_output, run_screen_test, run_video_test,
+    system_audio_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check, DeviceKind,
+    FindOutputOptions, ScreenMedia, ScreenTestOptions, SoundPlan, VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -71,6 +71,15 @@ enum Cmd {
         /// `default`, or `none` to record none of it.
         #[arg(long, default_value = "default")]
         output: String,
+        /// With `--source screen`: make the microphone louder (positive) or quieter (negative) by this
+        /// many decibels in the mix inside the video. 0 leaves it as heard; 6 is about double the volume.
+        /// The separate `mic.wav` is never changed.
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+        mic_gain_db: i32,
+        /// With `--source screen`: the same for the computer's sound. Use a negative number to make it
+        /// quieter, for example -10. The separate `system.wav` is never changed.
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+        system_gain_db: i32,
         /// Milliseconds of countdown before recording starts. 0 turns it off.
         #[arg(long, default_value_t = 3000)]
         countdown_ms: u64,
@@ -385,6 +394,8 @@ fn main() -> ExitCode {
             bitrate_kbps,
             microphone,
             output,
+            mic_gain_db,
+            system_gain_db,
             countdown_ms,
             segment_ms,
             flush_ms,
@@ -413,6 +424,13 @@ fn main() -> ExitCode {
                         Ok(plan) => plan,
                         Err(message) => {
                             sink.emit(Event::Error { code: "source-unavailable".into(), message, fatal: true });
+                            return ExitCode::from(2);
+                        }
+                    };
+                    sound_plan = match sound_plan.with_gains(mic_gain_db, system_gain_db) {
+                        Ok(plan) => plan,
+                        Err(message) => {
+                            sink.emit(Event::Error { code: "bad-option".into(), message, fatal: true });
                             return ExitCode::from(2);
                         }
                     };
@@ -488,6 +506,20 @@ fn main() -> ExitCode {
                         // something for the author to know, not a fault of the recorder, so it does not
                         // change the exit code.
                         if sound_plan.microphone.is_some() && sound_plan.system.is_some() {
+                            // How loud the two were next to each other, and what to change if the voice is hard to hear.
+                            match check_balance_in_files(&dir.join(MIC_FILE), &dir.join(SYSTEM_FILE)) {
+                                Ok(finding) => {
+                                    sink.emit(Event::Check {
+                                        check: finding.check.check,
+                                        ok: finding.check.ok,
+                                        message: finding.check.message,
+                                    });
+                                    if let Some(message) = finding.warning {
+                                        warnings.push(("balance-off".to_string(), message));
+                                    }
+                                }
+                                Err(message) => warnings.push(("balance-unchecked".to_string(), message)),
+                            }
                             match check_echo_in_files(&dir.join(MIC_FILE), &dir.join(SYSTEM_FILE)) {
                                 Ok(finding) => {
                                     sink.emit(Event::Check {

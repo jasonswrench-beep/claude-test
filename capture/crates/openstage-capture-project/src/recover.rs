@@ -281,8 +281,12 @@ mod tests {
         use crate::take::{create_take_with, MediaFile};
         let dir = tempfile::tempdir().unwrap();
         create_project(dir.path(), "t", "en-US").unwrap();
-        let media =
-            vec![MediaFile { file: "screen.mp4".into(), kind: "screen".into(), container: "fragmented-mp4".into() }];
+        let media = vec![MediaFile {
+            file: "screen.mp4".into(),
+            kind: "screen".into(),
+            container: "fragmented-mp4".into(),
+            mix: None,
+        }];
         create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media).unwrap();
         let mut good = boxed("ftyp", 16);
         good.extend(boxed("moov", 300));
@@ -355,9 +359,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         create_project(dir.path(), "t", "en-US").unwrap();
         let media = vec![
-            MediaFile { file: "screen.mp4".into(), kind: "screen".into(), container: "fragmented-mp4".into() },
-            MediaFile { file: "mic.wav".into(), kind: "microphone".into(), container: "wav".into() },
-            MediaFile { file: "system.wav".into(), kind: "system-audio".into(), container: "wav".into() },
+            MediaFile {
+                file: "screen.mp4".into(),
+                kind: "screen".into(),
+                container: "fragmented-mp4".into(),
+                mix: None,
+            },
+            MediaFile { file: "mic.wav".into(), kind: "microphone".into(), container: "wav".into(), mix: None },
+            MediaFile { file: "system.wav".into(), kind: "system-audio".into(), container: "wav".into(), mix: None },
         ];
         create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media).unwrap();
         let take = take_dir(dir.path(), 1);

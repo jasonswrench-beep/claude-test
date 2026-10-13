@@ -67,6 +67,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 - If a device is missing or in use, a plain message says so, and I can choose to record without it.
 - System audio includes screen reader speech when it is playing, so authors can demonstrate assistive technology workflows.
 - The microphone and the computer's own sound are always kept as **separate tracks** as well as mixed, so an echo (the microphone hearing the speakers) can be fixed in the editor afterwards.
+- After a recording, a plain message compares how loud the voice and the computer's sound were while each was making sound, and says what change would put the voice comfortably above the computer's sound. The mix inside the video can be adjusted when recording (in decibels); the separate tracks are never changed, so the balance can always be set again by ear in the editor. (Seen on the owner's computer on 2026-10-13: the computer's sound peaked at 0.57 and the voice at 0.12.)
 - When the microphone is hearing the computer's sound, a setup check says so in plain words and suggests headphones, before the author records a whole lesson that way. (Seen on the owner's computer on 2026-10-13: with speakers on, the mixed test file had an echo.)
 
 **Accessibility checks**

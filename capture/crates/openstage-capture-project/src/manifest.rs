@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 pub const FORMAT_NAME: &str = "openstage-capture-project";
-pub const SCHEMA_VERSION: &str = "0.2.1";
+pub const SCHEMA_VERSION: &str = "0.2.2";
 
 /// The tracks that carry accessibility information. They exist from the first version of the
 /// format, so captions, transcripts, audio description, and alt text are never an afterthought.
@@ -123,7 +123,7 @@ mod tests {
     fn a_version_0_1_project_still_opens() {
         let dir = tempfile::tempdir().unwrap();
         let mut m = create_project(dir.path(), "t", "en-US").unwrap();
-        assert_eq!(m.schema_version, "0.2.1");
+        assert_eq!(m.schema_version, "0.2.2");
         m.schema_version = "0.1.0".into();
         fs::write(dir.path().join("capture.json"), serde_json::to_string(&m).unwrap()).unwrap();
         assert_eq!(open_project(dir.path()).unwrap().schema_version, "0.1.0");

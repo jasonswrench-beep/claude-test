@@ -23,7 +23,7 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 
 **The edit model is separate.** The logic for editing a recording (tracks, clips, trim, split, join, undo) is TypeScript in [`../capture-edit/`](../capture-edit/), with 128 of its own tests; the Rust side here reads and checks the file it writes (`edit.json`), and 4 of the tests above check that both agree on shared examples.
 
-**What "tested" means here.** The 356 automated tests pass on Linux (a Windows computer runs 358, because two tests only exist on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 291 tests added since then have passed on Linux only. The real Windows parts (screen capture, video, crash safety, the recorder, the microphone and the computer's sound) were run on the owner's computer through the test scripts listed below, and passed. Sound in the recording (the AAC sound track inside the MP4 and the sound files) was also run there, and the owner reported that it worked; the detailed numbers were not seen, and how closely sound and picture stay together has not been measured.
+**What "tested" means here.** The 383 automated tests pass on Linux (a Windows computer runs 385, because two tests only exist on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 318 tests added since then have passed on Linux only. The real Windows parts (screen capture, video, crash safety, the recorder, the microphone and the computer's sound) were run on the owner's computer through the test scripts listed below, and passed. Sound in the recording (the AAC sound track inside the MP4 and the sound files) was also run there, and the owner reported that it worked; the detailed numbers were not seen, and how closely sound and picture stay together has not been measured.
 
 ## Phase 2 has started: screen capture
 
@@ -74,6 +74,7 @@ capture/
     openstage-capture-project/    the project folder, takes, crash-safe segments, recovery
     openstage-capture/            the engine: the recording state machine and sources
     openstage-capture-windows/    screen capture for Windows, and the checks that prove it works
+    openstage-capture-render/     the plan for turning an edit into a finished video: what shows at each frame, how zooms move, how sound is mixed (pure arithmetic, no video)
     openstage-capture-cli/        the program itself (openstage-capture)
   tools/check_rules.py            license, FFmpeg, header, and writing-style checks
   ci/capture.yml                  automatic checks, to be copied into .github/workflows

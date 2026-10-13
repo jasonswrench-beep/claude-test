@@ -1,0 +1,14 @@
+[package]
+name = "openstage-capture-render"
+description = "Turning an edit into a finished video: which clip plays when, how zooms move, how sound is mixed (pure logic, tested anywhere)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+openstage-capture-project = { path = "../openstage-capture-project" }
+
+[dev-dependencies]
+serde_json.workspace = true

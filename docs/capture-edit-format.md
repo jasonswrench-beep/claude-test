@@ -169,6 +169,10 @@ Made on the owner's delegation; each can be changed.
 11. **Contrast is checked against the overlay's own background only**, and the thresholds for large and very small text assume a picture 1080 pixels high.
 12. **Blur and redaction need no alt text**; shapes and arrows do (or must be marked decorative). A text overlay's own text serves as its text equivalent.
 
+## 5b. What the renderer does with it
+
+The renderer (`capture/crates/openstage-capture-render`) first checks the edit and refuses one with errors, with the first problem in words; unless told otherwise it also refuses one that is sound but still has things marked `needs-attention`, so an export does not finish until the author has given the alt text or descriptions that are missing. Warnings do not stop it. The length of the video is where the last clip ends. Frame `n` is shown at `n / fps` seconds, in whole microseconds. Tracks are drawn in the order listed, the first at the bottom; overlays are drawn above the pictures, later ones on top. A zoom moves in over `transitionMs` along a smooth curve (slow at the start and end), holds, and moves out the same way; when the author asks for **reduced motion**, it cuts straight to the part and straight back with no movement. Sound comes from the microphone, computer-sound and imported-audio clips, with their volume, mute and straight-line fades, added together and limited so a loud sum is clipped, never wrapped into noise. **Not yet:** the sound inside an imported video clip is not mixed.
+
 ## 6. Not here yet
 
 Cursor effects (C6, which come from the recorded events at render time), suggested zooms from clicks (C5, which needs the interaction log), caption tracks (D1), zoom that follows a moving point, text that animates, and speed changes. Each will be added as a new kind of track or item with its own version bump and, if needed, a migration; a reader refuses a version it does not know rather than half understand it.

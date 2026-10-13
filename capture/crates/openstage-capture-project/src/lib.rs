@@ -32,9 +32,10 @@ mod take;
 pub mod wav;
 
 pub use edit::{
-    describe_time, parse_edit, validate as validate_edit, Clip as EditClip, Edit, ParsedEdit, Problem as EditProblem,
-    Severity as EditSeverity, SourceInfo as EditSourceInfo, SourceKind as EditSourceKind, SourceRef as EditSourceRef,
-    Track as EditTrack, TrackKind as EditTrackKind, EDIT_FORMAT,
+    describe_time, parse_edit, validate as validate_edit, Clip as EditClip, Edit, Item as EditItem, ParsedEdit,
+    Point as EditPoint, Problem as EditProblem, Rect as EditRect, Severity as EditSeverity,
+    SourceInfo as EditSourceInfo, SourceKind as EditSourceKind, SourceRef as EditSourceRef, Track as EditTrack,
+    TrackKind as EditTrackKind, EDIT_FORMAT, FULL as EDIT_FULL,
 };
 pub use error::ProjectError;
 pub use events_log::{read_log, trim_incomplete_tail, EventLogWriter, LogEvent, LogLine};

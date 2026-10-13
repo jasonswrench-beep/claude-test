@@ -45,7 +45,7 @@ fn failed(what: &str, e: windows::core::Error) -> ScreenError {
 
 /// Get Windows ready: pictures in real pixels (not scaled by display zoom), and the Windows
 /// Runtime started. Safe to call more than once.
-fn prepare() {
+pub(crate) fn prepare() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| unsafe {
         // Both can "fail" harmlessly: the program may already have chosen these.

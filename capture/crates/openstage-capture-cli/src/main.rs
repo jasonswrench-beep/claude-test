@@ -14,7 +14,9 @@ use openstage_capture::{
 };
 use openstage_capture_project::recover_project;
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
-use openstage_capture_windows::{run_screen_test, system_platform, ScreenTestOptions};
+use openstage_capture_windows::{
+    run_screen_test, run_video_test, system_platform, ScreenTestOptions, VideoTestOptions,
+};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -80,6 +82,29 @@ enum Cmd {
         /// Draw the mouse pointer in the pictures. Off by default: the pointer is recorded separately.
         #[arg(long)]
         with_cursor: bool,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// Try making an MP4 video of the screen on this computer: capture a few seconds at a steady
+    /// frame rate, encode it as H.264, and report how hard the computer worked. Windows only.
+    /// Does not make a project and records no sound.
+    VideoTest {
+        /// Which display to capture (1 is the main display).
+        #[arg(long, default_value_t = 1)]
+        display: u32,
+        /// How long to record.
+        #[arg(long, default_value_t = 8.0)]
+        seconds: f64,
+        /// Pictures per second in the video.
+        #[arg(long, default_value_t = 30)]
+        fps: u32,
+        /// Video quality in kilobits per second.
+        #[arg(long, default_value_t = 8000)]
+        bitrate_kbps: u32,
+        /// The folder to save `test.mp4` in (created if needed).
+        #[arg(long, default_value = "video-test-output")]
+        out: PathBuf,
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
         plain: bool,
@@ -316,6 +341,30 @@ fn main() -> ExitCode {
                     fatal("project", e.to_string());
                     ExitCode::FAILURE
                 }
+            }
+        }
+        Cmd::VideoTest { display, seconds, fps, bitrate_kbps, out, plain } => {
+            if !plain {
+                hello();
+            }
+            let opts = VideoTestOptions { display, seconds, fps, bitrate_kbps, out_dir: out };
+            let all_fine = run_video_test(&opts, &mut |c| {
+                if plain {
+                    println!("{}: {}", if c.ok { "OK" } else { "PROBLEM" }, c.message);
+                    let _ = io::stdout().flush();
+                } else {
+                    say(Event::Check { check: c.check, ok: c.ok, message: c.message });
+                }
+            });
+            if plain {
+                println!("{}", if all_fine { "All checks passed." } else { "At least one check found a problem." });
+            }
+            if all_fine {
+                ExitCode::SUCCESS
+            } else if cfg!(windows) {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::from(2)
             }
         }
         Cmd::Render { .. } => {

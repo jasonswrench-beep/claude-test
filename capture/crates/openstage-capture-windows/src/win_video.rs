@@ -4,7 +4,7 @@
 //! This file only builds on Windows. It has been type-checked for Windows but, until the owner
 //! runs `TEST VIDEO CAPTURE.bat`, it has never been run. Treat every line of it as unproven.
 
-use crate::video::{EncoderInfo, VideoPlatform, VideoSink};
+use crate::video::{EncoderInfo, SinkSpec, VideoInspection, VideoPlatform, VideoSink};
 use crate::{Frame, ScreenError};
 use std::path::Path;
 use std::sync::Once;
@@ -21,6 +21,11 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
     MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
     MF_SINK_WRITER_DISABLE_THROTTLING, MF_VERSION,
+};
+use windows::Win32::Media::MediaFoundation::{
+    MFCreateSourceReaderFromURL, MFTranscodeContainerType_FMPEG4, MF_MPEG4SINK_MIN_FRAGMENT_DURATION,
+    MF_MT_MAX_KEYFRAME_SPACING, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+    MF_TRANSCODE_CONTAINERTYPE,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
@@ -57,24 +62,15 @@ impl VideoPlatform for WindowsVideo {
         Ok(found)
     }
 
-    fn create_sink(
-        &self,
-        path: &Path,
-        width: u32,
-        height: u32,
-        fps: u32,
-        bitrate_kbps: u32,
-    ) -> Result<Box<dyn VideoSink>, ScreenError> {
+    fn create_sink(&self, spec: &SinkSpec) -> Result<Box<dyn VideoSink>, ScreenError> {
+        let (width, height) = (spec.width, spec.height);
         // First let Windows use the graphics card's encoder. If that setup is refused, try the processor's.
-        match unsafe { build_writer(path, width, height, fps, bitrate_kbps, true) } {
+        match unsafe { build_writer(spec, true) } {
             Ok(writer) => Ok(Box::new(Mp4Sink { writer: Some(writer), stream: 0, width, height, note: None })),
             Err(first) => {
-                let writer =
-                    unsafe { build_writer(path, width, height, fps, bitrate_kbps, false) }.map_err(|second| {
-                        ScreenError::Failed(format!(
-                            "{first} Trying the processor's encoder instead also failed: {second}"
-                        ))
-                    })?;
+                let writer = unsafe { build_writer(spec, false) }.map_err(|second| {
+                    ScreenError::Failed(format!("{first} Trying the processor's encoder instead also failed: {second}"))
+                })?;
                 Ok(Box::new(Mp4Sink {
                     writer: Some(writer),
                     stream: 0,
@@ -86,6 +82,30 @@ impl VideoPlatform for WindowsVideo {
                 }))
             }
         }
+    }
+
+    fn inspect_video(&self, path: &Path) -> Result<VideoInspection, ScreenError> {
+        // Open the file the way a player would, and read every video sample without decoding it.
+        let reader = unsafe { MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), None) }
+            .map_err(|e| failed("Windows could not open the video file", e))?;
+        let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        let (mut frames, mut end_100ns) = (0u64, 0i64);
+        loop {
+            let mut flags = 0u32;
+            let mut timestamp = 0i64;
+            let mut sample = None;
+            unsafe { reader.ReadSample(stream, 0, None, Some(&mut flags), Some(&mut timestamp), Some(&mut sample)) }
+                .map_err(|e| failed("Windows could not read the video file all the way through", e))?;
+            if let Some(sample) = sample {
+                frames += 1;
+                let duration = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
+                end_100ns = end_100ns.max(timestamp + duration);
+            }
+            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                break;
+            }
+        }
+        Ok(VideoInspection { frames, duration_ms: (end_100ns.max(0) / 10_000) as u64 })
     }
 
     fn process_cpu_time(&self) -> Option<Duration> {
@@ -146,16 +166,10 @@ fn friendly_name(activate: &IMFActivate) -> Option<String> {
     Some(String::from_utf16_lossy(&buffer[..length as usize]))
 }
 
-unsafe fn build_writer(
-    path: &Path,
-    width: u32,
-    height: u32,
-    fps: u32,
-    bitrate_kbps: u32,
-    allow_hardware: bool,
-) -> Result<IMFSinkWriter, ScreenError> {
+unsafe fn build_writer(spec: &SinkSpec, allow_hardware: bool) -> Result<IMFSinkWriter, ScreenError> {
+    let (path, width, height, fps, bitrate_kbps) = (&spec.path, spec.width, spec.height, spec.fps, spec.bitrate_kbps);
     let mut attributes: Option<IMFAttributes> = None;
-    MFCreateAttributes(&mut attributes, 2).map_err(|e| failed("Could not prepare the video writer", e))?;
+    MFCreateAttributes(&mut attributes, 4).map_err(|e| failed("Could not prepare the video writer", e))?;
     let attributes = attributes.ok_or_else(|| ScreenError::Failed("Could not prepare the video writer.".into()))?;
     // Let Windows use the graphics card's encoder when there is one, and never make the writer wait.
     attributes
@@ -164,6 +178,18 @@ unsafe fn build_writer(
     attributes
         .SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)
         .map_err(|e| failed("Could not turn off throttling", e))?;
+
+    if spec.fragmented {
+        // A fragmented MP4: the setup is written first and then short self-contained fragments, so a
+        // file cut off by a crash still plays up to the last whole fragment.
+        attributes
+            .SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_FMPEG4)
+            .map_err(|e| failed("Could not ask for a crash-safe (fragmented) video file", e))?;
+        // Close a fragment about every second.
+        attributes
+            .SetUINT64(&MF_MPEG4SINK_MIN_FRAGMENT_DURATION, 10_000_000)
+            .map_err(|e| failed("Could not set the fragment length", e))?;
+    }
 
     let writer = MFCreateSinkWriterFromURL(&HSTRING::from(path.as_os_str()), None, &attributes)
         .map_err(|e| failed("Could not create the video file", e))?;
@@ -174,6 +200,12 @@ unsafe fn build_writer(
     out_type
         .SetUINT32(&MF_MT_AVG_BITRATE, bitrate_kbps.saturating_mul(1000))
         .map_err(|e| failed("Could not set the video quality", e))?;
+    if spec.fragmented {
+        // A fresh starting point every second, so that every fragment can be played on its own.
+        out_type
+            .SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, fps)
+            .map_err(|e| failed("Could not set the keyframe spacing", e))?;
+    }
     out_type
         .SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)
         .map_err(|e| failed("Could not set the H.264 profile", e))?;

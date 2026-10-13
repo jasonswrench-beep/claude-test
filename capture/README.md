@@ -18,7 +18,7 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 | Sound levels with plain-language text | Captions, audio description, step-by-step output |
 | License and rule checks | Encoding the pictures into video (the next slice) |
 
-**What "tested" means here.** The 99 automated tests pass on Linux. On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 34 tests added since then (the take-number fix, the screen capture checks, and the video checks) have passed on Linux and have not yet been run on Windows. On Windows, the fake test source and the real screen capture test (`screen-test`) have been run. Making video, recording sound, and recording a real screen into a project have not, so none of that is claimed to work.
+**What "tested" means here.** The 123 automated tests pass on Linux. On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 58 tests added since then (the take-number fix, the screen capture, video, and crash checks) have passed on Linux and have not yet been run on Windows. On Windows, the fake test source and the real screen capture test (`screen-test`) have been run. Making video, recording sound, and recording a real screen into a project have not, so none of that is claimed to work.
 
 ## Phase 2 has started: screen capture
 
@@ -26,7 +26,9 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 
 **The screen capture test has passed on the owner's computer** (Windows 11 build 26200, two displays, about 31 pictures per second while something moved). Whether the saved picture looked right to the eye has not been confirmed yet.
 
-**The video test has never been run.** `TEST VIDEO CAPTURE.bat` records an 8 second MP4 of the main screen through Windows' own video tools and reports processor use against the 10 percent target. Its Windows-only code has been checked by the Rust compiler and linter for Windows, and everything around it is tested here with fakes, but whether Windows' encoders behave on your computer is not known until you run it.
+**The video test has passed on the owner's computer** (240 pictures at 30 per second, none skipped, about 51 percent of one processor core, with a graphics card encoder available). Whether the saved video looked right to the eye has not been confirmed yet.
+
+**The crash safety test has never been run.** `TEST VIDEO CRASH.bat` records a video, stops the program without warning, and reports how many seconds survived. Its result decides how recordings are saved.
 
 ## What to do on Windows (no typing needed)
 
@@ -38,7 +40,9 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 
 4. Double-click **`TEST VIDEO CAPTURE.bat`**. It records an 8 second MP4 video of your main screen (no sound yet), opens it, and says PASS or lists what went wrong. The video shows your screen, so it stays on your computer and you do not need to send it.
 
-If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, `screen-test-log.txt`, or `video-test-log.txt`, saved in this folder).
+5. Double-click **`TEST VIDEO CRASH.bat`**. It records your screen, stops the program without warning (only its own recording process), then repairs the video and tells you how many seconds survived.
+
+If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, `screen-test-log.txt`, `video-test-log.txt`, or `video-crash-log.txt`, saved in this folder).
 
 ## How the pieces fit
 
@@ -69,6 +73,7 @@ openstage-capture record --project <folder>   record, taking one-line JSON comma
 openstage-capture recover --project <folder>  repair a recording that was interrupted
 openstage-capture screen-test                 try capturing the screen (Windows only)
 openstage-capture video-test                  try making an MP4 of the screen (Windows only)
+openstage-capture video-crash-test            record, stop the program without warning, check what survived (Windows only)
 openstage-capture render ...                  not built yet (Phase 3)
 ```
 

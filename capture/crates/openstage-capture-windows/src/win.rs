@@ -4,10 +4,8 @@
 //! This file only builds on Windows. It has been type-checked for Windows but, until the owner
 //! runs `TEST SCREEN CAPTURE.bat`, it has never been run. Treat every line of it as unproven.
 
-use crate::{number_displays, DisplayInfo, Frame, FrameSource, Platform, ScreenError, WindowsVersion};
+use crate::{number_displays, DisplayInfo, Frame, FrameQueue, FrameSource, Platform, ScreenError, WindowsVersion};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
@@ -34,7 +32,7 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 
-/// How many pictures may wait to be taken before new ones are thrown away.
+/// How many pictures may wait to be taken; beyond that the oldest is dropped for the newest.
 const QUEUE_DEPTH: usize = 8;
 /// MONITORINFOF_PRIMARY
 const MONITOR_IS_PRIMARY: u32 = 1;
@@ -123,8 +121,7 @@ struct Shared {
     device: ID3D11Device,
     /// The device context may only be used by one thread at a time.
     gpu: Mutex<Gpu>,
-    tx: SyncSender<Frame>,
-    dropped: AtomicU64,
+    queue: FrameQueue,
     first_ticks: Mutex<Option<i64>>,
 }
 
@@ -138,7 +135,6 @@ unsafe impl Send for Shared {}
 unsafe impl Sync for Shared {}
 
 struct Capture {
-    rx: Receiver<Frame>,
     shared: Arc<Shared>,
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
@@ -172,12 +168,10 @@ impl Capture {
         let session = pool.CreateCaptureSession(&item).map_err(|e| failed("Could not start a capture session", e))?;
         session.SetIsCursorCaptureEnabled(with_cursor).map_err(|e| failed("Could not set the pointer option", e))?;
 
-        let (tx, rx) = sync_channel(QUEUE_DEPTH);
         let shared = Arc::new(Shared {
             device,
             gpu: Mutex::new(Gpu { context, staging: None }),
-            tx,
-            dropped: AtomicU64::new(0),
+            queue: FrameQueue::new(QUEUE_DEPTH),
             first_ticks: Mutex::new(None),
         });
 
@@ -198,20 +192,17 @@ impl Capture {
             ))
             .map_err(|e| failed("Could not listen for pictures", e))?;
         session.StartCapture().map_err(|e| failed("Windows would not start the capture", e))?;
-        Ok(Self { rx, shared, pool, session, token })
+        Ok(Self { shared, pool, session, token })
     }
 }
 
 impl FrameSource for Capture {
     fn next_frame(&mut self, timeout: Duration) -> Option<Frame> {
-        match self.rx.recv_timeout(timeout) {
-            Ok(frame) => Some(frame),
-            Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => None,
-        }
+        self.shared.queue.pop(timeout)
     }
 
     fn dropped(&self) -> u64 {
-        self.shared.dropped.load(Ordering::Relaxed)
+        self.shared.queue.replaced()
     }
 }
 
@@ -299,12 +290,6 @@ fn handle_frame(shared: &Shared, frame: &Direct3D11CaptureFrame) -> windows::cor
     }
     drop(gpu);
 
-    match shared.tx.try_send(Frame { width, height, t_ms, bgra }) {
-        Ok(()) => {}
-        Err(TrySendError::Full(_)) => {
-            shared.dropped.fetch_add(1, Ordering::Relaxed);
-        }
-        Err(TrySendError::Disconnected(_)) => {}
-    }
+    shared.queue.push(Frame { width, height, t_ms, bgra });
     Ok(())
 }

@@ -31,6 +31,7 @@ openstage-capture record --project <folder> [options]
 openstage-capture recover --project <folder>
 openstage-capture screen-test [options]                          (Windows only; tries screen capture)
 openstage-capture video-test [options]                           (Windows only; tries making an MP4 of the screen)
+openstage-capture video-crash-test [options]                     (Windows only; records, kills the program, checks what survived)
 openstage-capture render --project <folder> --out <file>        (not built yet)
 ```
 
@@ -68,10 +69,24 @@ Records a short MP4 video of one display with Windows' own video tools and repor
 | `--seconds` | 8 | How long to record (between 1 and 600). |
 | `--fps` | 30 | Pictures per second in the video. The screen only sends a picture when something changes, so the newest picture is repeated to keep the rate steady. |
 | `--bitrate-kbps` | 8000 | Video quality, in kilobits per second. |
-| `--out` | `video-test-output` | Folder for `test.mp4`. The video shows the screen, so it is private. |
+| `--fragmented` | off | Write a crash-safe fragmented MP4 (`test_fragmented.mp4`): a setup box and then short, self-contained fragments, about one a second, so a file cut off by a crash still plays up to the last whole fragment. |
+| `--out` | `video-test-output` | Folder for `test.mp4` (or `test_fragmented.mp4`). The video shows the screen, so it is private. |
 | `--plain` | off | Print sentences for a person instead of JSON events. No `hello` line is printed in this mode. |
 
-The checks, in order: `media-foundation`, `h264-encoder`, `video-encode`, `cpu-use`, `mp4-file`. It stops at the first check that makes the rest meaningless. `video-encode` is not fine if more than 10 percent of the beats were skipped because the computer could not keep up. `cpu-use` is not fine above 10 percent of the computer's total processing capacity (the product's target for 1080p at 30 pictures per second). Exit code 0 means every check was fine, 1 means at least one found a problem, 2 means the computer is not running Windows.
+The checks, in order: `media-foundation`, `h264-encoder`, `video-encode`, `video-readback` (Windows opens the finished file the way a player would and counts the pictures; they must match what was written, within 5 percent), `cpu-use`, `mp4-file`. It stops at the first check that makes the rest meaningless. `video-encode` is not fine if more than 10 percent of the beats were skipped because the computer could not keep up. `cpu-use` is not fine above 10 percent of the computer's total processing capacity (the product's target for 1080p at 30 pictures per second). Exit code 0 means every check was fine, 1 means at least one found a problem, 2 means the computer is not running Windows.
+
+### Options for `video-crash-test`
+
+Tests crash safety on this computer. It starts a recording of one display as a fragmented MP4 (the same as `video-test --fragmented`), waits until the file appears, lets it record, then **kills the recording program without warning** (the way a crash or a power cut would), and looks at what is left. Only the test's own recording process is stopped.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--display` | 1 | Which display to record. |
+| `--seconds-before-kill` | 8 | How long to let it record before the kill (between 2 and 60). |
+| `--out` | `video-crash-output` | Folder for `test_fragmented.mp4`. It shows the screen, so it is private. |
+| `--plain` | off | Print sentences for a person instead of JSON events. |
+
+The checks, in order: `crash-test` (the recording ran and was killed), `crash-scan` (how many complete fragments the file holds and whether it ends cleanly), `crash-read-as-is` (whether Windows can play the file exactly as the crash left it), `crash-repair` (cutting off only the unfinished last piece), `crash-read-after-repair`, and `crash-loss` (how many seconds of recording were lost; fine if no more than 3, while the product allows at most 10). The recorded time is measured from the moment the recording program signals that recording began (it creates a small marker file, `recording-started.txt`, in the output folder), to the kill, so it is accurate to about a tenth of a second. Exit codes are as for `screen-test`.
 
 ### Options for `record`
 

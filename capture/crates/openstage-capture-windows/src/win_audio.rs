@@ -1,0 +1,277 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The Windows side of sound: WASAPI, Windows' own audio capture service.
+//!
+//! This file only builds on Windows. It has been type-checked for Windows but, until the owner
+//! runs `TEST AUDIO CAPTURE.bat`, it has never been run. Treat every line of it as unproven.
+//!
+//! Each stream (the microphone, and what the computer is playing) runs on its own thread, asks
+//! Windows for 48,000 samples per second, stereo, 16 bits (Windows converts from whatever the
+//! device really uses), and collects whatever arrives. The recorder takes it from there.
+
+use crate::audio::{AudioInfo, AudioPlatform, AudioSource, CHANNELS, SAMPLE_RATE};
+use crate::ScreenError;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use windows::core::PWSTR;
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Media::Audio::{
+    eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+    WAVEFORMATEX, WAVE_FORMAT_PCM,
+};
+use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
+use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
+
+/// How big Windows' own buffer is, in units of 100 nanoseconds (100 milliseconds).
+const BUFFER_100NS: i64 = 1_000_000;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Microphone,
+    SystemSound,
+}
+
+impl Kind {
+    fn label(self) -> &'static str {
+        match self {
+            Kind::Microphone => "microphone",
+            Kind::SystemSound => "sound output",
+        }
+    }
+}
+
+pub struct WindowsAudio;
+
+impl AudioPlatform for WindowsAudio {
+    fn start_microphone(&self) -> Result<Box<dyn AudioSource>, ScreenError> {
+        start(Kind::Microphone)
+    }
+
+    fn start_system_audio(&self) -> Result<Box<dyn AudioSource>, ScreenError> {
+        start(Kind::SystemSound)
+    }
+}
+
+/// What the capture thread and the reader share.
+struct Shared {
+    samples: Mutex<Vec<i16>>,
+    lost: AtomicU64,
+    failure: Mutex<Option<String>>,
+    stop: AtomicBool,
+}
+
+struct Wasapi {
+    info: AudioInfo,
+    shared: Arc<Shared>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl AudioSource for Wasapi {
+    fn info(&self) -> &AudioInfo {
+        &self.info
+    }
+
+    fn read(&mut self) -> Vec<i16> {
+        std::mem::take(&mut *self.shared.samples.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    fn discontinuities(&self) -> u64 {
+        self.shared.lost.load(Ordering::Relaxed)
+    }
+
+    fn failure(&self) -> Option<String> {
+        self.shared.failure.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl Drop for Wasapi {
+    fn drop(&mut self) {
+        self.shared.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn start(kind: Kind) -> Result<Box<dyn AudioSource>, ScreenError> {
+    let shared = Arc::new(Shared {
+        samples: Mutex::new(Vec::new()),
+        lost: AtomicU64::new(0),
+        failure: Mutex::new(None),
+        stop: AtomicBool::new(false),
+    });
+    let (tx, rx) = channel::<Result<AudioInfo, String>>();
+    let for_thread = Arc::clone(&shared);
+    let handle = thread::spawn(move || capture_thread(kind, for_thread, tx));
+    match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Ok(info)) => Ok(Box::new(Wasapi { info, shared, thread: Some(handle) })),
+        Ok(Err(why)) => {
+            let _ = handle.join();
+            Err(ScreenError::Failed(why))
+        }
+        Err(_) => {
+            shared.stop.store(true, Ordering::Relaxed);
+            Err(ScreenError::Failed(format!(
+                "Windows did not answer within 10 seconds when asked to start the {}.",
+                kind.label()
+            )))
+        }
+    }
+}
+
+/// Windows' error, in words: with advice for the common cause of each problem.
+fn describe(kind: Kind, what: &str, e: &windows::core::Error) -> String {
+    let code = e.code().0 as u32;
+    let advice = match code {
+        // E_ACCESSDENIED
+        0x8007_0005 if kind == Kind::Microphone => {
+            " Windows may be blocking microphone access: open Settings, Privacy and security, Microphone, and allow desktop apps to use it."
+        }
+        // E_NOTFOUND: no such device
+        0x8007_0490 => " No such device was found; check that one is connected and enabled in the Windows sound settings.",
+        // AUDCLNT_E_DEVICE_IN_USE
+        0x8889_000A => " Another program has taken the device for its own exclusive use.",
+        _ => "",
+    };
+    format!("{what} (Windows error code 0x{code:08X}: {}).{advice}", e.message().trim())
+}
+
+fn friendly_name(device: &IMMDevice) -> Option<String> {
+    unsafe {
+        let store = device.OpenPropertyStore(STGM_READ).ok()?;
+        let value = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+        let text: PWSTR = PropVariantToStringAlloc(&value).ok()?;
+        let name = text.to_string().ok();
+        CoTaskMemFree(Some(text.0 as *const _));
+        name
+    }
+}
+
+struct Opened {
+    client: IAudioClient,
+    capture: IAudioCaptureClient,
+    info: AudioInfo,
+}
+
+unsafe fn open(kind: Kind) -> Result<Opened, String> {
+    let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        .map_err(|e| describe(kind, "Windows' sound service could not be reached", &e))?;
+    let (flow, extra_flags) = match kind {
+        Kind::Microphone => (eCapture, 0),
+        // "Loopback": listen to what a sound output is playing.
+        Kind::SystemSound => (eRender, AUDCLNT_STREAMFLAGS_LOOPBACK),
+    };
+    let device = enumerator
+        .GetDefaultAudioEndpoint(flow, eConsole)
+        .map_err(|e| describe(kind, &format!("Windows has no default {} to listen to", kind.label()), &e))?;
+    let name = friendly_name(&device).unwrap_or_else(|| format!("the default {}", kind.label()));
+    let client: IAudioClient =
+        device.Activate(CLSCTX_ALL, None).map_err(|e| describe(kind, &format!("Could not open {name}"), &e))?;
+
+    // Ask for plain 16-bit stereo at 48,000 samples per second; Windows converts from what the device really does.
+    let format = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_PCM as u16,
+        nChannels: CHANNELS,
+        nSamplesPerSec: SAMPLE_RATE,
+        nAvgBytesPerSec: SAMPLE_RATE * CHANNELS as u32 * 2,
+        nBlockAlign: CHANNELS * 2,
+        wBitsPerSample: 16,
+        cbSize: 0,
+    };
+    client
+        .Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            extra_flags | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            BUFFER_100NS,
+            0,
+            &format,
+            None,
+        )
+        .map_err(|e| describe(kind, &format!("Could not start listening to {name}"), &e))?;
+    let capture: IAudioCaptureClient =
+        client.GetService().map_err(|e| describe(kind, "Could not get the sound from the device", &e))?;
+    client.Start().map_err(|e| describe(kind, &format!("Could not start {name}"), &e))?;
+    Ok(Opened { client, capture, info: AudioInfo { device: name, sample_rate: SAMPLE_RATE, channels: CHANNELS } })
+}
+
+fn capture_thread(kind: Kind, shared: Arc<Shared>, started: std::sync::mpsc::Sender<Result<AudioInfo, String>>) {
+    // Windows' components must be started on every thread that uses them.
+    crate::win::prepare();
+    let opened = match unsafe { open(kind) } {
+        Ok(o) => o,
+        Err(why) => {
+            let _ = started.send(Err(why));
+            return;
+        }
+    };
+    let _ = started.send(Ok(opened.info.clone()));
+
+    let channels = opened.info.channels as usize;
+    while !shared.stop.load(Ordering::Relaxed) {
+        thread::sleep(Duration::from_millis(10));
+        loop {
+            let waiting = match unsafe { opened.capture.GetNextPacketSize() } {
+                Ok(n) => n,
+                Err(e) => {
+                    *shared.failure.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(describe(kind, "Windows stopped delivering sound", &e));
+                    shared.stop.store(true, Ordering::Relaxed);
+                    break;
+                }
+            };
+            if waiting == 0 {
+                break;
+            }
+            let mut data: *mut u8 = std::ptr::null_mut();
+            let mut frames = 0u32;
+            let mut flags = 0u32;
+            if let Err(e) = unsafe { opened.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None) } {
+                *shared.failure.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some(describe(kind, "Windows stopped delivering sound", &e));
+                shared.stop.store(true, Ordering::Relaxed);
+                break;
+            }
+            let count = frames as usize * channels;
+            let mut block = vec![0i16; count];
+            if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 == 0 && !data.is_null() {
+                // Copied byte by byte into properly aligned memory, so the source's alignment does not matter.
+                unsafe { std::ptr::copy_nonoverlapping(data, block.as_mut_ptr() as *mut u8, count * 2) };
+            }
+            if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
+                shared.lost.fetch_add(1, Ordering::Relaxed);
+            }
+            shared.samples.lock().unwrap_or_else(|p| p.into_inner()).extend_from_slice(&block);
+            let _ = unsafe { opened.capture.ReleaseBuffer(frames) };
+        }
+    }
+    let _ = unsafe { opened.client.Stop() };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// On a brand new thread, with nothing prepared in advance, starting to listen must still reach
+    /// Windows' sound service. (A computer with no microphone or no sound output gives a different,
+    /// honest error; only the "not started" mistake is what this guards against.)
+    #[test]
+    fn listening_starts_properly_from_a_thread_nobody_prepared() {
+        let results = std::thread::spawn(|| {
+            let audio = WindowsAudio;
+            (
+                audio.start_microphone().err().map(|e| e.to_string()),
+                audio.start_system_audio().err().map(|e| e.to_string()),
+            )
+        })
+        .join()
+        .unwrap();
+        for text in [results.0, results.1].into_iter().flatten() {
+            assert!(!text.contains("CoInitialize has not been called"), "the thread was not prepared: {text}");
+        }
+    }
+}

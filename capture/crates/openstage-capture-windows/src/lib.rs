@@ -9,6 +9,7 @@
 //! This crate does not record to a capture project yet. [`run_screen_test`] only proves that
 //! pictures arrive, how steadily, and that they show the screen.
 
+mod audio;
 mod bmp;
 mod queue;
 mod record;
@@ -17,8 +18,14 @@ mod video;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
+mod win_audio;
+#[cfg(windows)]
 mod win_video;
 
+pub use audio::{
+    mix, peak, run_audio_test, run_audio_test_with, system_audio_platform, write_wav, AudioAligner, AudioInfo,
+    AudioPlatform, AudioSource, AudioTestOptions, CHANNELS as AUDIO_CHANNELS, SAMPLE_RATE as AUDIO_SAMPLE_RATE,
+};
 pub use bmp::write_bmp;
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use queue::FrameQueue;

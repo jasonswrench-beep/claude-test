@@ -29,6 +29,7 @@ This page describes how OpenStage talks to the recording program, `openstage-cap
 openstage-capture probe
 openstage-capture record --project <folder> [options]
 openstage-capture recover --project <folder>
+openstage-capture audio-test [options]                           (Windows only; listens to the microphone and the computer's sound)
 openstage-capture video-info --file <video>                          (Windows only; says how long a saved video is)
 openstage-capture screen-test [options]                          (Windows only; tries screen capture)
 openstage-capture video-test [options]                           (Windows only; tries making an MP4 of the screen)
@@ -43,6 +44,18 @@ openstage-capture render --project <folder> --out <file>        (not built yet)
 | 0 | It worked. |
 | 1 | Something went wrong (a `fatal` error event was printed first). |
 | 2 | Not available: an unknown source, a command not built yet (`render`), or `screen-test` on a computer that is not running Windows. |
+
+### Options for `audio-test`
+
+Listens to the default microphone and to what the computer is playing (the default sound output, including a screen reader's speech) and reports each finding as a `check` event. It records no picture and does not make a capture project. Sound is requested from Windows as 16-bit stereo at 48,000 samples per second; Windows converts from what the device really uses.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--seconds` | 8 | How long to listen (between 1 and 600). |
+| `--out` | `audio-test-output` | Folder for `mic.wav`, `system.wav`, and `both.wav`. They contain your voice and what the computer played, so they are private. |
+| `--plain` | off | Print sentences for a person instead of JSON events. |
+
+The checks, in order: `microphone-start`, `system-audio-start` (each names the device found, or says why listening could not start, with advice for the usual cause), `microphone` and `system-audio` (the loudest moment in words, or "heard nothing" with advice), `audio-clock` (the microphone's sound card clock compared with the computer's: fine within 250 milliseconds), and `audio-saved`. The saved files hold what a recording would hold: each track as long as the real time, with silence filled in where Windows delivered nothing (it sends nothing for a quiet sound output). Exit codes are as for `screen-test`.
 
 ### `video-info`
 
@@ -174,7 +187,7 @@ The author started again. The old take is **set aside, not erased**, and a new o
 ```
 
 ### `check`
-One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, and `video-info`; and by `record --source screen`, which sends `video-readback` just before `result`: Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds. The setup checks of the recorder will use it too.
+One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, `audio-test`, and `video-info`; and by `record --source screen`, which sends `video-readback` just before `result`: Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds. The setup checks of the recorder will use it too.
 ```json
 {"event":"check","check":"screen-capture","ok":true,"message":"Received 151 pictures in 5.0 seconds from Display 1, 1920 by 1080, main display. Each picture is 1920 by 1080 pixels."}
 ```

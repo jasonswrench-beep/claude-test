@@ -16,7 +16,7 @@ use crate::{Frame, FrameSource, Platform, SinkSpec, VideoPlatform, VideoSink};
 use openstage_capture::{MediaFactory, SessionConfig, SessionError, TakeMedia};
 use openstage_capture_project::MediaFile;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The most recording a crash is declared to cost: a fragment (about a second) plus the encoder's delay.
 /// A real test on Windows 11 lost 1.1 seconds.
@@ -71,8 +71,10 @@ impl MediaFactory for ScreenMedia {
     }
 
     fn begin(&self, take_dir: &Path, _cfg: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError> {
+        let started = Instant::now();
         self.video.start_media().map_err(|e| media_error(format!("Windows' video tools would not start: {e}")))?;
 
+        let tools_ready = started.elapsed();
         let displays = self.screen.list_displays().map_err(media_error)?;
         let display = displays.iter().find(|d| d.number == self.display).ok_or_else(|| {
             media_error(format!("There is no Display {}. Choose a number from 1 to {}.", self.display, displays.len()))
@@ -81,11 +83,13 @@ impl MediaFactory for ScreenMedia {
             .screen
             .start_display_capture(display, false)
             .map_err(|e| media_error(format!("Could not start capturing {}: {e}", display.describe())))?;
+        let capture_started = started.elapsed();
         let first = source.next_frame(Duration::from_secs(3)).ok_or_else(|| {
             media_error(
                 "No picture arrived from the screen within 3 seconds. Windows only sends a picture when something changes: try again while moving a window.",
             )
         })?;
+        let first_picture = started.elapsed();
         if first.width % 2 != 0 || first.height % 2 != 0 {
             return Err(media_error(format!(
                 "The display is {} by {} pixels. H.264 video needs an even width and height, and trimming is not built yet.",
@@ -103,6 +107,14 @@ impl MediaFactory for ScreenMedia {
         };
         let sink =
             self.video.create_sink(&spec).map_err(|e| media_error(format!("Could not start the video file: {e}")))?;
+        // Where the start-up time goes, for diagnosis. Standard error is for diagnostics only.
+        eprintln!(
+            "start-up timing: video tools {} ms, screen capture started {} ms, first picture {} ms, video file ready {} ms (all counted from the start)",
+            tools_ready.as_millis(),
+            capture_started.as_millis(),
+            first_picture.as_millis(),
+            started.elapsed().as_millis()
+        );
         Ok(Box::new(ScreenTake {
             source: Some(source),
             sink: Some(sink),

@@ -10,3 +10,5 @@ video-crash-log.txt
 video-crash-output/
 record-test-log.txt
 record-test-output/
+audio-test-log.txt
+audio-test-output/

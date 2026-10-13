@@ -6,19 +6,21 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 
 ## Where this stands (honest status)
 
-**Phase 1, the "walking skeleton," is built.** That means the whole path from "start recording" to "recover a crashed recording" works, using a built-in **fake** source of picture and sound.
+**Phase 1, the "walking skeleton," is built:** the whole path from "start recording" to "recover a crashed recording" works, using a built-in **fake** source of picture and sound. **Phase 2, real capture on Windows, is under way.**
 
-| Works and is tested | Not built yet |
-|---|---|
-| The conversation with OpenStage (the protocol) | Recording a real screen, window, or region into a project |
-| The capture project folder and its crash-safe files | Recording your real microphone, system sound, or webcam |
-| Countdown, record, pause, resume, stop, markers | Cursor and click effects, interaction capture |
-| Start again (the old take is kept, never erased) | Turning a recording into an MP4 (`render`) |
-| Killing the program mid-recording and repairing it | The editor panels inside OpenStage |
-| Sound levels with plain-language text | Captions, audio description, step-by-step output |
-| License and rule checks | Encoding the pictures into video (the next slice) |
+| Run on the owner's Windows computer, and working | Built, not yet run on Windows | Not built yet |
+|---|---|---|
+| The conversation with OpenStage (the protocol) | Sound in the recording: the microphone and the computer's sound mixed into the MP4, and kept apart as `mic.wav` and `system.wav` | Recording a single window or a region, or the webcam |
+| The capture project folder and its crash-safe files | Repairing the sound files after a crash (tested here with made-up files) | Cursor and click effects, interaction capture |
+| Countdown, record, pause, resume, stop, markers, start again | | Turning a recording into an edited MP4 (`render`), and the editor panels inside OpenStage |
+| Killing the program mid-recording and repairing it | | Captions, audio description, step-by-step output |
+| Capturing a real screen, and encoding it as H.264 video | | A check that warns when the microphone hears the speakers (an echo) |
+| A crash during a video recording loses about a second | | Measuring how far sound and picture drift apart; the 1.3 second start-up delay |
+| The real recorder with a real screen: pause leaves no gap, the saved video reads back at the right length | | |
+| Listening to the microphone and to the computer's own sound; finding which sound output carries the sound | | |
+| License and rule checks | | |
 
-**What "tested" means here.** The 180 automated tests pass on Linux (a Windows computer runs 182, because two tests only exist on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 115 tests added since then (the take-number fix, the screen capture, video, and crash checks) have passed on Linux and have not yet been run on Windows. On Windows, the fake test source and the real screen capture test (`screen-test`) have been run. Making video, recording sound, and recording a real screen into a project have not, so none of that is claimed to work.
+**What "tested" means here.** The 213 automated tests pass on Linux (a Windows computer runs 215, because two tests only exist on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 148 tests added since then have passed on Linux only. The real Windows parts (screen capture, video, crash safety, the recorder, the microphone and the computer's sound) were run on the owner's computer through the test scripts listed below, and passed. The AAC sound track inside the MP4 and the sound files are the newest code and have not run on Windows yet, so none of that is claimed to work.
 
 ## Phase 2 has started: screen capture
 
@@ -32,7 +34,9 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 
 **The real recorder has passed on the owner's computer** with a scripted session on a real screen (countdown, markers, a 2 second pause that left no gap, stop), producing `takes/take-001/screen.mp4` that Windows read back at exactly the recording's length. It starts about 1.3 seconds after the countdown ends, which will be fixed. `TEST RECORD SCREEN.bat` runs it.
 
-**Sound: the microphone works** on the owner's computer, with the right one chosen from a list of 8 (its clock agreed with the computer's to 13 and then 56 milliseconds over 8 seconds). The computer's own sound has not been heard yet: two runs listened to the default speakers and got silence. That computer has 11 sound outputs, so the sound probably plays through a different one. `FIND SOUND OUTPUT.bat` listens to all of them at once and says which one carries sound; `TEST AUDIO CAPTURE.bat` lists the microphones and sound outputs, asks which to use, listens for 8 seconds, and saves what it heard.
+**Sound capture has passed on the owner's computer:** the microphone (a Shure MV7, chosen from a list of 8) and the computer's own sound (output 9 of 11, found with `FIND SOUND OUTPUT.bat`) were heard together, and the clocks agreed. With speakers instead of headphones, the microphone also hears the speakers and the mixed sound has an echo. That is why the recorder keeps the microphone and the computer's sound as **separate files** as well as the mix, so the editor can fix it later.
+
+**Sound in the recording is built but not yet run on Windows.** `record --source screen` records the screen, the chosen microphone and the chosen sound output. Each take holds `screen.mp4` (picture plus the two sounds mixed, as AAC) and `mic.wav` and `system.wav` (each sound alone). Choose the devices with `--microphone` and `--output` (a number from `audio-devices`, part of a name, `default`, or `none`). `TEST RECORD SCREEN.bat` tries it.
 
 ## What to do on Windows (no typing needed)
 
@@ -41,7 +45,7 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 3. Double-click **`TEST SCREEN CAPTURE.bat`**. It watches your main screen for 8 seconds (keep a window moving), saves two still pictures of it, opens one, and says PASS or lists what went wrong. The pictures show your screen, so they stay on your computer and you do not need to send them.
 4. Double-click **`TEST VIDEO CAPTURE.bat`**. It records an 8 second MP4 video of your main screen (no sound yet), opens it, and says PASS or lists what went wrong. The video shows your screen, so it stays on your computer and you do not need to send it.
 5. Double-click **`TEST VIDEO CRASH.bat`**. It records your screen, stops the program without warning (only its own recording process), then repairs the video and tells you how many seconds survived.
-6. Double-click **`TEST RECORD SCREEN.bat`**. It runs the real recorder through a scripted session (countdown, marker, pause, resume, marker, stop) on your main screen, opens the video it made, and says PASS or lists what went wrong. No sound yet. The video shows your screen, so it stays on your computer.
+6. Double-click **`TEST RECORD SCREEN.bat`**. It asks which microphone and sound output to use, then runs the real recorder through a scripted session (countdown, marker, pause, resume, marker, stop) on your main screen with sound, opens the video it made, and says PASS or lists what went wrong. Play some sound and say a sentence while it runs. The recording shows your screen and holds your voice, so it stays on your computer.
 7. Double-click **`FIND SOUND OUTPUT.bat`** while something is playing (a video or some music). It listens to every sound output at the same time for 6 seconds and says which output carries the sound and its number. Nothing is saved.
 8. Double-click **`TEST AUDIO CAPTURE.bat`**. It lists your microphones and sound outputs and asks which to use (press Enter for the defaults), then listens to your microphone and to the sound your computer is playing for 8 seconds (play something, and say a sentence), saves what it heard as sound files, plays them, and says PASS or lists what went wrong. When it asks which sound output to use, give the number `FIND SOUND OUTPUT.bat` named. The files contain your voice, so they stay on your computer.
 

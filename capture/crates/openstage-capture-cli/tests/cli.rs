@@ -366,6 +366,27 @@ fn recording_the_screen_says_it_needs_windows_and_exits_with_2() {
 }
 
 #[test]
+fn the_sound_choices_are_accepted_and_do_not_disturb_the_test_source() {
+    // The built-in test source makes its own fake sound; the real-sound options are for `--source screen`.
+    let dir = tempfile::tempdir().unwrap();
+    let (status, events) = run_once(&[
+        "record",
+        "--project",
+        dir.path().join("p.capture").to_str().unwrap(),
+        "--countdown-ms",
+        "0",
+        "--duration-ms",
+        "500",
+        "--microphone",
+        "none",
+        "--output",
+        "2",
+    ]);
+    assert_eq!(status.code(), Some(0));
+    assert!(events.iter().any(|e| matches!(e, Event::Result { ok: true, .. })));
+}
+
+#[test]
 fn plain_mode_speaks_in_sentences_follows_a_demo_script_and_leaves_no_json() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("p.capture");

@@ -5,7 +5,8 @@
 //! course, never inside it. The folder holds a small manifest (`capture.json`)
 //! and one folder per *take* under `takes/`. A take holds its media either as
 //! one crash-safe fragmented MP4 written by Windows (`screen.mp4`, listed in
-//! `take.json`) or, for the test source, in small checksummed pieces called
+//! `take.json`) plus separate WAV sound files for the microphone and the computer's own
+//! sound, or, for the test source, in small checksummed pieces called
 //! segments, plus an append-only log of interactions.
 //!
 //! Everything here is built so that a crash costs seconds, not the take:
@@ -27,6 +28,7 @@ mod manifest;
 mod recover;
 mod segment;
 mod take;
+pub mod wav;
 
 pub use error::ProjectError;
 pub use events_log::{read_log, trim_incomplete_tail, EventLogWriter, LogEvent, LogLine};
@@ -40,3 +42,4 @@ pub use take::{
     create_take, create_take_with, finish_take, list_takes, next_take_id, read_take, set_aside_take, take_dir,
     write_take, MediaFile, Take, TakeEntry, TakeState,
 };
+pub use wav::{repair_wav, wav_info, WavInfo, WavRepair, WavWriter};

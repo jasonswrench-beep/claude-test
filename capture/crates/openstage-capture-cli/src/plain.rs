@@ -53,7 +53,12 @@ impl PlainSink {
             Event::Level { source, text, .. } => {
                 // Only say a level when it changes, so a steady sound does not fill the screen.
                 let previous = self.last_level_text.insert(source.clone(), text.clone());
-                (previous.as_deref() != Some(text.as_str())).then(|| format!("Sound level, {source}: {text}."))
+                let name = match source.as_str() {
+                    "mic" => "microphone",
+                    "system" => "the computer's sound",
+                    other => other,
+                };
+                (previous.as_deref() != Some(text.as_str())).then(|| format!("Sound level, {name}: {text}."))
             }
             Event::Warning { message, .. } => Some(format!("Warning: {message}")),
             Event::Error { message, .. } => Some(format!("PROBLEM: {message}")),
@@ -166,7 +171,7 @@ mod tests {
         let level = |text: &str| Event::Level { source: "mic".into(), peak: 0.5, text: text.into(), elapsed_ms: 0 };
         assert!(p.describe(&level("good")).is_some());
         assert!(p.describe(&level("good")).is_none());
-        assert_eq!(p.describe(&level("loud")).as_deref(), Some("Sound level, mic: loud."));
+        assert_eq!(p.describe(&level("loud")).as_deref(), Some("Sound level, microphone: loud."));
     }
 
     #[test]

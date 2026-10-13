@@ -181,6 +181,52 @@ pub fn wav_info(path: &Path) -> io::Result<WavInfo> {
     })
 }
 
+/// Read a sound file a piece at a time (so a long recording never has to fit in memory) and hand each
+/// piece to `each`, with the file's sample rate and channel count. Pieces hold whole frames, interleaved. Returns what the file holds, except `peak`,
+/// which is worked out from the pieces as they go by.
+pub fn read_wav_in_pieces(path: &Path, mut each: impl FnMut(u32, u16, &[i16])) -> io::Result<WavInfo> {
+    let mut file = File::open(path)?;
+    let layout = read_layout(&mut file)?;
+    let len = file.metadata()?.len();
+    let block = layout.channels as u64 * 2;
+    let frames = len.saturating_sub(layout.data_start) / block;
+
+    file.seek(SeekFrom::Start(layout.data_start))?;
+    let mut reader = io::BufReader::new(file.take(frames * block));
+    // About 64 KiB, rounded down to whole frames.
+    let piece_bytes = (64 * 1024 / block as usize).max(1) * block as usize;
+    let mut bytes = vec![0u8; piece_bytes];
+    let mut samples: Vec<i16> = Vec::with_capacity(piece_bytes / 2);
+    let mut peak = 0u32;
+    loop {
+        let mut filled = 0;
+        while filled < piece_bytes {
+            let n = reader.read(&mut bytes[filled..])?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+        }
+        if filled == 0 {
+            break;
+        }
+        let whole = filled - filled % block as usize;
+        samples.clear();
+        samples.extend(bytes[..whole].chunks_exact(2).map(|p| i16::from_le_bytes([p[0], p[1]])));
+        peak = peak.max(samples.iter().map(|s| (*s as i32).unsigned_abs()).max().unwrap_or(0));
+        each(layout.sample_rate, layout.channels, &samples);
+        if filled < piece_bytes {
+            break;
+        }
+    }
+    Ok(WavInfo {
+        sample_rate: layout.sample_rate,
+        channels: layout.channels,
+        frames,
+        peak: (peak as f32 / 32768.0).min(1.0),
+    })
+}
+
 /// What a repair did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WavRepair {
@@ -326,5 +372,29 @@ mod tests {
         w.append(&tone(4800, 2, 0)).unwrap();
         w.finish().unwrap();
         assert_eq!(wav_info(&path).unwrap().peak, 0.0);
+    }
+
+    #[test]
+    fn a_file_can_be_read_in_pieces_and_the_pieces_add_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.wav");
+        let mut w = WavWriter::create(&path, 48_000, 2).unwrap();
+        let samples: Vec<i16> = (0..2 * 100_003).map(|i| (i % 2000) as i16 - 1000).collect();
+        w.append(&samples).unwrap();
+        w.finish().unwrap();
+
+        let mut got: Vec<i16> = Vec::new();
+        let mut pieces = 0;
+        let info = read_wav_in_pieces(&path, |rate, channels, piece| {
+            assert_eq!((rate, channels), (48_000, 2));
+            assert_eq!(piece.len() % 2, 0, "pieces hold whole frames");
+            got.extend_from_slice(piece);
+            pieces += 1;
+        })
+        .unwrap();
+        assert!(pieces > 1, "a long file arrives in several pieces");
+        assert_eq!(got, samples, "nothing lost, nothing repeated");
+        assert_eq!(info.frames, 100_003);
+        assert!((info.peak - 1000.0 / 32768.0).abs() < 0.001);
     }
 }

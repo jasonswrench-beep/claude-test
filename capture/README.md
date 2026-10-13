@@ -10,17 +10,18 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 
 | Run on the owner's Windows computer, and working | Built, not yet run on Windows | Not built yet |
 |---|---|---|
-| The conversation with OpenStage (the protocol) | Sound in the recording: the microphone and the computer's sound mixed into the MP4, and kept apart as `mic.wav` and `system.wav` | Recording a single window or a region, or the webcam |
-| The capture project folder and its crash-safe files | Repairing the sound files after a crash (tested here with made-up files) | Cursor and click effects, interaction capture |
+| The conversation with OpenStage (the protocol) | Repairing the sound files after a crash (tested here with made-up files) | Recording a single window or a region, or the webcam |
+| The capture project folder and its crash-safe files | | Cursor and click effects, interaction capture |
 | Countdown, record, pause, resume, stop, markers, start again | | Turning a recording into an edited MP4 (`render`), and the editor panels inside OpenStage |
 | Killing the program mid-recording and repairing it | | Captions, audio description, step-by-step output |
-| Capturing a real screen, and encoding it as H.264 video | | A check that warns when the microphone hears the speakers (an echo) |
+| Capturing a real screen, and encoding it as H.264 video | Warning when the microphone hears the speakers (an echo); tested only on made-up sound | |
 | A crash during a video recording loses about a second | | Measuring how far sound and picture drift apart; the 1.3 second start-up delay |
 | The real recorder with a real screen: pause leaves no gap, the saved video reads back at the right length | | |
 | Listening to the microphone and to the computer's own sound; finding which sound output carries the sound | | |
+| Recording sound with the screen: mixed into the MP4 and kept apart as `mic.wav` and `system.wav` (the owner reported it worked; the numbers were not seen) | | |
 | License and rule checks | | |
 
-**What "tested" means here.** The 213 automated tests pass on Linux (a Windows computer runs 215, because two tests only exist on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 148 tests added since then have passed on Linux only. The real Windows parts (screen capture, video, crash safety, the recorder, the microphone and the computer's sound) were run on the owner's computer through the test scripts listed below, and passed. The AAC sound track inside the MP4 and the sound files are the newest code and have not run on Windows yet, so none of that is claimed to work.
+**What "tested" means here.** The 223 automated tests pass on Linux (a Windows computer runs 225, because two tests only exist on Windows). On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 158 tests added since then have passed on Linux only. The real Windows parts (screen capture, video, crash safety, the recorder, the microphone and the computer's sound) were run on the owner's computer through the test scripts listed below, and passed. Sound in the recording (the AAC sound track inside the MP4 and the sound files) was also run there, and the owner reported that it worked; the detailed numbers were not seen, and how closely sound and picture stay together has not been measured.
 
 ## Phase 2 has started: screen capture
 
@@ -36,7 +37,7 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 
 **Sound capture has passed on the owner's computer:** the microphone (a Shure MV7, chosen from a list of 8) and the computer's own sound (output 9 of 11, found with `FIND SOUND OUTPUT.bat`) were heard together, and the clocks agreed. With speakers instead of headphones, the microphone also hears the speakers and the mixed sound has an echo. That is why the recorder keeps the microphone and the computer's sound as **separate files** as well as the mix, so the editor can fix it later.
 
-**Sound in the recording is built but not yet run on Windows.** `record --source screen` records the screen, the chosen microphone and the chosen sound output. Each take holds `screen.mp4` (picture plus the two sounds mixed, as AAC) and `mic.wav` and `system.wav` (each sound alone). Choose the devices with `--microphone` and `--output` (a number from `audio-devices`, part of a name, `default`, or `none`). `TEST RECORD SCREEN.bat` tries it.
+**Sound in the recording has been run on the owner's computer, which reported that it worked.** `record --source screen` records the screen, the chosen microphone and the chosen sound output. Each take holds `screen.mp4` (picture plus the two sounds mixed, as AAC) and `mic.wav` and `system.wav` (each sound alone). Choose the devices with `--microphone` and `--output` (a number from `audio-devices`, part of a name, `default`, or `none`). `TEST RECORD SCREEN.bat` tries it.
 
 ## What to do on Windows (no typing needed)
 

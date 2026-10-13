@@ -42,4 +42,4 @@ pub use take::{
     create_take, create_take_with, finish_take, list_takes, next_take_id, read_take, set_aside_take, take_dir,
     write_take, MediaFile, Take, TakeEntry, TakeState,
 };
-pub use wav::{repair_wav, wav_info, WavInfo, WavRepair, WavWriter};
+pub use wav::{read_wav_in_pieces, repair_wav, wav_info, WavInfo, WavRepair, WavWriter};

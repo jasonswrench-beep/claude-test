@@ -13,15 +13,18 @@
 //! captured while the recorder was starting up is thrown away too: recording time starts only when
 //! everything is ready.
 
-use crate::audio::{choose_device, mix, peak, AudioAligner, AudioChoice, AudioDevice, AudioPlatform, AudioSource};
+use crate::audio::{
+    choose_device, mix, peak, AudioAligner, AudioChoice, AudioDevice, AudioPlatform, AudioSource, DeviceKind,
+};
 use crate::audio::{CHANNELS, SAMPLE_RATE};
-use crate::report::TrackReport;
+use crate::report::{OutputMove, TrackReport};
 use crate::video::VideoSink;
 use crate::{check, Check};
 use openstage_capture::{describe_level, SessionError};
 use openstage_capture_project::{wav_info, MediaFile, MixInfo, WavWriter};
 use std::cell::Cell;
 use std::path::Path;
+use std::rc::Rc;
 
 /// The microphone's separate sound file in each take.
 pub const MIC_FILE: &str = "mic.wav";
@@ -36,6 +39,15 @@ pub const MAX_GAIN_DB: i32 = 20;
 
 /// How often the sound files are made certain to be on the disk itself, not only handed to the operating system.
 const DISK_SYNC_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How often, in recording time, the recorder asks Windows which sound output is the default. A move
+/// is made when two looks in a row agree, so a moment of flicker while headphones are plugged in is ignored.
+const FOLLOW_LOOK_EVERY_MS: u64 = 250;
+/// How long to wait before trying again to listen to an output that could not be opened.
+const FOLLOW_RETRY_EVERY_MS: u64 = 2_000;
+/// How long the output being listened to may stay broken, with nowhere to move to, before the take ends.
+/// (Unplugging headphones breaks the listening at once; Windows then picks another output a moment later.)
+const FOLLOW_GRACE_MS: u64 = 5_000;
 
 /// Names used in `level` events.
 const MIC_LEVEL: &str = "mic";
@@ -56,6 +68,10 @@ pub struct SoundPlan {
     /// separate sound files are never changed, so the original balance can always be recovered.
     pub microphone_gain_db: i32,
     pub system_gain_db: i32,
+    /// True when the author left the sound output to Windows ("the default"): if Windows moves the
+    /// sound to another output during the recording (headphones plugged in or out), the recording
+    /// follows it. False when the author chose one particular output, which is then kept to.
+    pub follow_default_output: bool,
 }
 
 impl SoundPlan {
@@ -90,7 +106,14 @@ impl SoundPlan {
             None => "Not recording a microphone.".to_string(),
         };
         let system = match &self.system {
-            Some(d) => format!("Recording the computer's sound from sound output {}, {}.", d.number, d.name),
+            Some(d) if self.follow_default_output => format!(
+                "Recording the computer's sound from sound output {}, {}. If Windows moves the sound to another output while recording, for example when headphones are plugged in, the recording follows it.",
+                d.number, d.name
+            ),
+            Some(d) => format!(
+                "Recording the computer's sound from sound output {}, {}, and only from that one.",
+                d.number, d.name
+            ),
             None => "Not recording the computer's sound.".to_string(),
         };
         let mut text = format!("{mic} {system}");
@@ -149,19 +172,22 @@ pub fn plan_sound(
     }
     if let Some(choice) = output {
         plan.system = Some(choose_device(&devices, crate::audio::DeviceKind::SoundOutput, choice)?.clone());
+        plan.follow_default_output = *choice == AudioChoice::Default;
     }
     Ok(plan)
 }
 
 /// How the sound for each take is started.
 pub struct Sound {
-    platform: Box<dyn AudioPlatform>,
+    platform: Rc<dyn AudioPlatform>,
     plan: SoundPlan,
 }
 
 /// Sources that are listening, before the take's files exist.
 pub(crate) struct OpenSound {
     tracks: Vec<(Kind, Box<dyn AudioSource>)>,
+    /// Present when the computer's sound is to follow Windows to another output.
+    follow: Option<Follow>,
     /// How loud each sound is in the mix, in decibels: microphone, then computer's sound.
     gains_db: (i32, i32),
 }
@@ -195,7 +221,7 @@ impl Kind {
 
 impl Sound {
     pub fn new(platform: Box<dyn AudioPlatform>, plan: SoundPlan) -> Self {
-        Self { platform, plan }
+        Self { platform: Rc::from(platform), plan }
     }
 
     pub fn plan(&self) -> &SoundPlan {
@@ -205,6 +231,7 @@ impl Sound {
     /// Start listening. Nothing is written yet.
     pub(crate) fn open(&self) -> Result<OpenSound, SessionError> {
         let mut tracks = Vec::new();
+        let mut follow = None;
         if let Some(device) = &self.plan.microphone {
             let source = self
                 .platform
@@ -217,6 +244,9 @@ impl Sound {
                 media_error(format!("Could not listen to the computer's sound from {}: {e}", device.name))
             })?;
             tracks.push((Kind::System, source));
+            if self.plan.follow_default_output {
+                follow = Some(Follow::new(Rc::clone(&self.platform), device.clone()));
+            }
         }
         for (kind, source) in &tracks {
             let info = source.info();
@@ -231,7 +261,7 @@ impl Sound {
                 )));
             }
         }
-        Ok(OpenSound { tracks, gains_db: (self.plan.microphone_gain_db, self.plan.system_gain_db) })
+        Ok(OpenSound { tracks, follow, gains_db: (self.plan.microphone_gain_db, self.plan.system_gain_db) })
     }
 }
 
@@ -239,6 +269,7 @@ impl OpenSound {
     /// Create the sound files in the take's folder.
     pub(crate) fn begin(self, take_dir: &Path) -> Result<SoundTake, SessionError> {
         let mut tracks = Vec::new();
+        let mut follow = self.follow;
         for (kind, source) in self.tracks {
             let path = take_dir.join(kind.file());
             let wav = WavWriter::create(&path, SAMPLE_RATE, CHANNELS)
@@ -253,6 +284,8 @@ impl OpenSound {
                 ready: Vec::new(),
                 recent_peak: Cell::new(0.0),
                 captured_frames: 0,
+                lost_before: 0,
+                follow: if kind == Kind::System { follow.take() } else { None },
             });
         }
         Ok(SoundTake { tracks, mixed_frames: 0, last_disk_sync: std::time::Instant::now() })
@@ -272,6 +305,127 @@ struct Track {
     recent_peak: Cell<f32>,
     /// How many frames of sound the device really delivered (before any silence was filled in).
     captured_frames: u64,
+    /// Lost moments reported by sources that were listened to earlier and then replaced.
+    lost_before: u64,
+    /// Set for the computer's sound when it is to follow Windows to another output.
+    follow: Option<Follow>,
+}
+
+/// Keeps the computer's sound recording on whichever sound output Windows plays to.
+struct Follow {
+    platform: Rc<dyn AudioPlatform>,
+    /// The output being listened to now.
+    current: AudioDevice,
+    /// When, in recording time, Windows is next asked which output is the default.
+    next_look_ms: u64,
+    /// Since when the output being listened to has been broken, with nowhere to move to.
+    broken_since_ms: Option<u64>,
+    /// An output Windows has just started using, waiting for a second look to agree before moving to it.
+    candidate: Option<String>,
+    /// Every move made so far.
+    moves: Vec<OutputMove>,
+    /// Why the latest move could not be made, until a later look finds nothing wrong.
+    problem: Option<String>,
+}
+
+impl Follow {
+    fn new(platform: Rc<dyn AudioPlatform>, current: AudioDevice) -> Self {
+        Self {
+            platform,
+            current,
+            next_look_ms: 0,
+            broken_since_ms: None,
+            candidate: None,
+            moves: Vec::new(),
+            problem: None,
+        }
+    }
+
+    /// Start listening to the output with this id.
+    fn open(&self, id: &str) -> Result<(AudioDevice, Box<dyn AudioSource>), String> {
+        let devices = self
+            .platform
+            .list_devices()
+            .map_err(|e| format!("Windows would not list the sound outputs after the sound moved ({e})."))?;
+        let device = devices
+            .into_iter()
+            .find(|d| d.kind == DeviceKind::SoundOutput && d.id == id)
+            .ok_or_else(|| "Windows now plays sound to an output that is not in its list.".to_string())?;
+        let source = self
+            .platform
+            .start_system_audio(Some(&device))
+            .map_err(|e| format!("Could not listen to the computer's sound from {}: {e}", device.name))?;
+        let info = source.info();
+        if info.sample_rate != SAMPLE_RATE || info.channels != CHANNELS {
+            return Err(format!(
+                "{} delivers {} channels at {} samples per second, but {} channels at {} were asked for.",
+                device.name, info.channels, info.sample_rate, CHANNELS, SAMPLE_RATE
+            ));
+        }
+        Ok((device, source))
+    }
+}
+
+impl Track {
+    /// If Windows now plays to another sound output, listen there instead. Looks only every half second
+    /// or so; costs nothing when the computer's sound is not following Windows.
+    fn follow_the_output(&mut self, media_ms: u64) {
+        let Some(f) = self.follow.as_mut() else { return };
+        if media_ms < f.next_look_ms {
+            return;
+        }
+        f.next_look_ms = media_ms + FOLLOW_LOOK_EVERY_MS;
+        // If Windows cannot say (or has no output at all), carry on as before; a broken output is dealt with in `failure`.
+        let Ok(Some(id)) = f.platform.default_output_id() else { return };
+        if id == f.current.id {
+            f.candidate = None;
+            if self.source.failure().is_none() {
+                f.problem = None;
+            }
+            return;
+        }
+        // An output that is listened to no longer is moved away from at once; a working one only when
+        // two looks agree.
+        if self.source.failure().is_none() && f.candidate.as_deref() != Some(id.as_str()) {
+            f.candidate = Some(id);
+            return;
+        }
+        match f.open(&id) {
+            Ok((device, source)) => {
+                // What the old output heard last still belongs to the recording.
+                let rest = self.source.read();
+                self.captured_frames += (rest.len() / CHANNELS as usize) as u64;
+                self.recent_peak.set(self.recent_peak.get().max(peak(&rest)));
+                self.aligner.push(&rest);
+                self.lost_before += self.source.discontinuities();
+                f.moves.push(OutputMove { at_ms: media_ms, from: f.current.name.clone(), to: device.name.clone() });
+                f.current = device;
+                f.broken_since_ms = None;
+                f.candidate = None;
+                f.problem = None;
+                self.source = source;
+            }
+            Err(why) => {
+                f.problem = Some(why);
+                f.next_look_ms = media_ms + FOLLOW_RETRY_EVERY_MS;
+            }
+        }
+    }
+
+    /// Why listening stopped, if it did and nothing can be done about it. A computer's sound that follows
+    /// Windows is given a few seconds to move to another output first.
+    fn failure(&mut self, media_ms: u64) -> Option<String> {
+        let why = self.source.failure()?;
+        let Some(f) = self.follow.as_mut() else { return Some(why) };
+        let since = *f.broken_since_ms.get_or_insert(media_ms);
+        if media_ms.saturating_sub(since) < FOLLOW_GRACE_MS {
+            return None;
+        }
+        Some(match &f.problem {
+            Some(problem) => format!("{why} {problem}"),
+            None => why,
+        })
+    }
 }
 
 /// One sample made louder or quieter, never wrapped around into noise.
@@ -292,7 +446,8 @@ impl SoundTake {
     /// Move the sound captured so far, up to `media_ms` of recording time, into the files and the video.
     pub(crate) fn pump(&mut self, media_ms: u64, sink: &mut dyn VideoSink) -> Result<(), SessionError> {
         for t in &mut self.tracks {
-            if let Some(why) = t.source.failure() {
+            t.follow_the_output(media_ms);
+            if let Some(why) = t.failure(media_ms) {
                 return Err(media_error(format!(
                     "Listening to the {} stopped: {why} Everything recorded until then has been kept.",
                     t.kind.label()
@@ -389,7 +544,9 @@ impl SoundTake {
                 worst_later_at_ms: t.aligner.worst_ahead_at_ms(),
                 worst_earlier_ms: t.aligner.worst_late_ms(),
                 worst_earlier_at_ms: t.aligner.worst_late_at_ms(),
-                lost_moments: t.source.discontinuities(),
+                lost_moments: t.lost_before + t.source.discontinuities(),
+                output_moves: t.follow.as_ref().map(|f| f.moves.clone()).unwrap_or_default(),
+                follow_problem: t.follow.as_ref().and_then(|f| f.problem.clone()),
             })
             .collect()
     }
@@ -416,16 +573,17 @@ impl SoundTake {
 }
 
 /// A warning for the author if Windows is now sending sound to a different output than the one this
-/// recording listened to. The recorder listens to one output; if the sound moved to another (headphones
-/// were plugged in, or the author switched), the rest of the computer's sound was not recorded.
+/// recording listened to. Used when the author chose one output by number, which the recorder keeps to: if
+/// the sound moved to another (headphones were plugged in, or the author switched), the rest of the
+/// computer's sound was not recorded. (An output left as the default is followed instead.)
 pub fn output_may_have_changed(devices: &[AudioDevice], recorded: &AudioDevice) -> Option<String> {
     let current = devices.iter().find(|d| d.kind == crate::audio::DeviceKind::SoundOutput && d.is_default)?;
     if current.id == recorded.id {
         return None;
     }
     Some(format!(
-        "Windows is now sending sound to sound output {}, {}, but this recording listened to sound output {}, {}. If the sound moved partway through, the rest of the computer's sound was not recorded, because the recorder listens to one sound output only. Keep one output for the whole recording, or record again choosing output {}.",
-        current.number, current.name, recorded.number, recorded.name, current.number
+        "Windows is now sending sound to sound output {}, {}, but this recording listened to sound output {}, {}. If the sound moved partway through, the rest of the computer's sound was not recorded, because an output chosen by number is kept to. Keep one output for the whole recording, or leave the sound output as the default, which makes the recording follow Windows when the sound moves.",
+        current.number, current.name, recorded.number, recorded.name
     ))
 }
 
@@ -567,6 +725,9 @@ pub(crate) mod fakes {
         AudioDevice { kind, number, name: name.into(), is_default, id: format!("{kind:?}{number}") }
     }
 
+    /// A flag that breaks a source, like an unplugged device, by giving the reason.
+    pub(crate) type Broken = Rc<Cell<Option<&'static str>>>;
+
     /// A computer with two microphones and two outputs. The sources it starts follow the shared clock.
     pub(crate) struct FakePlatform {
         pub(crate) clock: Rc<ManualClock>,
@@ -579,6 +740,13 @@ pub(crate) mod fakes {
         pub(crate) mic_error: Option<&'static str>,
         /// What every source it started was told about pausing, in order.
         pub(crate) pauses: Rc<RefCell<Vec<bool>>>,
+        /// The number of the sound output Windows plays to (and so the default). The computer's sound is
+        /// heard only on that output; any other is quiet.
+        pub(crate) playing_on: Rc<std::cell::Cell<u32>>,
+        /// One flag for each computer's-sound source started, to break it like an unplugged output.
+        pub(crate) system_broken: Rc<RefCell<Vec<Broken>>>,
+        /// While set, listening to output 2 cannot be started.
+        pub(crate) headphones_error: Rc<Cell<Option<&'static str>>>,
     }
 
     impl FakePlatform {
@@ -593,6 +761,9 @@ pub(crate) mod fakes {
                 no_microphone: false,
                 mic_error: None,
                 pauses: Rc::new(RefCell::new(Vec::new())),
+                playing_on: Rc::new(Cell::new(1)),
+                system_broken: Rc::new(RefCell::new(Vec::new())),
+                headphones_error: Rc::new(Cell::new(None)),
             }
         }
     }
@@ -604,8 +775,9 @@ pub(crate) mod fakes {
                 list.push(device(DeviceKind::Microphone, 1, "Webcam microphone", true));
                 list.push(device(DeviceKind::Microphone, 2, "Shure MV7", false));
             }
-            list.push(device(DeviceKind::SoundOutput, 1, "Speakers (Realtek)", true));
-            list.push(device(DeviceKind::SoundOutput, 2, "Headphones (USB)", false));
+            let playing = self.playing_on.get();
+            list.push(device(DeviceKind::SoundOutput, 1, "Speakers (Realtek)", playing == 1));
+            list.push(device(DeviceKind::SoundOutput, 2, "Headphones (USB)", playing == 2));
             Ok(list)
         }
         fn start_microphone(&self, d: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
@@ -622,8 +794,20 @@ pub(crate) mod fakes {
         }
         fn start_system_audio(&self, d: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
             self.started.borrow_mut().push(format!("system {}", d.map(|d| d.name.as_str()).unwrap_or("default")));
+            let number = d.map_or(self.playing_on.get(), |d| d.number);
+            if number == 2 {
+                if let Some(why) = self.headphones_error.get() {
+                    return Err(ScreenError::Failed(why.into()));
+                }
+            }
             let system = Rc::clone(&self.system);
-            Ok(Box::new(ClockSound::new(&self.clock, move |ms| system(ms))))
+            let playing = Rc::clone(&self.playing_on);
+            // Like Windows, a quiet output is heard as silence.
+            let mut s = ClockSound::new(&self.clock, move |ms| if playing.get() == number { system(ms) } else { 0 });
+            let broken = Rc::new(Cell::new(None));
+            s.broken = Rc::clone(&broken);
+            self.system_broken.borrow_mut().push(broken);
+            Ok(Box::new(s))
         }
     }
 }
@@ -1073,8 +1257,8 @@ mod tests {
         assert!(
             text.contains("sound output 2, Headphones (2- Shure MV7)")
                 && text.contains("listened to sound output 1, Speakers (Realtek)")
-                && text.contains("one sound output only")
-                && text.contains("choosing output 2"),
+                && text.contains("chosen by number is kept to")
+                && text.contains("leave the sound output as the default"),
             "{text}"
         );
     }
@@ -1088,5 +1272,200 @@ mod tests {
             None,
             "no default output is known, so nothing is claimed"
         );
+    }
+
+    // ---- following Windows to another sound output ----
+
+    /// How loud the left channel of a sound file was, averaged over each `window_ms`.
+    fn loudness(path: &Path, window_ms: usize) -> Vec<f32> {
+        let mut left = Vec::new();
+        openstage_capture_project::read_wav_in_pieces(path, |_, channels, samples| {
+            left.extend(samples.chunks(channels as usize).map(|f| f[0].unsigned_abs() as f32));
+        })
+        .unwrap();
+        left.chunks(48 * window_ms).map(|w| w.iter().sum::<f32>() / w.len() as f32).collect()
+    }
+
+    /// Record `seconds` like `record`, calling `each_step` with the recording time before each step, and
+    /// give back what each track reported at the end.
+    fn record_with(
+        clock: &Rc<ManualClock>,
+        sound: &Sound,
+        dir: &Path,
+        seconds: u64,
+        mut each_step: impl FnMut(u64),
+    ) -> Result<Vec<TrackReport>, SessionError> {
+        let mut sink = FakeSink::default();
+        let mut take = sound.open().unwrap().begin(dir).unwrap();
+        take.discard_backlog();
+        let mut media_ms = 0;
+        while media_ms < seconds * 1000 {
+            each_step(media_ms);
+            clock.sleep_ms(20);
+            media_ms += 20;
+            take.pump(media_ms, &mut sink)?;
+            if media_ms % 1000 == 0 {
+                take.sync().unwrap();
+            }
+        }
+        take.finish(media_ms, &mut sink)
+    }
+
+    fn system_report(reports: &[TrackReport]) -> &TrackReport {
+        reports.iter().find(|r| !r.microphone).expect("the computer's sound was recorded")
+    }
+
+    #[test]
+    fn leaving_the_output_to_windows_means_following_it_and_is_said_in_words() {
+        let (_c, _p, plan) = choose(Some("default"), Some("default"));
+        let plan = plan.unwrap();
+        assert!(plan.follow_default_output);
+        assert!(plan.describe().contains("the recording follows it"), "{}", plan.describe());
+        let (_c, _p, plan) = choose(Some("default"), Some("1"));
+        let plan = plan.unwrap();
+        assert!(!plan.follow_default_output, "a number is a choice to keep to that output");
+        assert!(plan.describe().contains("and only from that one"), "{}", plan.describe());
+    }
+
+    #[test]
+    fn the_computers_sound_follows_windows_when_the_sound_moves_to_headphones() {
+        let (clock, platform, plan) = choose(Some("default"), Some("default"));
+        let playing = Rc::clone(&platform.playing_on);
+        let sound = Sound::new(Box::new(platform), plan.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let reports = record_with(&clock, &sound, dir.path(), 6, |ms| {
+            if ms == 2000 {
+                playing.set(2); // headphones plugged in: Windows plays there from now on
+            }
+        })
+        .unwrap();
+
+        let heard = loudness(&dir.path().join("system.wav"), 500);
+        let (before, after) = (&heard[0..4], &heard[6..11]);
+        assert!(before.iter().all(|v| (v - 2000.0).abs() < 1.0), "the speakers' sound is kept: {before:?}");
+        assert!(after.iter().all(|v| (v - 2000.0).abs() < 1.0), "the headphones' sound is kept too: {after:?}");
+
+        let r = system_report(&reports);
+        assert_eq!(r.output_moves.len(), 1, "{:?}", r.output_moves);
+        let m = &r.output_moves[0];
+        assert_eq!((m.from.as_str(), m.to.as_str()), ("Speakers (Realtek)", "Headphones (USB)"));
+        assert!((2000..=2800).contains(&m.at_ms), "followed within a moment, at {}", m.at_ms);
+        assert!(r.follow_problem.is_none());
+
+        let info = wav_info(&dir.path().join("system.wav")).unwrap();
+        assert!((286_000..=289_000).contains(&info.frames), "still as long as the recording: {}", info.frames);
+    }
+
+    #[test]
+    fn a_flicker_of_the_default_output_is_not_followed() {
+        let (clock, platform, plan) = choose(Some("default"), Some("default"));
+        let playing = Rc::clone(&platform.playing_on);
+        let sound = Sound::new(Box::new(platform), plan.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        // Windows names the headphones the default for a moment and then goes back.
+        let reports = record_with(&clock, &sound, dir.path(), 3, |ms| {
+            playing.set(if (1000..1100).contains(&ms) { 2 } else { 1 });
+        })
+        .unwrap();
+        assert!(system_report(&reports).output_moves.is_empty());
+    }
+
+    #[test]
+    fn an_output_that_was_chosen_by_number_is_kept_to_even_if_windows_moves_the_sound() {
+        let (clock, platform, plan) = choose(Some("default"), Some("1"));
+        let playing = Rc::clone(&platform.playing_on);
+        let sound = Sound::new(Box::new(platform), plan.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let reports = record_with(&clock, &sound, dir.path(), 4, |ms| {
+            if ms == 1000 {
+                playing.set(2);
+            }
+        })
+        .unwrap();
+        assert!(system_report(&reports).output_moves.is_empty());
+        let heard = loudness(&dir.path().join("system.wav"), 500);
+        assert!(heard[3..].iter().all(|v| *v == 0.0), "what plays elsewhere is not recorded: {heard:?}");
+    }
+
+    #[test]
+    fn a_listening_that_breaks_is_replaced_by_the_output_windows_moved_to() {
+        let (clock, platform, plan) = choose(Some("default"), Some("default"));
+        let playing = Rc::clone(&platform.playing_on);
+        let sources = Rc::clone(&platform.system_broken);
+        let sound = Sound::new(Box::new(platform), plan.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        // The speakers are unplugged: listening to them breaks, and Windows plays to the headphones.
+        let reports = record_with(&clock, &sound, dir.path(), 6, |ms| {
+            if ms == 2000 {
+                sources.borrow()[0].set(Some("The speakers were unplugged."));
+                playing.set(2);
+            }
+        })
+        .expect("the take goes on");
+        let r = system_report(&reports);
+        assert_eq!(r.output_moves.len(), 1);
+        assert!(r.output_moves[0].at_ms < 2200, "a broken listening is moved at once, at {}", r.output_moves[0].at_ms);
+        let heard = loudness(&dir.path().join("system.wav"), 500);
+        assert!(heard[6..11].iter().all(|v| (v - 2000.0).abs() < 1.0), "the headphones' sound is kept: {heard:?}");
+    }
+
+    #[test]
+    fn a_broken_output_with_nowhere_to_move_ends_the_take_after_a_few_seconds_with_the_reason() {
+        let (clock, platform, plan) = choose(Some("default"), Some("default"));
+        let sources = Rc::clone(&platform.system_broken);
+        let sound = Sound::new(Box::new(platform), plan.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let last = Cell::new(0);
+        let result = record_with(&clock, &sound, dir.path(), 20, |ms| {
+            last.set(ms);
+            if ms == 2000 {
+                sources.borrow()[0].set(Some("The speakers were unplugged."));
+            }
+        });
+        let message = result.expect_err("the take cannot go on without any sound output").to_string();
+        assert!(message.contains("The speakers were unplugged."), "{message}");
+        assert!((6800..=7400).contains(&last.get()), "given a few seconds first, ended at {} ms", last.get());
+    }
+
+    #[test]
+    fn a_move_that_cannot_be_made_is_reported_without_ending_the_take() {
+        let (clock, platform, plan) = choose(Some("default"), Some("default"));
+        let playing = Rc::clone(&platform.playing_on);
+        platform.headphones_error.set(Some("Another program has taken the headphones for its own use."));
+        let sound = Sound::new(Box::new(platform), plan.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let reports = record_with(&clock, &sound, dir.path(), 5, |ms| {
+            if ms == 1000 {
+                playing.set(2);
+            }
+        })
+        .expect("the speakers still work, so the take goes on");
+        let r = system_report(&reports);
+        assert!(r.output_moves.is_empty());
+        let problem = r.follow_problem.as_deref().expect("the problem is reported");
+        assert!(problem.contains("Headphones (USB)") && problem.contains("Another program"), "{problem}");
+    }
+
+    #[test]
+    fn a_move_that_failed_is_tried_again_and_made_when_it_works() {
+        let (clock, platform, plan) = choose(Some("default"), Some("default"));
+        let playing = Rc::clone(&platform.playing_on);
+        let error = Rc::clone(&platform.headphones_error);
+        error.set(Some("busy"));
+        let sound = Sound::new(Box::new(platform), plan.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let reports = record_with(&clock, &sound, dir.path(), 8, |ms| {
+            if ms == 1000 {
+                playing.set(2);
+            }
+            if ms == 4000 {
+                error.set(None);
+            }
+        })
+        .unwrap();
+        let r = system_report(&reports);
+        assert_eq!(r.output_moves.len(), 1);
+        assert!((4000..=6200).contains(&r.output_moves[0].at_ms), "made once possible, at {}", r.output_moves[0].at_ms);
+        assert!(r.follow_problem.is_none(), "an old problem is not kept once the move worked");
     }
 }

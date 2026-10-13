@@ -76,6 +76,18 @@ impl AudioPlatform for WindowsAudio {
     fn start_system_audio(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError> {
         start(Kind::SystemSound, device.cloned())
     }
+
+    fn default_output_id(&self) -> Result<Option<String>, ScreenError> {
+        crate::win::prepare();
+        unsafe {
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| {
+                    ScreenError::Failed(describe(Kind::SystemSound, "Windows' sound service could not be reached", &e))
+                })?;
+            // No default output (for example every one is unplugged) is an answer, not an error.
+            Ok(enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok().and_then(|d| device_id(&d)))
+        }
+    }
 }
 
 /// What the capture thread and the reader share.
@@ -394,11 +406,12 @@ mod tests {
                 audio.start_microphone(None).err().map(|e| e.to_string()),
                 audio.start_system_audio(None).err().map(|e| e.to_string()),
                 audio.list_devices().err().map(|e| e.to_string()),
+                audio.default_output_id().err().map(|e| e.to_string()),
             )
         })
         .join()
         .unwrap();
-        for text in [results.0, results.1, results.2].into_iter().flatten() {
+        for text in [results.0, results.1, results.2, results.3].into_iter().flatten() {
             assert!(!text.contains("CoInitialize has not been called"), "the thread was not prepared: {text}");
         }
     }

@@ -184,6 +184,11 @@ pub trait AudioPlatform {
     fn start_microphone(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError>;
     /// Start listening to what a sound output is playing: the given one, or the default if `None`.
     fn start_system_audio(&self, device: Option<&AudioDevice>) -> Result<Box<dyn AudioSource>, ScreenError>;
+    /// Which sound output Windows uses by default right now (`None` when it has none). It is asked about
+    /// every moment or so during a recording, so a platform that can answer cheaply should override it.
+    fn default_output_id(&self) -> Result<Option<String>, ScreenError> {
+        Ok(self.list_devices()?.into_iter().find(|d| d.kind == DeviceKind::SoundOutput && d.is_default).map(|d| d.id))
+    }
 }
 
 /// The real thing on Windows; on any other system a stand-in that says so.

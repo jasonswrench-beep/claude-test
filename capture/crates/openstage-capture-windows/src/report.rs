@@ -29,6 +29,20 @@ pub struct TrackReport {
     pub worst_earlier_at_ms: u64,
     /// How many times Windows reported lost sound.
     pub lost_moments: u64,
+    /// Each time Windows moved the computer's sound to another output and the recording followed it.
+    pub output_moves: Vec<OutputMove>,
+    /// Why the recording could not follow the sound to another output, if it could not.
+    pub follow_problem: Option<String>,
+}
+
+/// One time the recording followed the computer's sound to another sound output.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutputMove {
+    /// When, in recording time, in milliseconds.
+    pub at_ms: u64,
+    /// The output it was listening to, and the one it listened to from then on.
+    pub from: String,
+    pub to: String,
 }
 
 /// Counters from one recording.
@@ -239,7 +253,23 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
                 t.padded_ms, t.trimmed_ms,
             )
         };
-        out.push(check(check_name, within, message));
+        let moves = if t.output_moves.is_empty() {
+            String::new()
+        } else {
+            let list: Vec<String> =
+                t.output_moves.iter().map(|m| format!("at {} from {} to {}", clock(m.at_ms), m.from, m.to)).collect();
+            format!(
+                " Windows moved the computer's sound to another sound output {} time{}, and the recording followed it: {}.",
+                t.output_moves.len(),
+                if t.output_moves.len() == 1 { "" } else { "s" },
+                list.join("; ")
+            )
+        };
+        let problem = match &t.follow_problem {
+            Some(why) => format!(" The recording could not follow the sound: {why}"),
+            None => String::new(),
+        };
+        out.push(check(check_name, within && t.follow_problem.is_none(), format!("{message}{moves}{problem}")));
     }
     out
 }
@@ -272,6 +302,7 @@ mod tests {
                     worst_earlier_ms: 12,
                     worst_earlier_at_ms: 2_000_000,
                     lost_moments: 1,
+                    ..Default::default()
                 },
                 TrackReport {
                     microphone: false,
@@ -283,6 +314,7 @@ mod tests {
                     worst_earlier_ms: 900,
                     worst_earlier_at_ms: 61_000,
                     lost_moments: 1,
+                    ..Default::default()
                 },
             ],
             looks: LookStats {
@@ -441,5 +473,36 @@ mod tests {
     fn times_are_said_as_minutes_and_seconds_or_hours() {
         assert_eq!(clock(65_000), "1:05");
         assert_eq!(clock(3_725_000), "1:02:05");
+    }
+
+    #[test]
+    fn a_followed_move_is_told_and_a_failed_one_is_a_problem() {
+        let mut r = good();
+        r.tracks[1].output_moves = vec![OutputMove {
+            at_ms: 133_000,
+            from: "Speakers (Realtek)".into(),
+            to: "Headphones (2- Shure MV7)".into(),
+        }];
+        let checks = summarize(&r);
+        let system = find(&checks, "run-sound-system");
+        assert!(system.ok, "{system:?}");
+        assert!(
+            system.message.contains(
+                "moved the computer's sound to another sound output 1 time, and the recording followed it: at 2:13 from Speakers (Realtek) to Headphones (2- Shure MV7)."
+            ),
+            "{}",
+            system.message
+        );
+        assert!(!find(&checks, "run-sound-microphone").message.contains("moved"));
+
+        r.tracks[1].follow_problem = Some("Another program has taken the headphones.".into());
+        let checks = summarize(&r);
+        let system = find(&checks, "run-sound-system");
+        assert!(!system.ok, "a sound that could not be followed is a failure");
+        assert!(
+            system.message.contains("could not follow the sound: Another program has taken the headphones."),
+            "{}",
+            system.message
+        );
     }
 }

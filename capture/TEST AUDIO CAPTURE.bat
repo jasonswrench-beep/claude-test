@@ -43,7 +43,8 @@ set /p MIC=Microphone number:
 echo.
 echo WHICH SOUND OUTPUT? This is where the sound you want to record is
 echo playing, for example your speakers or your headphones. Type its number
-echo and press Enter, or just press Enter for the default.
+echo and press Enter, or just press Enter for the default. Not sure which
+echo one it is? Close this window and double-click FIND SOUND OUTPUT.bat first.
 set "OUT="
 set /p OUT=Sound output number: 
 echo.

@@ -31,6 +31,7 @@ openstage-capture record --project <folder> [options]
 openstage-capture recover --project <folder>
 openstage-capture audio-devices [--plain]                           (Windows only; lists the microphones and sound outputs)
 openstage-capture audio-test [options]                           (Windows only; listens to the microphone and the computer's sound)
+openstage-capture find-output [--seconds N] [--plain]                (Windows only; finds which sound output is carrying sound)
 openstage-capture video-info --file <video>                          (Windows only; says how long a saved video is)
 openstage-capture screen-test [options]                          (Windows only; tries screen capture)
 openstage-capture video-test [options]                           (Windows only; tries making an MP4 of the screen)
@@ -63,6 +64,12 @@ The checks, in order: `audio-devices` (every microphone and sound output, number
 ### `audio-devices`
 
 Lists the microphones and sound outputs the computer has, numbered within their kind in the order Windows lists them, with the default marked, as one `check` named `audio-devices`. The numbers are what `--microphone` and `--output` take. Exit codes are as for `screen-test`. `probe` also lists them, as `microphone:N` and `output:N`, with `available` false until recording sound into a project is built.
+
+A name Windows will not give is not hidden: it is shown as `microphone 1 (its name could not be read: <reason>)` (or `sound output N`), so the numbering and the choice still work. Windows is asked for three different name properties before giving up.
+
+### `find-output`
+
+Windows listens to one sound output at a time, and a computer often has many (speakers, headphones, monitors, virtual devices). `find-output` listens to every sound output at the same time for `--seconds` (default 6, between 1 and 120) while something audible plays, and reports which of them carried sound. It saves nothing. The checks, in order: `audio-devices`, `outputs-tried` (how many outputs it could listen to; ones that cannot be listened to, often virtual, are named but are not a failure unless none could be listened to), and `sound-found` (passes and names each output that carried sound, with its number and level, and says "To record it, choose sound output number N" when exactly one did; fails and asks for something to be playing when none did). Exit codes are as for `screen-test`; it exits 1 when no output carried sound.
 
 ### `video-info`
 
@@ -194,7 +201,7 @@ The author started again. The old take is **set aside, not erased**, and a new o
 ```
 
 ### `check`
-One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, `audio-test`, and `video-info`; and by `record --source screen`, which sends `video-readback` just before `result`: Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds. The setup checks of the recorder will use it too.
+One finding from a test or setup check, in plain language. Sent by `screen-test`, `video-test`, `video-crash-test`, `audio-test`, `find-output`, and `video-info`; and by `record --source screen`, which sends `video-readback` just before `result`: Windows opens the saved video the way a player would and the length it reads must match the recording time to within 0.7 seconds. The setup checks of the recorder will use it too.
 ```json
 {"event":"check","check":"screen-capture","ok":true,"message":"Received 151 pictures in 5.0 seconds from Display 1, 1920 by 1080, main display. Each picture is 1920 by 1080 pixels."}
 ```

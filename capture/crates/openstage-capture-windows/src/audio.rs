@@ -13,7 +13,7 @@
 use crate::{check, Check, ScreenError};
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -589,14 +589,108 @@ pub fn run_audio_test_with(
     all_ok
 }
 
+/// What to try when looking for where the sound is playing.
+#[derive(Debug, Clone)]
+pub struct FindOutputOptions {
+    /// How long to listen to all the outputs at once.
+    pub seconds: f64,
+}
+
+/// Run the output finder on this computer.
+pub fn run_find_output(opts: &FindOutputOptions, report: &mut dyn FnMut(Check)) -> bool {
+    run_find_output_with(system_audio_platform().as_ref(), opts, report)
+}
+
+/// Listen to every sound output at the same time and say which of them carry sound.
+///
+/// Windows records one sound output at a time, and a computer often has many (speakers, headphones,
+/// monitors, virtual devices). When the sound you want is playing through one of them, this finds it.
+pub fn run_find_output_with(
+    platform: &dyn AudioPlatform,
+    opts: &FindOutputOptions,
+    report: &mut dyn FnMut(Check),
+) -> bool {
+    let devices = match platform.list_devices() {
+        Ok(list) => list,
+        Err(e) => {
+            report(check("audio-devices", false, format!("Could not list the sound devices: {e}")));
+            return false;
+        }
+    };
+    let outputs: Vec<&AudioDevice> = devices.iter().filter(|d| d.kind == DeviceKind::SoundOutput).collect();
+    if outputs.is_empty() {
+        report(check("audio-devices", false, "No sound output was found on this computer."));
+        return false;
+    }
+
+    let mut listening: Vec<(&AudioDevice, Box<dyn AudioSource>, f32)> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for device in &outputs {
+        match platform.start_system_audio(Some(device)) {
+            Ok(source) => listening.push((device, source, 0.0)),
+            Err(e) => failed.push(format!("{}, {} ({e})", device.number, device.name)),
+        }
+    }
+    let tried = format!("Listened to {} of the {} sound outputs at the same time.", listening.len(), outputs.len());
+    if listening.is_empty() {
+        report(check(
+            "outputs-tried",
+            false,
+            format!("{tried} None of them could be listened to: {}.", failed.join("; ")),
+        ));
+        return false;
+    }
+    let mut all_ok = true;
+    if failed.is_empty() {
+        report(check("outputs-tried", true, tried));
+    } else {
+        // Some devices (often virtual ones) cannot be listened to; that is worth knowing but not a failure.
+        report(check("outputs-tried", true, format!("{tried} These could not be listened to: {}.", failed.join("; "))));
+    }
+
+    let run_for = Duration::from_secs_f64(opts.seconds.clamp(1.0, 120.0));
+    let started = Instant::now();
+    while started.elapsed() < run_for {
+        sleep(Duration::from_millis(20));
+        for (_, source, loudest) in &mut listening {
+            *loudest = loudest.max(peak(&source.read()));
+        }
+    }
+
+    let carrying: Vec<(&AudioDevice, f32)> =
+        listening.iter().filter(|(_, _, p)| *p >= 0.01).map(|(d, _, p)| (*d, *p)).collect();
+    if carrying.is_empty() {
+        all_ok = false;
+        report(check(
+            "sound-found",
+            false,
+            format!(
+                "No sound was heard on any of the {} outputs listened to. Start something playing (a video or some music), keep it playing, and run this again. If something was playing and this still heard nothing, please tell the author.",
+                listening.len()
+            ),
+        ));
+    } else {
+        let list: Vec<String> = carrying
+            .iter()
+            .map(|(d, p)| {
+                format!("{}, {} (level {}, peak {p:.2})", d.number, d.name, openstage_capture::describe_level(*p))
+            })
+            .collect();
+        let advice = if carrying.len() == 1 {
+            format!("To record it, choose sound output number {}.", carrying[0].0.number)
+        } else {
+            "More than one output carries sound. Some are virtual devices that copy another. Choose the one you listen through.".to_string()
+        };
+        report(check("sound-found", true, format!("Sound is coming out of: {}. {advice}", list.join("; "))));
+    }
+    all_ok
+}
+
 impl Listening {
     fn aligner_channels(&self) -> u16 {
         self.source.info().channels.max(1)
     }
 }
-
-#[allow(dead_code)]
-fn _path_is_used(_: &Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -779,6 +873,10 @@ mod tests {
         system_fails: bool,
         lost: Rc<Cell<u64>>,
         devices: Vec<AudioDevice>,
+        /// How loud each sound output is, by its number; outputs not listed use `system_level`.
+        output_levels: Vec<(u32, i16)>,
+        /// Sound outputs that cannot be listened to, by number.
+        failing_outputs: Vec<u32>,
     }
 
     fn fake(level: i16, sends_silence: bool, lost: u64, name: &str) -> Box<dyn AudioSource> {
@@ -822,7 +920,13 @@ mod tests {
                 return Err(ScreenError::Failed("no sound output".into()));
             }
             let name = device.map(|d| d.name.as_str()).unwrap_or("The Windows default output");
-            Ok(fake(self.system_level, false, 0, name))
+            let number = device.map(|d| d.number).unwrap_or(0);
+            if self.failing_outputs.contains(&number) {
+                return Err(ScreenError::Failed("it would not open".into()));
+            }
+            let level =
+                self.output_levels.iter().find(|(n, _)| *n == number).map(|(_, l)| *l).unwrap_or(self.system_level);
+            Ok(fake(level, false, 0, name))
         }
     }
 
@@ -834,6 +938,8 @@ mod tests {
             system_fails: false,
             lost: Rc::new(Cell::new(0)),
             devices: two_of_each(),
+            output_levels: Vec::new(),
+            failing_outputs: Vec::new(),
         }
     }
 
@@ -1027,6 +1133,82 @@ mod tests {
         assert!(c.message.contains("Heard nothing from the system sound"));
         assert!(c.message.contains("The other outputs are: 2, Headphones (USB)"), "{}", c.message);
         assert!(c.message.contains("run the test again with that one chosen"));
+    }
+
+    // ---- finding where the sound is playing ----
+
+    fn search(p: &FakeAudio) -> (bool, Vec<Check>) {
+        let mut checks = Vec::new();
+        let ok = run_find_output_with(p, &FindOutputOptions { seconds: 1.0 }, &mut |c| checks.push(c));
+        (ok, checks)
+    }
+
+    #[test]
+    fn the_output_that_carries_sound_is_named_with_its_number() {
+        let mut p = platform();
+        p.system_level = 0;
+        p.output_levels = vec![(2, 6000)];
+        let (ok, checks) = search(&p);
+        assert!(ok, "{checks:?}");
+        let c = find(&checks, "sound-found");
+        assert!(
+            c.message.contains("2, Headphones (USB)") && c.message.contains("choose sound output number 2"),
+            "{}",
+            c.message
+        );
+        assert!(!c.message.contains("Speakers (Realtek)"), "the silent output is not named as carrying sound");
+        assert!(find(&checks, "outputs-tried").message.contains("Listened to 2 of the 2 sound outputs"));
+    }
+
+    #[test]
+    fn if_no_output_carries_sound_the_advice_is_to_start_something_playing() {
+        let mut p = platform();
+        p.system_level = 0;
+        let (ok, checks) = search(&p);
+        assert!(!ok);
+        let c = find(&checks, "sound-found");
+        assert!(
+            !c.ok
+                && c.message.contains("No sound was heard on any of the 2 outputs")
+                && c.message.contains("Start something playing")
+        );
+    }
+
+    #[test]
+    fn several_outputs_carrying_sound_are_all_named_with_a_note_about_virtual_devices() {
+        let mut p = platform();
+        p.system_level = 5000;
+        let (ok, checks) = search(&p);
+        assert!(ok);
+        let c = find(&checks, "sound-found");
+        assert!(c.message.contains("1, Speakers (Realtek)") && c.message.contains("2, Headphones (USB)"));
+        assert!(c.message.contains("More than one output carries sound"));
+    }
+
+    #[test]
+    fn an_output_that_cannot_be_listened_to_is_named_and_the_others_are_still_tried() {
+        let mut p = platform();
+        p.system_level = 0;
+        p.output_levels = vec![(1, 7000)];
+        p.failing_outputs = vec![2];
+        let (ok, checks) = search(&p);
+        assert!(ok, "{checks:?}");
+        let tried = find(&checks, "outputs-tried");
+        assert!(
+            tried.ok
+                && tried.message.contains("Listened to 1 of the 2")
+                && tried.message.contains("2, Headphones (USB) (it would not open)")
+        );
+        assert!(find(&checks, "sound-found").message.contains("choose sound output number 1"));
+    }
+
+    #[test]
+    fn if_no_output_can_be_listened_to_at_all_that_is_the_finding() {
+        let mut p = platform();
+        p.failing_outputs = vec![1, 2];
+        let (ok, checks) = search(&p);
+        assert!(!ok);
+        assert!(find(&checks, "outputs-tried").message.contains("None of them could be listened to"));
     }
 
     #[cfg(not(windows))]

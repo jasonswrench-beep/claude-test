@@ -40,6 +40,10 @@ pub struct RecordingReport {
     pub beats_skipped: u64,
     /// Pictures that Windows' capture service had to throw away because the program was not taking them fast enough.
     pub pictures_replaced: u64,
+    /// How many pictures Windows delivered while recording, and the most that were waiting at one look
+    /// (the waiting line holds 8). Zero when the source does not count.
+    pub pictures_received: u64,
+    pub most_waiting: usize,
     /// Real time the recording took, in seconds, and the processor time the program used meanwhile.
     pub wall_seconds: f64,
     pub cpu_seconds: Option<f64>,
@@ -98,11 +102,21 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
         "run-summary",
         skipped_percent <= 1.0,
         format!(
-            "Recorded {}. {} pictures were written. {} steps of the steady 30 pictures a second ({skipped_percent:.1} percent) had to be skipped because the program was late, and Windows threw away {} pictures that were not taken in time while recording.{}{}",
+            "Recorded {}. {} pictures were written. {} steps of the steady 30 pictures a second ({skipped_percent:.1} percent) had to be skipped because the program was late, and Windows threw away {} pictures that were not taken in time while recording{}.{}{}",
             clock(r.recorded_ms),
             r.pictures_written,
             r.beats_skipped,
             r.pictures_replaced,
+            if r.pictures_received > 0 {
+                format!(
+                    " (it delivered {} in all, about {:.0} a second, and at one look as many as {} were waiting; the line holds 8)",
+                    r.pictures_received,
+                    r.pictures_received as f64 * 1000.0 / r.recorded_ms.max(1) as f64,
+                    r.most_waiting
+                )
+            } else {
+                String::new()
+            },
             if skipped_percent > 1.0 { " More than 1 percent skipped means the video may look jerky." } else { "" },
             if skipped_percent > 1.0 && r.looks.looks > 0 {
                 format!(
@@ -240,6 +254,8 @@ mod tests {
             pictures_written: 108_000,
             beats_skipped: 12,
             pictures_replaced: 40,
+            pictures_received: 216_000,
+            most_waiting: 3,
             wall_seconds: 3600.0,
             cpu_seconds: Some(1800.0),
             logical_cores: 32,
@@ -290,6 +306,11 @@ mod tests {
         assert!(checks.iter().all(|c| c.ok), "{checks:?}");
         let summary = &find(&checks, "run-summary").message;
         assert!(summary.starts_with("Recorded 1:00:00. 108000 pictures were written. 12 steps"), "{summary}");
+        assert!(
+            summary
+                .contains("it delivered 216000 in all, about 60 a second, and at one look as many as 3 were waiting"),
+            "{summary}"
+        );
         let cpu = &find(&checks, "run-cpu").message;
         assert!(
             cpu.contains("about 50 percent of one processor core")
@@ -398,6 +419,14 @@ mod tests {
         let c = summarize(&r);
         let m = find(&c, "run-sound-system");
         assert!(!m.ok && m.message.contains("120 ms later than its picture"), "{}", m.message);
+    }
+
+    #[test]
+    fn a_source_that_does_not_count_pictures_is_not_made_to_claim_a_number() {
+        let r = RecordingReport { pictures_received: 0, ..good() };
+        let checks = summarize(&r);
+        let summary = &find(&checks, "run-summary").message;
+        assert!(!summary.contains("it delivered"), "{summary}");
     }
 
     #[test]

@@ -136,6 +136,7 @@ impl MediaFactory for ScreenMedia {
         let prepared_at = started.elapsed();
         let Prepared { source, first, listening, .. } = prepared;
         let dropped_at_start = source.dropped();
+        let received_at_start = source.received();
 
         let spec = SinkSpec {
             path: take_dir.join(SCREEN_FILE),
@@ -184,6 +185,9 @@ impl MediaFactory for ScreenMedia {
             next_sample_ms: SAMPLE_EVERY_MS,
             pictures_replaced: 0,
             dropped_at_start,
+            received_at_start,
+            pictures_received: 0,
+            most_waiting: 0,
             looks: LookTracker::default(),
         }))
     }
@@ -292,6 +296,11 @@ struct ScreenTake {
     pictures_replaced: u64,
     /// Pictures Windows had already thrown away before recording began (while the countdown ran, nobody was taking them).
     dropped_at_start: u64,
+    /// Pictures delivered before recording began, for the same reason.
+    received_at_start: u64,
+    pictures_received: u64,
+    /// The most pictures that were waiting at one look.
+    most_waiting: usize,
     looks: LookTracker,
 }
 
@@ -402,9 +411,12 @@ impl TakeMedia for ScreenTake {
         self.looks.looked_at(Instant::now(), media_ms);
         let picture_started = Instant::now();
         if let Some(source) = self.source.as_mut() {
+            let mut waiting = 0;
             while let Some(newer) = source.next_frame(Duration::ZERO) {
                 self.latest = newer;
+                waiting += 1;
             }
+            self.most_waiting = self.most_waiting.max(waiting);
         }
         if let Some(beat) = self.pacer.due(Duration::from_millis(media_ms)) {
             self.write_beat(beat)?;
@@ -456,6 +468,8 @@ impl TakeMedia for ScreenTake {
     fn finish(mut self: Box<Self>, media_ms: u64) -> Result<u32, SessionError> {
         // Stop taking pictures first, so nothing arrives while the file is being completed.
         self.pictures_replaced = self.source.as_ref().map_or(0, |s| s.dropped()).saturating_sub(self.dropped_at_start);
+        self.pictures_received =
+            self.source.as_ref().map_or(0, |s| s.received()).saturating_sub(self.received_at_start);
         self.source = None;
         if self.written == 0 {
             // A recording stopped at once still gets one picture, so the file is a valid video.
@@ -474,6 +488,8 @@ impl TakeMedia for ScreenTake {
             pictures_written: self.written,
             beats_skipped: self.pacer.skipped(),
             pictures_replaced: self.pictures_replaced,
+            pictures_received: self.pictures_received,
+            most_waiting: self.most_waiting,
             wall_seconds: self.started.elapsed().as_secs_f64(),
             cpu_seconds: self
                 .cpu_start

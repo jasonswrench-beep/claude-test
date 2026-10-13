@@ -30,6 +30,7 @@ openstage-capture probe
 openstage-capture record --project <folder> [options]
 openstage-capture recover --project <folder>
 openstage-capture screen-test [options]                          (Windows only; tries screen capture)
+openstage-capture video-test [options]                           (Windows only; tries making an MP4 of the screen)
 openstage-capture render --project <folder> --out <file>        (not built yet)
 ```
 
@@ -56,6 +57,21 @@ Tries screen capture on this computer and reports each finding as a `check` even
 The checks, in order: `windows-version`, `capture-support`, `displays`, `screen-capture`, `frame-rate`, `pictures-saved`. It stops at the first check that makes the rest meaningless (for example, no screen capture support). Exit code 0 means every check was fine, 1 means at least one found a problem.
 
 Windows sends a new picture only when something on the screen changes, so a still screen gives few pictures. The `frame-rate` check therefore needs something moving on screen, and says so when it reports a low rate.
+
+### Options for `video-test`
+
+Records a short MP4 video of one display with Windows' own video tools and reports each finding as a `check` event. It records no sound and does not make a capture project.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--display` | 1 | Which display to record (1 is the main display). |
+| `--seconds` | 8 | How long to record (between 1 and 600). |
+| `--fps` | 30 | Pictures per second in the video. The screen only sends a picture when something changes, so the newest picture is repeated to keep the rate steady. |
+| `--bitrate-kbps` | 8000 | Video quality, in kilobits per second. |
+| `--out` | `video-test-output` | Folder for `test.mp4`. The video shows the screen, so it is private. |
+| `--plain` | off | Print sentences for a person instead of JSON events. No `hello` line is printed in this mode. |
+
+The checks, in order: `media-foundation`, `h264-encoder`, `video-encode`, `cpu-use`, `mp4-file`. It stops at the first check that makes the rest meaningless. `video-encode` is not fine if more than 10 percent of the beats were skipped because the computer could not keep up. `cpu-use` is not fine above 10 percent of the computer's total processing capacity (the product's target for 1080p at 30 pictures per second). Exit code 0 means every check was fine, 1 means at least one found a problem, 2 means the computer is not running Windows.
 
 ### Options for `record`
 
@@ -133,7 +149,7 @@ The author started again. The old take is **set aside, not erased**, and a new o
 ```
 
 ### `check`
-One finding from a test or setup check, in plain language. Sent by `screen-test`, and later by the setup checks of the recorder.
+One finding from a test or setup check, in plain language. Sent by `screen-test` and `video-test`, and later by the setup checks of the recorder.
 ```json
 {"event":"check","check":"screen-capture","ok":true,"message":"Received 151 pictures in 5.0 seconds from Display 1, 1920 by 1080, main display. Each picture is 1920 by 1080 pixels."}
 ```

@@ -330,6 +330,17 @@ fn screen_test_plain_prints_sentences_not_json() {
     assert!(!text.contains('{'), "no JSON in plain mode: {text}");
 }
 
+#[cfg(not(windows))]
+#[test]
+fn video_test_says_it_needs_windows_and_exits_with_2() {
+    let out = Command::new(BIN).args(["video-test", "--plain", "--seconds", "1"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines[0].starts_with("PROBLEM: Windows' video tools would not start"), "{text}");
+    assert_eq!(lines.last(), Some(&"At least one check found a problem."));
+}
+
 #[test]
 fn render_says_it_is_not_built_yet_and_exits_with_2() {
     let dir = tempfile::tempdir().unwrap();

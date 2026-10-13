@@ -11,11 +11,18 @@
 
 mod bmp;
 mod stats;
+mod video;
 #[cfg(windows)]
 mod win;
+#[cfg(windows)]
+mod win_video;
 
 pub use bmp::write_bmp;
 pub use stats::{FrameStats, FrameSummary};
+pub use video::{
+    run_video_test, run_video_test_with, system_video_platform, EncoderInfo, Pacer, VideoPlatform, VideoSink,
+    VideoTestOptions, CPU_TARGET_PERCENT,
+};
 
 use std::fs;
 use std::path::{Path, PathBuf};

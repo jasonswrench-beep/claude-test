@@ -97,7 +97,7 @@ export function addTrack(model: Model, kind: TrackKind, name?: string): Done {
   const taken = takeId(model, "track");
   const same = model.tracks.filter((t) => t.kind === kind).length;
   const chosen = name?.trim() || (same === 0 ? trackKindName(kind) : `${trackKindName(kind)} ${same + 1}`);
-  const track: Track = { id: taken.id, kind, name: chosen, clips: [] };
+  const track: Track = { id: taken.id, kind, name: chosen, clips: [], items: [] };
   return done({ ...taken.model, tracks: [...taken.model.tracks, track] }, "add track", `Added the track ${quote(chosen)}.`, [
     track.id,
   ]);

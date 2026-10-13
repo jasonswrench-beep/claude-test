@@ -18,7 +18,9 @@ must give the same findings.
 |---|---|
 | `src/model.ts` | The data: tracks, clips, sources, and small helpers |
 | `src/time.ts` | Times in words ("1 minute 12.4 seconds"), typed times, the keyboard steps |
-| `src/ops.ts` | The editing actions |
+| `src/ops.ts` | The editing actions on clips |
+| `src/items.ts` | The actions on overlays and zooms: text, shapes, arrows, blur, redaction, zoom |
+| `src/contrast.ts`, `src/regions.ts` | Colours and contrast; rectangles on the picture and saying where they are in words |
 | `src/history.ts` | Undo and redo, with a drag as one step |
 | `src/validate.ts` | The checks, with codes shared with the Rust reader |
 | `src/serialize.ts` | Saving and reading `edit.json` |

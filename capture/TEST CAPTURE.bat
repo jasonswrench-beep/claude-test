@@ -23,7 +23,9 @@ cargo --version
 ver
 echo.
 echo Running the tests. Please wait...
-cargo test --workspace > test-log.txt 2>&1
+ver > test-log.txt
+cargo --version >> test-log.txt
+cargo test --workspace >> test-log.txt 2>&1
 set TESTS_RESULT=%errorlevel%
 
 echo.

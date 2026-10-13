@@ -160,8 +160,14 @@ impl<'a> Runner<'a> {
         }
     }
 
+    /// The take a state report belongs to: the open one; else, once finished, the one just
+    /// finished (0 if none was ever started); else (a countdown) the one about to begin.
     fn current_take(&self) -> u32 {
-        self.run.as_ref().map(|r| r.id).unwrap_or(self.next_take)
+        match &self.run {
+            Some(run) => run.id,
+            None if matches!(self.state, State::Stopped | State::Error) => self.last_take,
+            None => self.next_take,
+        }
     }
 
     fn emit_state(&mut self) {
@@ -605,6 +611,40 @@ mod tests {
         assert_eq!(seen.first(), Some(&State::Recording));
         assert_eq!(seen.last(), Some(&State::Stopped));
         assert!(seen.contains(&State::Stopping));
+    }
+
+    fn state_takes(sink: &VecSink) -> Vec<(State, u32)> {
+        sink.events
+            .iter()
+            .filter_map(|e| if let Event::State { state, take, .. } = e { Some((*state, *take)) } else { None })
+            .collect()
+    }
+
+    #[test]
+    fn every_state_names_the_take_it_belongs_to_including_after_stopping() {
+        // Found on the first Windows run: "stopped" said take 2 after recording only take 1.
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 1000;
+        cfg.max_duration_ms = Some(1000);
+        let mut sink = VecSink::default();
+        run_session(&cfg, &synthetic, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        let seen = state_takes(&sink);
+        assert!(seen.len() >= 4, "countdown, recording, stopping, stopped: {seen:?}");
+        assert!(seen.iter().all(|(_, take)| *take == 1), "all of this is take 1: {seen:?}");
+        assert_eq!(seen.last(), Some(&(State::Stopped, 1)));
+
+        // Start again: the second take is take 2 all the way through, and so is the final "stopped".
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let mut input =
+            ScriptedInput::new(vec![(1000, Input::Command(Command::Restart)), (2000, Input::Command(Command::Stop))]);
+        let mut sink = VecSink::default();
+        run_session(&cfg, &synthetic, &mut input, &mut sink, &ManualClock::new()).unwrap();
+        let seen = state_takes(&sink);
+        assert_eq!(seen.first(), Some(&(State::Recording, 1)));
+        assert_eq!(seen.last(), Some(&(State::Stopped, 2)));
+        assert!(seen.contains(&(State::Recording, 2)));
     }
 
     #[test]

@@ -18,7 +18,7 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 | Sound levels with plain-language text | Captions, audio description, step-by-step output |
 | License and rule checks | Everything that needs Windows-only code |
 
-**What "tested" means here.** The 65 automated tests pass on Linux, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. **They have not yet been run on Windows.** Double-click `TEST CAPTURE.bat` on a Windows computer to run them there; until that is done and reported, nothing in this folder is claimed to work on Windows.
+**What "tested" means here.** The 66 automated tests pass on Linux. On 2026-10-13 the first 65 were also run on the owner's Windows computer and all passed, including a test that starts the real program, kills it in the middle of a recording, and repairs the recording afterwards. The 66th test (it covers the take-number fix described in the roadmap) has passed on Linux and has not yet been re-run on Windows. Only the test source (fake picture and sound) has been run on Windows, so nothing here is claimed to record a real screen or microphone.
 
 ## What to do on Windows (no typing needed)
 

@@ -41,7 +41,7 @@ impl Running {
     }
 
     fn record(project: &Path, extra: &[&str]) -> Self {
-        let mut args = vec!["record", "--project", project.to_str().unwrap(), "--countdown-ms", "0"];
+        let mut args = vec!["record", "--project", project.to_str().unwrap(), "--countdown-ms", "0", "--cues", "off"];
         args.extend_from_slice(extra);
         Self::start(&args)
     }
@@ -542,4 +542,58 @@ fn find_output_says_it_needs_windows_and_exits_with_2() {
         text.starts_with("PROBLEM: Could not list the sound devices: Screen capture only works on Windows."),
         "{text}"
     );
+}
+
+#[test]
+fn the_cue_options_are_checked_in_words_and_a_wrong_one_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, events) =
+        run_once(&["record", "--project", dir.path().join("p.capture").to_str().unwrap(), "--cues", "maybe"]);
+    assert_eq!(status.code(), Some(2));
+    assert!(events.iter().any(|e| matches!(e, Event::Error { code, message, fatal: true }
+        if code == "bad-option" && message.contains("--cues must be on or off"))));
+    let out = Command::new(BIN)
+        .args(["record", "--project", dir.path().join("q.capture").to_str().unwrap(), "--cue-volume", "150"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a volume above 100 is refused");
+}
+
+#[test]
+fn recording_with_the_cues_on_or_off_is_accepted_and_records_the_same() {
+    for cues in ["on", "off"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (status, events) = run_once(&[
+            "record",
+            "--project",
+            dir.path().join("p.capture").to_str().unwrap(),
+            "--countdown-ms",
+            "0",
+            "--duration-ms",
+            "600",
+            "--cues",
+            cues,
+            "--cue-volume",
+            "40",
+            "--ignore-stdin-eof",
+        ]);
+        assert!(status.success(), "cues {cues}");
+        let (ok, _, state, duration_ms, _) = result_of(&events);
+        assert!(ok && state == "complete" && (500..=700).contains(&duration_ms), "cues {cues}: {duration_ms}");
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn the_cue_test_saves_each_sound_as_a_file_and_says_it_cannot_play_them_here() {
+    let dir = tempfile::tempdir().unwrap();
+    let out_dir = dir.path().join("sounds");
+    let out = Command::new(BIN).args(["cue-test", "--plain", "--out", out_dir.to_str().unwrap()]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "playing only works on Windows");
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Next: the start sound. It is three rising notes"), "{text}");
+    assert!(text.contains("The error sound could not be played on this computer."), "{text}");
+    for name in ["countdown", "start", "pause", "resume", "stop", "error"] {
+        assert!(out_dir.join(format!("cue-{name}.wav")).is_file(), "{name}");
+    }
 }

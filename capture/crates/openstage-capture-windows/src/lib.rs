@@ -13,6 +13,7 @@ mod audio;
 mod balance;
 mod bmp;
 mod crash;
+mod cue_player;
 mod echo;
 mod queue;
 mod record;
@@ -25,6 +26,8 @@ mod video;
 mod win;
 #[cfg(windows)]
 mod win_audio;
+#[cfg(windows)]
+mod win_cues;
 #[cfg(windows)]
 mod win_video;
 
@@ -40,6 +43,7 @@ pub use balance::{
 };
 pub use bmp::write_bmp;
 pub use crash::{run_recorder_crash_report, MAX_LOSS_MS as RECORDER_CRASH_MAX_LOSS_MS};
+pub use cue_player::{run_cue_test, run_cue_test_with, system_cue_player, CueTestOptions};
 pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, EchoFinding, EchoVerdict, Envelope};
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use queue::FrameQueue;

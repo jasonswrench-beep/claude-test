@@ -20,7 +20,9 @@ echo   - a second marker is added
 echo   - it STOPS, finishes the video file, and checks everything
 echo.
 echo Time spent paused is not recorded, so the finished video should be
-echo about 9 seconds long, not the 14 seconds this takes.
+echo about 8 seconds long, not the 14 seconds this takes. (The short sounds
+echo the recorder makes for the countdown, start, pause, resume and stop
+echo are not recorded either. You will hear them.)
 echo.
 echo PRIVACY: the recording shows your screen and holds your voice and
 echo whatever your computer played. It is saved only on this computer, in

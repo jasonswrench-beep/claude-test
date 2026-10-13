@@ -187,7 +187,7 @@ pub fn run_recorder_crash_test(
     let diagnostics =
         fs::File::create(out.join("recorder-diagnostics.txt")).map(Stdio::from).unwrap_or_else(|_| Stdio::null());
     let mut child = match Command::new(exe)
-        .args(["record", "--source", "screen", "--countdown-ms", "0", "--display"])
+        .args(["record", "--source", "screen", "--countdown-ms", "0", "--cues", "off", "--display"])
         .arg(display.to_string())
         .arg("--microphone")
         .arg(microphone)

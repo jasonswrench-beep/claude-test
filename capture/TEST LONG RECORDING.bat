@@ -17,7 +17,9 @@ echo.
 echo While it runs, use your computer as you normally would. Open
 echo programs, type, scroll, play some sound now and then, and talk once
 echo in a while. In the middle it PAUSES for 20 seconds and RESUMES, to be
-echo sure that works over a long recording too.
+echo sure that works over a long recording too. You will hear the
+echo recorder's short sounds for the countdown, start, pause, resume and
+echo stop; they are not recorded.
 echo.
 echo BEFORE YOU START:
 echo   - Make sure Windows will not go to sleep or turn the screen off

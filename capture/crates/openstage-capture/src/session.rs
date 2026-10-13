@@ -15,8 +15,12 @@
 //! * A write problem is reported as a fatal error and the take is finished as far as it can be.
 //! * If the program that is listening goes away, the recording stops gracefully rather than
 //!   running on with nobody watching.
+//! * The sounds that tell the author what is happening (`cues`) are played only while recording time
+//!   is not running: in the countdown, while paused, and after the stop. The start and resume sounds
+//!   are waited for, so recording carries on only once they have ended, and none is ever recorded.
 
 use crate::clock::Clock;
+use crate::cues::{Cue, CuePlayer, NoCues, CUE_TAIL_MS};
 use crate::media::{MediaFactory, TakeMedia};
 use openstage_capture_project::{
     create_project, create_take_with, finish_take, next_take_id, open_project, set_aside_take, take_dir,
@@ -148,9 +152,34 @@ struct Runner<'a> {
     last_level_emit: u64,
     sink_alive: bool,
     outcome: Option<Outcome>,
+    cues: &'a dyn CuePlayer,
+    /// How many countdown ticks have sounded in the countdown that is running.
+    ticks_played: u64,
 }
 
 impl<'a> Runner<'a> {
+    /// Sound a cue and carry on at once.
+    fn cue(&self, cue: Cue) {
+        self.cues.play(cue);
+    }
+
+    /// Sound a cue and wait until it has ended, so what follows does not overlap it.
+    fn cue_and_wait(&self, cue: Cue) {
+        let ms = self.cues.play(cue);
+        if ms > 0 {
+            self.clock.sleep_ms(ms + CUE_TAIL_MS);
+        }
+    }
+
+    /// Sound the countdown ticks that are due: one as the countdown starts and one more each second.
+    fn countdown_ticks(&mut self) {
+        let elapsed = self.clock.now_ms().saturating_sub(self.countdown_started);
+        while self.ticks_played * 1000 < self.cfg.countdown_ms && self.ticks_played * 1000 <= elapsed {
+            self.cue(Cue::Tick);
+            self.ticks_played += 1;
+        }
+    }
+
     fn emit(&mut self, event: Event) {
         if self.sink_alive && !self.sink.emit(event) {
             self.sink_alive = false;
@@ -184,7 +213,9 @@ impl<'a> Runner<'a> {
         if self.cfg.countdown_ms > 0 {
             self.state = State::Countdown;
             self.countdown_started = self.clock.now_ms();
+            self.ticks_played = 0;
             self.emit_state();
+            self.countdown_ticks();
             // The countdown is time to get ready in. The time warming up takes is part of the countdown,
             // not added to it.
             self.factory.warm_up(self.cfg)?;
@@ -195,6 +226,8 @@ impl<'a> Runner<'a> {
     }
 
     fn begin_take(&mut self) -> Result<(), SessionError> {
+        // The start sound ends before recording begins. Whatever the recorder heard meanwhile is not kept.
+        self.cue_and_wait(Cue::Start);
         let id = self.next_take;
         self.next_take += 1;
         create_take_with(
@@ -240,6 +273,8 @@ impl<'a> Runner<'a> {
         self.state = State::Stopped;
         self.emit_state();
         self.outcome = Some(Outcome { ok: true, take: id, state: "complete".into(), duration_ms, segments });
+        // Everything is closed, so the stop sound is not recorded.
+        self.cue_and_wait(Cue::Stop);
         Ok(())
     }
 
@@ -274,15 +309,20 @@ impl<'a> Runner<'a> {
                     }
                     self.state = State::Paused;
                     self.emit_state();
+                    self.cue(Cue::Pause);
                 } else {
                     self.warn("not-recording", "Pause only works while recording.");
                 }
             }
             Command::Resume => {
                 if self.state == State::Paused {
+                    // Still paused while the resume sound plays, so it is not recorded.
+                    self.cue_and_wait(Cue::Resume);
                     if let Some(media) = self.run.as_mut().and_then(|r| r.media.as_mut()) {
                         media.resumed();
                     }
+                    // The time spent waiting for the sound is not recording time.
+                    self.last_tick = self.clock.now_ms();
                     self.state = State::Recording;
                     self.emit_state();
                 } else {
@@ -297,7 +337,9 @@ impl<'a> Runner<'a> {
                 }
                 State::Countdown => {
                     self.countdown_started = self.clock.now_ms();
+                    self.ticks_played = 0;
                     self.emit_state();
+                    self.countdown_ticks();
                 }
                 _ => self.warn("not-recording", "Start again only works while recording."),
             },
@@ -326,6 +368,7 @@ impl<'a> Runner<'a> {
                 self.emit_state();
                 self.outcome =
                     Some(Outcome { ok: true, take: self.last_take, state: "none".into(), duration_ms: 0, segments: 0 });
+                self.cue_and_wait(Cue::Stop);
                 Ok(())
             }
             _ => Ok(()),
@@ -378,6 +421,7 @@ impl<'a> Runner<'a> {
 
         match self.state {
             State::Countdown => {
+                self.countdown_ticks();
                 if now.saturating_sub(self.countdown_started) >= self.cfg.countdown_ms {
                     self.begin_take()?;
                 } else if now.saturating_sub(self.last_state_emit) >= 1000 {
@@ -452,6 +496,7 @@ impl<'a> Runner<'a> {
         self.state = State::Error;
         self.emit_state();
         self.outcome = Some(Outcome { ok: false, take: self.last_take, state: "error".into(), duration_ms, segments });
+        self.cue_and_wait(Cue::Error);
     }
 }
 
@@ -465,6 +510,18 @@ pub fn run_session(
     input: &mut dyn InputSource,
     sink: &mut dyn EventSink,
     clock: &dyn Clock,
+) -> Result<Outcome, SessionError> {
+    run_session_with_cues(cfg, factory, input, sink, clock, &NoCues)
+}
+
+/// Like [`run_session`], and also makes the sounds that tell the author what the recorder is doing.
+pub fn run_session_with_cues(
+    cfg: &SessionConfig,
+    factory: &dyn MediaFactory,
+    input: &mut dyn InputSource,
+    sink: &mut dyn EventSink,
+    clock: &dyn Clock,
+    cues: &dyn CuePlayer,
 ) -> Result<Outcome, SessionError> {
     if cfg.project.join("capture.json").is_file() {
         open_project(&cfg.project)?;
@@ -489,6 +546,8 @@ pub fn run_session(
         last_level_emit: now,
         sink_alive: true,
         outcome: None,
+        cues,
+        ticks_played: 0,
     };
     if let Err(e) = runner.start_countdown_or_take() {
         runner.fail(e);
@@ -1006,6 +1065,282 @@ mod tests {
                 run_session(&cfg, &synthetic, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new())
                     .unwrap();
             assert_eq!(out.take, expected);
+        }
+    }
+
+    // ---- the sounds that tell the author what is happening ----
+
+    mod cue_tests {
+        use super::*;
+        use crate::cues::{Cue, CuePlayer};
+        use crate::media::{MediaFactory, TakeMedia};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        /// Everything that happened, in order, with the time it happened at.
+        #[derive(Clone)]
+        struct Log {
+            clock: Rc<ManualClock>,
+            entries: Rc<RefCell<Vec<(String, u64)>>>,
+        }
+        impl Log {
+            fn new() -> Self {
+                Self { clock: Rc::new(ManualClock::new()), entries: Rc::new(RefCell::new(Vec::new())) }
+            }
+            fn note(&self, what: impl Into<String>) {
+                self.entries.borrow_mut().push((what.into(), self.clock.now_ms()));
+            }
+            fn names(&self) -> Vec<String> {
+                self.entries.borrow().iter().map(|e| e.0.clone()).collect()
+            }
+            fn index_of(&self, what: &str) -> usize {
+                self.names().iter().position(|n| n == what).unwrap_or_else(|| panic!("no {what} in {:?}", self.names()))
+            }
+            fn time_of(&self, what: &str) -> u64 {
+                self.entries.borrow()[self.index_of(what)].1
+            }
+        }
+
+        /// Notes each change of state.
+        struct StateSink(Log, Option<State>);
+        impl EventSink for StateSink {
+            fn emit(&mut self, event: Event) -> bool {
+                if let Event::State { state, .. } = event {
+                    if self.1 != Some(state) {
+                        self.0.note(format!("state:{state:?}"));
+                        self.1 = Some(state);
+                    }
+                }
+                true
+            }
+        }
+
+        struct LogCues(Log, u64);
+        impl CuePlayer for LogCues {
+            fn play(&self, cue: Cue) -> u64 {
+                self.0.note(format!("cue:{}", cue.name()));
+                // A made-up length, so the waiting can be checked without depending on the real design.
+                self.1
+            }
+        }
+
+        struct LogMedia {
+            log: Log,
+            fail_after_pumps: Option<u32>,
+            pumps: u32,
+        }
+        impl TakeMedia for LogMedia {
+            fn pump(&mut self, _: u64) -> Result<(), SessionError> {
+                self.pumps += 1;
+                if self.fail_after_pumps.is_some_and(|n| self.pumps > n) {
+                    return Err(SessionError::Media("The disk stopped answering.".into()));
+                }
+                Ok(())
+            }
+            fn flush(&mut self) -> Result<(), SessionError> {
+                Ok(())
+            }
+            fn levels(&self, _: u64) -> Vec<(&'static str, f32)> {
+                Vec::new()
+            }
+            fn paused(&mut self) {
+                self.log.note("media:paused");
+            }
+            fn resumed(&mut self) {
+                self.log.note("media:resumed");
+            }
+            fn finish(self: Box<Self>, _: u64) -> Result<u32, SessionError> {
+                self.log.note("media:finish");
+                Ok(1)
+            }
+        }
+        struct LogFactory {
+            log: Log,
+            fail_after_pumps: Option<u32>,
+        }
+        impl MediaFactory for LogFactory {
+            fn source_id(&self) -> String {
+                "log".into()
+            }
+            fn begin(&self, _: &std::path::Path, _: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError> {
+                self.log.note("media:begin");
+                Ok(Box::new(LogMedia { log: self.log.clone(), fail_after_pumps: self.fail_after_pumps, pumps: 0 }))
+            }
+        }
+
+        const CUE_MS: u64 = 300;
+
+        fn run(
+            countdown_ms: u64,
+            script: Vec<(u64, Command)>,
+            cues_ms: Option<u64>,
+            fail_after_pumps: Option<u32>,
+        ) -> (Log, Outcome) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut cfg = config(&dir);
+            cfg.countdown_ms = countdown_ms;
+            let log = Log::new();
+            let mut input = ScriptedInput::new(script.into_iter().map(|(at, c)| (at, Input::Command(c))).collect());
+            let factory = LogFactory { log: log.clone(), fail_after_pumps };
+            let mut sink = StateSink(log.clone(), None);
+            let outcome = match cues_ms {
+                Some(ms) => {
+                    run_session_with_cues(&cfg, &factory, &mut input, &mut sink, &*log.clock, &LogCues(log.clone(), ms))
+                }
+                None => run_session(&cfg, &factory, &mut input, &mut sink, &*log.clock),
+            }
+            .unwrap();
+            (log, outcome)
+        }
+
+        /// The names of the cues that sounded, in order.
+        fn cues_of(log: &Log) -> Vec<String> {
+            log.names().into_iter().filter(|n| n.starts_with("cue:")).collect()
+        }
+
+        #[test]
+        fn a_whole_recording_sounds_each_cue_where_it_belongs() {
+            let (log, _) = run(
+                3000,
+                vec![(5000, Command::Pause), (6000, Command::Resume), (8000, Command::Stop)],
+                Some(CUE_MS),
+                None,
+            );
+            assert_eq!(
+                log.names(),
+                [
+                    "state:Countdown",
+                    "cue:countdown",
+                    "cue:countdown",
+                    "cue:countdown",
+                    "cue:start",
+                    "media:begin",
+                    "state:Recording",
+                    "media:paused",
+                    "state:Paused",
+                    "cue:pause",
+                    "cue:resume",
+                    "media:resumed",
+                    "state:Recording",
+                    "state:Stopping",
+                    "media:finish",
+                    "state:Stopped",
+                    "cue:stop",
+                ]
+            );
+        }
+
+        #[test]
+        fn no_cue_ever_sounds_while_recording_time_is_running() {
+            let (log, _) = run(
+                2000,
+                vec![(4000, Command::Pause), (5000, Command::Resume), (7000, Command::Restart), (12000, Command::Stop)],
+                Some(CUE_MS),
+                None,
+            );
+            // Recording time runs from the media beginning (or resuming) until it is paused or finished.
+            let mut running = false;
+            for name in log.names() {
+                match name.as_str() {
+                    "media:begin" | "media:resumed" => running = true,
+                    "media:paused" | "media:finish" => running = false,
+                    n if n.starts_with("cue:") => assert!(!running, "{n} sounded while recording: {:?}", log.names()),
+                    _ => {}
+                }
+            }
+            assert!(!running);
+            assert!(cues_of(&log).len() >= 8, "{:?}", cues_of(&log));
+        }
+
+        #[test]
+        fn recording_begins_only_after_the_start_sound_and_resumes_after_the_resume_sound() {
+            let (log, _) = run(
+                2000,
+                vec![(4000, Command::Pause), (5000, Command::Resume), (6000, Command::Stop)],
+                Some(CUE_MS),
+                None,
+            );
+            assert!(log.time_of("media:begin") >= log.time_of("cue:start") + CUE_MS, "the start sound is waited for");
+            assert!(
+                log.time_of("media:resumed") >= log.time_of("cue:resume") + CUE_MS,
+                "the resume sound is waited for"
+            );
+            assert!(log.time_of("cue:start") >= 2000, "the start sound comes when the countdown ends");
+        }
+
+        #[test]
+        fn waiting_for_a_sound_is_not_recording_time() {
+            let script = || vec![(1000, Command::Pause), (2000, Command::Resume), (4000, Command::Stop)];
+            let (_, with) = run(0, script(), Some(CUE_MS), None);
+            let (_, without) = run(0, script(), None, None);
+            assert!(without.duration_ms.abs_diff(3000) <= 60, "1 s and 2 s of the 4 s: {}", without.duration_ms);
+            // The script's clock starts once the start sound has ended, so only the wait for the resume
+            // sound comes out of the recording. Nothing else may be added or lost.
+            let wait = CUE_MS + 60;
+            let expected = 3000 - wait;
+            assert!(
+                with.duration_ms.abs_diff(expected) <= 60,
+                "recording time is what is left after the waits: {} against {expected}",
+                with.duration_ms
+            );
+        }
+
+        #[test]
+        fn without_cues_nothing_is_played_and_nothing_is_waited_for() {
+            let (log, _) = run(2000, vec![(3000, Command::Stop)], None, None);
+            assert!(cues_of(&log).is_empty());
+            assert!(log.time_of("media:begin") < 2100, "recording begins as the countdown ends");
+        }
+
+        #[test]
+        fn stopping_during_the_countdown_sounds_the_stop_but_no_start() {
+            let (log, outcome) = run(3000, vec![(1500, Command::Stop)], Some(CUE_MS), None);
+            assert_eq!(outcome.state, "none");
+            assert_eq!(cues_of(&log), ["cue:countdown", "cue:countdown", "cue:stop"]);
+            assert!(!log.names().contains(&"media:begin".to_string()));
+        }
+
+        #[test]
+        fn starting_the_countdown_again_starts_the_ticks_again() {
+            let (log, _) = run(3000, vec![(1500, Command::Restart), (9000, Command::Stop)], Some(CUE_MS), None);
+            let ticks = cues_of(&log).iter().filter(|c| *c == "cue:countdown").count();
+            assert_eq!(ticks, 2 + 3, "two before the restart, three after: {:?}", cues_of(&log));
+        }
+
+        #[test]
+        fn starting_again_while_recording_counts_down_only_once_the_old_take_is_closed() {
+            let (log, _) = run(2000, vec![(4000, Command::Restart), (9000, Command::Stop)], Some(CUE_MS), None);
+            let names = log.names();
+            let finish = names.iter().position(|n| n == "media:finish").unwrap();
+            let ticks_after: Vec<usize> = names
+                .iter()
+                .enumerate()
+                .filter(|(i, n)| *i > finish && *n == "cue:countdown")
+                .map(|(i, _)| i)
+                .collect();
+            assert!(!ticks_after.is_empty(), "{names:?}");
+            assert!(names[..finish].iter().filter(|n| *n == "cue:countdown").count() == 2);
+        }
+
+        #[test]
+        fn a_failure_sounds_the_error_once_the_files_are_closed() {
+            let (log, outcome) = run(0, vec![], Some(CUE_MS), Some(3));
+            assert!(!outcome.ok);
+            let names = log.names();
+            assert!(log.index_of("media:finish") < log.index_of("cue:error"), "{names:?}");
+            assert!(log.index_of("state:Error") < log.index_of("cue:error"), "{names:?}");
+            assert_eq!(cues_of(&log).iter().filter(|c| *c == "cue:error").count(), 1);
+        }
+
+        #[test]
+        fn a_marker_makes_no_sound() {
+            let (log, _) = run(
+                0,
+                vec![(1000, Command::Marker { label: Some("here".into()) }), (2000, Command::Stop)],
+                Some(CUE_MS),
+                None,
+            );
+            assert_eq!(cues_of(&log), ["cue:start", "cue:stop"]);
         }
     }
 }

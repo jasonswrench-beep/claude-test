@@ -15,17 +15,18 @@ mod plain;
 use checks::{emit_check, finish_checks, run_recorder_crash_test, run_video_crash_test};
 use clap::{Parser, Subcommand};
 use openstage_capture::{
-    run_session, EventSink, Input, InputSource, MediaFactory, ScriptedInput, SessionConfig, Source, SyntheticSource,
-    SystemClock,
+    run_session_with_cues, CuePlayer, EventSink, Input, InputSource, MediaFactory, NoCues, ScriptedInput,
+    SessionConfig, Source, SyntheticSource, SystemClock,
 };
 use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
-    describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_find_output, run_screen_test,
-    run_timing_test, run_video_test, summarize, system_audio_platform, system_platform, system_video_platform,
-    AudioChoice, AudioTestOptions, Check, DeviceKind, FindOutputOptions, Mix, ScreenMedia, ScreenTestOptions,
-    SoundPlan, TimingTestOptions, VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
+    describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_cue_test, run_find_output,
+    run_screen_test, run_timing_test, run_video_test, summarize, system_audio_platform, system_cue_player,
+    system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check, CueTestOptions, DeviceKind,
+    FindOutputOptions, Mix, ScreenMedia, ScreenTestOptions, SoundPlan, TimingTestOptions, VideoTestOptions, MIC_FILE,
+    SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -82,6 +83,14 @@ enum Cmd {
         /// quieter, for example -10. The separate `system.wav` is never changed.
         #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
         system_gain_db: i32,
+        /// Whether the recorder makes a short sound for each step (countdown, start, pause, resume, stop,
+        /// error), so an author who cannot see the screen always knows what it is doing: `on` or `off`.
+        /// The sounds are never recorded.
+        #[arg(long, default_value = "on")]
+        cues: String,
+        /// How loud those sounds are, from 0 (silent) to 100.
+        #[arg(long, default_value_t = 70, value_parser = clap::value_parser!(u8).range(0..=100))]
+        cue_volume: u8,
         /// Count the summary findings (skipped pictures, processor use, memory growth, sound drifting
         /// from the picture) as part of passing or failing. Meant for long test recordings.
         #[arg(long)]
@@ -113,6 +122,19 @@ enum Cmd {
         /// start of the session, countdown included). For demos and tests.
         #[arg(long)]
         demo_script: Option<String>,
+    },
+    /// Play the recorder's own sounds one by one, saying in words what each is for, so you can hear
+    /// whether they are clear and comfortable. Plays on Windows; saves each as a WAV file everywhere.
+    CueTest {
+        /// How loud, from 0 (silent) to 100.
+        #[arg(long, default_value_t = 70, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        /// The folder to also save each sound in, as a file (created if needed).
+        #[arg(long, default_value = "cue-test-output")]
+        out: PathBuf,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
     },
     /// Repair a recording that was interrupted.
     Recover {
@@ -445,6 +467,8 @@ fn main() -> ExitCode {
             output,
             mic_gain_db,
             system_gain_db,
+            cues,
+            cue_volume,
             strict,
             countdown_ms,
             segment_ms,
@@ -460,6 +484,18 @@ fn main() -> ExitCode {
             if !plain {
                 hello();
             }
+            let cues_on = match cues.trim().to_lowercase().as_str() {
+                "on" | "yes" | "true" => true,
+                "off" | "no" | "false" => false,
+                other => {
+                    sink.emit(Event::Error {
+                        code: "bad-option".into(),
+                        message: format!("--cues must be on or off, not \"{other}\"."),
+                        fatal: true,
+                    });
+                    return ExitCode::from(2);
+                }
+            };
             let mut sound_plan = SoundPlan::default();
             let mut report_handle = None;
             let factory: Box<dyn MediaFactory> = match source.as_str() {
@@ -538,7 +574,25 @@ fn main() -> ExitCode {
                     Box::new(ChannelInput { rx })
                 }
             };
-            match run_session(&cfg, factory.as_ref(), input.as_mut(), sink.as_mut(), &SystemClock::new()) {
+            let cue_player: Box<dyn CuePlayer> =
+                if cues_on && cue_volume > 0 { system_cue_player(cue_volume) } else { Box::new(NoCues) };
+            if source == "screen" && cues_on && cue_volume > 0 {
+                sink.emit(Event::Check {
+                    check: "cues".into(),
+                    ok: true,
+                    message: format!(
+                        "The recorder will make a short sound for the countdown, the start, a pause, a resume, the stop and an error, at volume {cue_volume} of 100. None of them is recorded. Turn them off with --cues off, or change the volume with --cue-volume."
+                    ),
+                });
+            }
+            match run_session_with_cues(
+                &cfg,
+                factory.as_ref(),
+                input.as_mut(),
+                sink.as_mut(),
+                &SystemClock::new(),
+                cue_player.as_ref(),
+            ) {
                 Ok(outcome) => {
                     // A real screen recording is read back through Windows, the way a player would.
                     let mut readback_ok = true;
@@ -726,6 +780,14 @@ fn main() -> ExitCode {
                 output: AudioChoice::parse(&output),
             };
             let all_fine = run_timing_test(&opts, &mut |c| emit_check(plain, c));
+            finish_checks(plain, all_fine)
+        }
+        Cmd::CueTest { volume, out, plain } => {
+            if !plain {
+                hello();
+            }
+            let opts = CueTestOptions { volume, out_dir: Some(out) };
+            let all_fine = run_cue_test(&opts, &mut |c| emit_check(plain, c));
             finish_checks(plain, all_fine)
         }
         Cmd::VideoTest { display, seconds, fps, bitrate_kbps, fragmented, start_marker, out, plain } => {

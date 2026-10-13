@@ -1,6 +1,6 @@
 # OpenStage Capture: Requirements (PRD)
 
-**Status:** Draft v0.2, with the owner's answers on the proposed details recorded (section 9), for review
+**Status:** Draft v0.3, with the owner's answers on the proposed details recorded (section 9), for review
 **Source:** the [product brief](product-brief.md) (v0.13). The brief records the reasoning and the decisions. This document turns them into requirements that a person can test.
 **Scope:** Release 1, Windows only
 **License:** Apache-2.0
@@ -78,7 +78,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **Done when**
 - Start, pause and resume, and stop each have a hotkey that works while another program has focus. Pause and resume share one key, which announces the new state.
 - Hotkeys are configurable. The settings screen warns if a choice uses a screen reader's modifier key (Insert or Caps Lock).
-- **Default hotkeys [P]:** Ctrl+Shift+F9 to start, Ctrl+Shift+F10 to pause or resume, and Ctrl+Shift+F11 to stop. During the capture spike they are tested against the default keys of NVDA, JAWS, and Narrator, Windows itself, and common programs, and changed if any collide.
+- **Default hotkeys [P]:** Ctrl+Shift+F9 to start, Ctrl+Shift+F10 to pause or resume, Ctrl+Shift+F11 to stop, and Ctrl+Shift+F12 to start again (A10). During the capture spike they are tested against the default keys of NVDA, JAWS, and Narrator, Windows itself, and common programs, and changed if any collide.
 - An optional countdown runs before recording starts: 3 seconds by default, adjustable, and it can be turned off *(confirmed)*.
 - Stop finishes cleanly: every file is finalized and I am told where the recording was saved.
 - The same four actions are also buttons in the recorder panel.
@@ -144,7 +144,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 - The recording is saved in small pieces as it goes.
 - If the capture program or the computer stops mid-recording, the next time I open the project I am offered recovery and get back everything except the last few seconds (at most 10 seconds) *(confirmed)*.
 - OpenStage's existing Cancel (which stops the program abruptly) never leaves a broken file: the result is either recoverable or cleanly discarded.
-- Discarding a recording is a separate, explicit action with a confirmation.
+- Discarding a recording is a separate, explicit action with a confirmation. (Starting again, A10, is its own explicit action and sets the take aside instead of erasing it.)
 - Test: end the program during a recording and recover it.
 
 **Accessibility checks**
@@ -161,6 +161,20 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 **Accessibility checks**
 - The whole flow, including Windows' own prompts, is completed with the keyboard alone and with NVDA and Narrator.
+
+#### A10. Start again when a take goes wrong
+**As an** author, **I want** to throw away a recording that went wrong and begin again with one action, **so that** a slip does not cost me a long detour.
+
+**Done when**
+- While recording or paused, one action (a hotkey, default Ctrl+Shift+F12 **[P]**, or a button in the recorder panel) stops this take, sets it aside, and starts a new recording with the same target, sound, camera, and options. The countdown, if on, runs first.
+- It also works right after I stop: a "Record again" button starts a new take with the same settings, and I choose whether the earlier take is kept or set aside.
+- **Nothing is erased.** A take set aside goes to a "Discarded takes" list inside the capture project, where I can play it or restore it. Only emptying that list deletes anything, and that asks for confirmation. **[P: this is the recommended way to make "start again" safe.]**
+- There is no confirmation prompt when starting again. That keeps it fast and means it never pulls focus away from the program being recorded. Nothing is lost, so none is needed.
+- A sound and a text message announce it, for example "Take set aside. Starting again."
+- Discarded takes are never published (B2).
+
+**Accessibility checks**
+- Works by hotkey and by keyboard in the panel, with NVDA and Narrator running. No step has a time limit. The Discarded takes list is a labeled table that works by keyboard.
 
 ### Epic B: Projects and files
 
@@ -379,8 +393,9 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **Done when**
 - The author can write short descriptions at points in time. They are voiced through the same script-to-speech route as narration, or recorded.
 - Not every video needs description. If everything important on screen is already said in the narration, no extra description is needed. The checker (F4) flags videos with important visual-only content so the author can add description where it matters.
-- **Delivery (owner: a pop-up when the learner asks for it).** A clearly labeled "Audio description" button sits by the video and opens an accessible pop-up that follows OpenStage's dialog rules: focus moves in, Escape closes it, focus returns, no keyboard trap. In the pop-up the learner can read the description, listen to it, and **[P]** play the video with the description voiced in time with it, pausing the video where needed (extended description).
-- That last option matters for the AA claim. WCAG 1.2.5 asks for audio description that is synchronized with prerecorded video, and a text-only alternative satisfies only the Level A criterion (1.2.3). Whether the play-with-description option is in Release 1 is open (section 9).
+- **Delivery (owner: a pop-up when the learner asks for it).** A clearly labeled "Audio description" button sits by the video and opens an accessible pop-up that follows OpenStage's dialog rules: focus moves in, Escape closes it, focus returns, no keyboard trap. In the pop-up the learner can read the description, listen to it, or play the video with the description voiced in time with it, pausing the video where needed (extended description) *(confirmed)*.
+- **Why the third option:** WCAG 1.2.5 asks for audio description that is synchronized with prerecorded video, and a text-only alternative satisfies only the Level A criterion (1.2.3). The owner confirmed that play-with-description is in Release 1.
+- **Depends on** OpenStage's player. A video object currently plays with the browser's own controls *(confirmed)*, so the pop-up, the described playback, and pausing for extended description are new player features in OpenStage (section 6, item 6).
 
 **Accessibility checks**
 - Reviewed by someone who uses a screen reader. The pop-up passes the dialog checks (focus, Escape, no keyboard trap).
@@ -496,7 +511,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 **Done when**
 - The program is `openstage-capture.exe`, with commands to record, render, probe the system, and recover.
 - Its first output line states the protocol version. It then reports events as lines of JSON: state, elapsed time, throttled audio levels, warnings, errors, and a final result with the project path. Logs go to a separate channel.
-- It accepts pause, resume, stop, and marker commands.
+- It accepts pause, resume, stop, restart (set this take aside and start a new one with the same settings), and marker commands.
 - The protocol is documented in a short spec and versioned.
 - It can run on its own from a script, so it can be tested without OpenStage.
 
@@ -563,7 +578,7 @@ OpenStage Capture is a module of OpenStage Author. It lets an author record thei
 
 ## 6. Prerequisites and dependencies
 
-Release 1 does not ship until these are done. Items 1, 2, and 4 are OpenStage work outside this module.
+Release 1 does not ship until these are done. Items 1, 2, 4, and 6 are OpenStage work outside this module.
 
 | # | Prerequisite | Why |
 |---|---|---|
@@ -572,6 +587,7 @@ Release 1 does not ship until these are done. Items 1, 2, and 4 are OpenStage wo
 | 3 | **The streaming launch path** (G2) | Recording cannot run on the current one-job-at-a-time launcher. |
 | 4 | **A baseline screen reader pass** on the OpenStage patterns Capture reuses | No real screen reader testing exists yet. |
 | 5 | **CLAUDE.md updated** for the three accepted exceptions (Windows first, mid-level video editor, Rust capture program) | Keeps the project's own rules and the work in agreement. |
+| 6 | **Player support for audio description:** the pop-up, playing the video with the description voiced in time, and pausing for extended description | D5 needs it. The player currently plays video with the browser's own controls. |
 
 **Not prerequisites:** timing that follows a video (a roadmap request), and macOS, Linux, JAWS, or VoiceOver work.
 
@@ -593,12 +609,12 @@ macOS and Linux; JAWS and VoiceOver testing; SCORM 2004; xAPI and cmi5; WebM out
 
 ## 9. Details: confirmed and still proposed
 
-The owner answered the fourteen proposed details. This table shows where each stands.
+The owner answered the fourteen proposed details and asked for one more feature (item 15). This table shows where each stands.
 
 | # | Detail | Status |
 |---|---|---|
 | 1 | Countdown before recording (A3) | **Confirmed:** 3 seconds, adjustable, or off |
-| 2 | Default hotkeys (A3) | **Confirmed that defaults are needed. Values proposed:** Ctrl+Shift+F9 start, F10 pause or resume, F11 stop; tested for collisions in the capture spike |
+| 2 | Default hotkeys (A3) | **Confirmed that defaults are needed. Values proposed:** Ctrl+Shift+F9 start, F10 pause or resume, F11 stop, F12 start again; tested for collisions in the capture spike |
 | 3 | Sounds (A4) | **Confirmed:** short, adjustable volume, on by default, can be turned off |
 | 4 | Notification pop-ups (A7) | **Confirmed:** excluded by default |
 | 5 | Maximum recovery loss (A8) | **Confirmed: 10 seconds** (changed from the proposed 5) |
@@ -607,15 +623,16 @@ The owner answered the fourteen proposed details. This table shows where each st
 | 8 | What "short" means for outside video clips (C10) | **Confirmed:** 30 seconds or less |
 | 9 | Zoom transition and reduce-motion export (C5) | **Confirmed:** half a second; reduce-motion choice included |
 | 10 | Caption limits (D2) | **Proposed from best-practice research:** at most 2 lines; at most 42 characters a line; about 160 words per minute (roughly 20 characters per second); at least 1 second on screen; warnings only; adjustable. Check the official guides before finalizing |
-| 11 | How audio description reaches learners (D5) | **Confirmed:** a pop-up when the learner asks for it. **Proposed:** include a play-with-description option (needed to meet WCAG 1.2.5 at Level AA) |
+| 11 | How audio description reaches learners (D5) | **Confirmed:** a pop-up when the learner asks for it, with read, listen, and play-with-description options (needed to meet WCAG 1.2.5 at Level AA) |
 | 12 | What may run during a recording; the stop wait (G2) | **Left open by the owner.** Recommended default: heavy jobs wait until pause or stop; everything else stays available. The 10-second stop wait stands unless changed |
 | 13 | Supported Windows versions (A9, section 7) | **Confirmed:** Windows 11 and later |
 | 14 | Speech recognition tool to audit first (D3) | **Confirmed:** Whisper first (license to be verified) |
+| 15 | Start again (A10) | **Requested by the owner:** "start again if the first recording was messed up". **Proposed details:** default hotkey Ctrl+Shift+F12; the old take is set aside in a Discarded takes list, not erased; no confirmation prompt |
 
 **Still to settle**
 - The hotkey values, after collision testing (item 2).
 - The caption numbers, after checking the official guides (item 10).
-- Whether Release 1 includes the play-with-description option (item 11).
+- The details of Start again, especially the Discarded takes list (item 15).
 - Whether the recommended default for jobs during a recording is right (item 12).
 - The editing performance target for 60-minute recordings (C3).
 
@@ -623,7 +640,7 @@ The owner answered the fourteen proposed details. This table shows where each st
 
 | The brief's Release 1 group | Covered by |
 |---|---|
-| Recording | A1 to A9, G1 to G3 |
+| Recording | A1 to A10, G1 to G3 |
 | Editing | B4, C1 to C11 |
 | Accessible content | D1 to D7, F4 |
 | Interactive training | E1 to E4 |

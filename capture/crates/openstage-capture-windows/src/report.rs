@@ -6,6 +6,8 @@
 //! ([`RecordingReport`]) and [`summarize`] turns them into findings in plain words.
 
 use crate::timing::MAX_OFFSET_MS;
+use crate::{CaptureWork, SinkWork};
+use std::time::Duration;
 
 /// The share of looks that may be over the 40 ms line before sound counts as out of step with the picture.
 const MAX_SHARE_OVER: f64 = 0.01;
@@ -54,6 +56,18 @@ pub struct OutputMove {
     pub to: String,
 }
 
+/// Where the time of the picture work went during a recording. Times are wall-clock, so a step that
+/// waits (for the graphics card, say) counts its waiting too; they are upper limits on processor time.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PictureWork {
+    /// Bringing pictures from the graphics card into memory (on Windows' own threads).
+    pub capture: CaptureWork,
+    /// Handing pictures to the video writer (on the recording thread).
+    pub sink: SinkWork,
+    /// The processor time the recording thread used altogether, if the system can say.
+    pub loop_cpu: Option<Duration>,
+}
+
 /// Counters from one recording.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RecordingReport {
@@ -76,6 +90,8 @@ pub struct RecordingReport {
     pub tracks: Vec<TrackReport>,
     /// How regularly the program looked at the screen and the sound while recording.
     pub looks: LookStats,
+    /// Where the picture work's time went.
+    pub work: PictureWork,
 }
 
 /// One moment when the program went a long time without looking at the screen and the sound.
@@ -114,6 +130,55 @@ pub(crate) fn clock(ms: u64) -> String {
     } else {
         format!("{}:{:02}", s / 60, s % 60)
     }
+}
+
+/// Milliseconds of `time` for every second of the recording.
+fn per_second_ms(time: Duration, seconds: f64) -> f64 {
+    time.as_secs_f64() * 1000.0 / seconds
+}
+
+/// A few sentences on where the processor time went, to add to the processor finding. Empty when the
+/// recording measured nothing of it.
+fn where_the_time_went(r: &RecordingReport, cpu_seconds: f64) -> String {
+    let (c, s) = (&r.work.capture, &r.work.sink);
+    if c.pictures == 0 && s.pictures == 0 {
+        return String::new();
+    }
+    let secs = r.wall_seconds.max(0.001);
+    let ms = |t: Duration| per_second_ms(t, secs);
+    let a_second = |n: u64| n as f64 / secs;
+    let capture_total = c.memory + c.readback + c.rows;
+    let sink_total = s.copy + s.call;
+    let mut text = format!(
+        " Where the picture work went, for every second of the recording (steps that wait count their waiting, so these are upper limits): bringing pictures from the graphics card into memory took {:.0} ms ({:.0} pictures a second, {:.1} ms each; {:.0} ms of it getting memory, {:.0} ms the graphics card's copy and the wait for it, {:.0} ms copying rows; {} of {} pictures used memory that an earlier picture had used)",
+        ms(capture_total),
+        a_second(c.pictures),
+        if c.pictures == 0 { 0.0 } else { capture_total.as_secs_f64() * 1000.0 / c.pictures as f64 },
+        ms(c.memory),
+        ms(c.readback),
+        ms(c.rows),
+        c.reused,
+        c.pictures
+    );
+    text += &format!(
+        "; handing pictures to the video writer took {:.0} ms ({:.0} pictures a second, {:.1} ms each; {:.0} ms copying each into the writer's own memory, {:.0} ms the writer's own work, which includes converting the colours)",
+        ms(sink_total),
+        a_second(s.pictures),
+        if s.pictures == 0 { 0.0 } else { sink_total.as_secs_f64() * 1000.0 / s.pictures as f64 },
+        ms(s.copy),
+        ms(s.call)
+    );
+    // The recording thread's own processor time includes the writer's work; the capture work is on other threads.
+    let accounted = capture_total + r.work.loop_cpu.unwrap_or(sink_total);
+    if let Some(loop_cpu) = r.work.loop_cpu {
+        text += &format!("; the recording thread itself used {:.0} ms of processor time", ms(loop_cpu));
+    }
+    let total_ms = cpu_seconds * 1000.0 / secs;
+    let rest = (total_ms - ms(accounted)).max(0.0);
+    text += &format!(
+        ". The program used {total_ms:.0} ms of processor time a second in all, so at least {rest:.0} ms of it is outside these steps: Windows' own video threads, the graphics driver and the sound."
+    );
+    text
 }
 
 /// The findings for a recording, in plain words.
@@ -206,7 +271,7 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
                 } else {
                     "."
                 }
-            ),
+            ) + &where_the_time_went(r, cpu),
         ));
     }
 
@@ -367,6 +432,7 @@ mod tests {
                 gaps_over_100_ms: 0,
                 slow_moments: vec![],
             },
+            work: PictureWork::default(),
         }
     }
 
@@ -457,6 +523,65 @@ mod tests {
             "{}",
             stalls.message
         );
+    }
+
+    #[test]
+    fn the_processor_finding_says_where_the_picture_work_went() {
+        let secs = Duration::from_secs;
+        let mut r = good(); // an hour, 1800 s of processor time: 500 ms for every second
+        r.work = PictureWork {
+            capture: CaptureWork {
+                pictures: 144_000,
+                reused: 143_990,
+                memory: secs(36),
+                readback: secs(432),
+                rows: secs(180),
+            },
+            sink: SinkWork { pictures: 108_000, copy: secs(108), call: secs(324) },
+            loop_cpu: Some(secs(540)),
+        };
+        let checks = summarize(&r);
+        let cpu = &find(&checks, "run-cpu").message;
+        assert!(cpu.contains("Where the picture work went, for every second of the recording"), "{cpu}");
+        assert!(
+            cpu.contains("took 180 ms (40 pictures a second, 4.5 ms each; 10 ms of it getting memory, 120 ms the graphics card's copy and the wait for it, 50 ms copying rows; 143990 of 144000 pictures used memory that an earlier picture had used)"),
+            "{cpu}"
+        );
+        assert!(
+            cpu.contains("took 120 ms (30 pictures a second, 4.0 ms each; 30 ms copying each into the writer's own memory, 90 ms the writer's own work, which includes converting the colours)"),
+            "{cpu}"
+        );
+        assert!(cpu.contains("the recording thread itself used 150 ms of processor time"), "{cpu}");
+        // 500 ms in all; the capture steps (180) and the recording thread (150) account for at most 330.
+        assert!(
+            cpu.contains("500 ms of processor time a second in all, so at least 170 ms of it is outside these steps"),
+            "{cpu}"
+        );
+        assert!(
+            find(&checks, "run-cpu").ok == find(&summarize(&good()), "run-cpu").ok,
+            "the breakdown changes no verdict"
+        );
+    }
+
+    #[test]
+    fn without_a_recording_thread_reading_the_writer_steps_stand_in_for_it() {
+        let secs = Duration::from_secs;
+        let mut r = good();
+        r.work = PictureWork {
+            capture: CaptureWork { pictures: 3600, readback: secs(360), ..CaptureWork::default() },
+            sink: SinkWork { pictures: 3600, copy: secs(360), call: secs(360) },
+            loop_cpu: None,
+        };
+        let cpu = summarize(&r).into_iter().find(|c| c.check == "run-cpu").unwrap().message;
+        assert!(!cpu.contains("the recording thread itself"), "{cpu}");
+        // 100 ms (capture) + 200 ms (writer) = 300 ms accounted of 500: at least 200 ms elsewhere.
+        assert!(cpu.contains("at least 200 ms of it is outside these steps"), "{cpu}");
+    }
+
+    #[test]
+    fn a_recording_that_measured_no_picture_work_says_nothing_about_it() {
+        let cpu = summarize(&good()).into_iter().find(|c| c.check == "run-cpu").unwrap().message;
+        assert!(!cpu.contains("Where the picture work went"), "{cpu}");
     }
 
     #[test]

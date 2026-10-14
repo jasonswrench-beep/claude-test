@@ -8,7 +8,7 @@ use crate::video::{AudioInspection, AudioSpec, EncoderInfo, SinkSpec, VideoInspe
 use crate::{Frame, ScreenError};
 use std::path::Path;
 use std::sync::Once;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::core::{Interface, GUID, HSTRING};
 use windows::Win32::Foundation::FILETIME;
@@ -31,7 +31,7 @@ use windows::Win32::Media::MediaFoundation::{
     MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_TRANSCODE_CONTAINERTYPE,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+use windows::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread, GetProcessTimes, GetThreadTimes};
 
 fn failed(what: &str, e: windows::core::Error) -> ScreenError {
     ScreenError::Failed(format!("{what} (Windows error code 0x{:08X}: {})", e.code().0 as u32, e.message()))
@@ -77,6 +77,7 @@ impl VideoPlatform for WindowsVideo {
         let (width, height) = (spec.width, spec.height);
         let sink = |(writer, audio_stream): (IMFSinkWriter, Option<u32>), note| {
             Box::new(Mp4Sink {
+                work: crate::SinkWork::default(),
                 writer: Some(writer),
                 stream: 0,
                 audio: spec.audio.clone().zip(audio_stream),
@@ -138,6 +139,15 @@ impl VideoPlatform for WindowsVideo {
         let (mut created, mut exited, mut kernel, mut user) =
             (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
         unsafe { GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user) }.ok()?;
+        let ticks = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
+        // FILETIME counts in units of 100 nanoseconds.
+        Some(Duration::from_nanos((ticks(kernel) + ticks(user)) * 100))
+    }
+
+    fn thread_cpu_time(&self) -> Option<Duration> {
+        let (mut created, mut exited, mut kernel, mut user) =
+            (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+        unsafe { GetThreadTimes(GetCurrentThread(), &mut created, &mut exited, &mut kernel, &mut user) }.ok()?;
         let ticks = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
         // FILETIME counts in units of 100 nanoseconds.
         Some(Duration::from_nanos((ticks(kernel) + ticks(user)) * 100))
@@ -343,6 +353,8 @@ unsafe fn set_common(t: &IMFMediaType, subtype: &GUID, width: u32, height: u32, 
 }
 
 struct Mp4Sink {
+    /// Where the time of handing pictures over went.
+    work: crate::SinkWork,
     writer: Option<IMFSinkWriter>,
     stream: u32,
     /// The sound track's stream number and format, if the file has one.
@@ -357,6 +369,10 @@ impl VideoSink for Mp4Sink {
         self.note.clone()
     }
 
+    fn work(&self) -> crate::SinkWork {
+        self.work
+    }
+
     fn write(&mut self, frame: &Frame, pts_100ns: i64, duration_100ns: i64) -> Result<(), ScreenError> {
         let writer =
             self.writer.as_ref().ok_or_else(|| ScreenError::Failed("The video file is already closed.".into()))?;
@@ -367,14 +383,19 @@ impl VideoSink for Mp4Sink {
             )));
         }
         let length = frame.bgra.len() as u32;
-        unsafe {
+        let copy_started = Instant::now();
+        let (buffer, copied) = unsafe {
             let buffer = MFCreateMemoryBuffer(length).map_err(|e| failed("Could not make room for a picture", e))?;
             let mut data: *mut u8 = std::ptr::null_mut();
             buffer.Lock(&mut data, None, None).map_err(|e| failed("Could not fill a picture", e))?;
             std::ptr::copy_nonoverlapping(frame.bgra.as_ptr(), data, frame.bgra.len());
             buffer.Unlock().map_err(|e| failed("Could not finish filling a picture", e))?;
             buffer.SetCurrentLength(length).map_err(|e| failed("Could not size a picture", e))?;
+            (buffer, copy_started.elapsed())
+        };
 
+        let call_started = Instant::now();
+        unsafe {
             let sample = MFCreateSample().map_err(|e| failed("Could not make a video sample", e))?;
             sample.AddBuffer(&buffer).map_err(|e| failed("Could not attach a picture", e))?;
             sample.SetSampleTime(pts_100ns).map_err(|e| failed("Could not time a picture", e))?;
@@ -383,6 +404,9 @@ impl VideoSink for Mp4Sink {
                 .WriteSample(self.stream, &sample)
                 .map_err(|e| failed("Windows would not take a picture for the video", e))?;
         }
+        self.work.pictures += 1;
+        self.work.copy += copied;
+        self.work.call += call_started.elapsed();
         Ok(())
     }
 

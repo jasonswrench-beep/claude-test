@@ -28,6 +28,10 @@ pub trait VideoSink {
     fn note(&self) -> Option<String> {
         None
     }
+    /// Where the time of handing pictures over went so far, if the sink measures it.
+    fn work(&self) -> SinkWork {
+        SinkWork::default()
+    }
     /// Add one picture, shown from `pts_100ns` for `duration_100ns` (in units of 100 nanoseconds).
     fn write(&mut self, frame: &Frame, pts_100ns: i64, duration_100ns: i64) -> Result<(), ScreenError>;
     /// Add sound to the file's sound track: interleaved 16-bit samples that start at `pts_100ns`.
@@ -37,6 +41,28 @@ pub trait VideoSink {
     }
     /// Complete the file so that it can be played.
     fn finish(self: Box<Self>) -> Result<(), ScreenError>;
+}
+
+/// Where the time of handing pictures to the video writer went, summed over the pictures (wall-clock time).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SinkWork {
+    /// Pictures handed over.
+    pub pictures: u64,
+    /// Copying each picture into memory of the writer's own.
+    pub copy: Duration,
+    /// The writer's own work when given a picture: converting its colours and starting the encoder.
+    pub call: Duration,
+}
+
+impl SinkWork {
+    /// What was done since `earlier` (a reading taken before).
+    pub fn since(&self, earlier: &SinkWork) -> SinkWork {
+        SinkWork {
+            pictures: self.pictures.saturating_sub(earlier.pictures),
+            copy: self.copy.saturating_sub(earlier.copy),
+            call: self.call.saturating_sub(earlier.call),
+        }
+    }
 }
 
 /// A sound track for the video file: AAC, the sound that every player plays.
@@ -96,6 +122,10 @@ pub trait VideoPlatform {
     fn inspect_video(&self, path: &Path) -> Result<VideoInspection, ScreenError>;
     /// Processor time this program has used so far, if the system can say.
     fn process_cpu_time(&self) -> Option<Duration>;
+    /// Processor time the calling thread alone has used so far, if the system can say.
+    fn thread_cpu_time(&self) -> Option<Duration> {
+        None
+    }
     /// How many logical processors the computer has.
     fn logical_cores(&self) -> u32;
     /// Memory this program is using right now, in megabytes, if the system can say.

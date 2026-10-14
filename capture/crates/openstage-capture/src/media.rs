@@ -11,7 +11,7 @@
 
 use crate::session::{SessionConfig, SessionError};
 use crate::source::Source;
-use openstage_capture_project::{part_path, MediaFile, SegmentWriter};
+use openstage_capture_project::{part_path, EventLogThread, MediaFile, SegmentWriter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -56,6 +56,11 @@ pub trait MediaFactory {
     }
     /// Start the media for one take, in that take's folder (which already exists).
     fn begin(&self, take_dir: &Path, cfg: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError>;
+    /// Open the take's interaction log. It is written from a thread of its own, so a slow drive cannot
+    /// hold up the recording loop; tests replace this to give the log a drive that is slow or fails.
+    fn open_event_log(&self, path: &Path) -> std::io::Result<EventLogThread> {
+        EventLogThread::open(path)
+    }
 }
 
 /// Any function that builds a test [`Source`] is a factory for segment media.

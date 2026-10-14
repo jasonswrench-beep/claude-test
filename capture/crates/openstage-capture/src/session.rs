@@ -9,7 +9,9 @@
 //! Rules this loop keeps (see `docs/prd.md`, stories A3, A4, A8, A10):
 //!
 //! * Pausing stops recording time. The recording is exactly as long as the time spent recording.
-//! * Data is forced to disk at least every `flush_ms`, so a crash loses at most that much.
+//! * Data is forced to disk at least every `flush_ms`, so a crash loses at most that much. (The notes file is written
+//!   from a thread of its own, so a drive that is slow to confirm a save cannot hold this loop up; on such a drive a
+//!   crash can lose more of the notes, never of the video or sound.)
 //! * **Start again never erases anything.** The take is marked as set aside and a new one begins.
 //! * Stop is graceful: every file is made complete before the result is reported.
 //! * A write problem is reported as a fatal error and the take is finished as far as it can be.
@@ -24,7 +26,7 @@ use crate::cues::{Cue, CuePlayer, NoCues, CUE_TAIL_MS};
 use crate::media::{MediaFactory, TakeMedia};
 use openstage_capture_project::{
     create_project, create_take_with, finish_take, next_take_id, open_project, set_aside_take, take_dir,
-    EventLogWriter, LogEvent, ProjectError,
+    EventLogThread, LogEvent, ProjectError,
 };
 use openstage_capture_protocol::{Command, Event, State};
 use std::collections::VecDeque;
@@ -135,7 +137,7 @@ const SLOW_SAVE: std::time::Duration = std::time::Duration::from_millis(100);
 struct TakeRun {
     id: u32,
     media: Option<Box<dyn TakeMedia>>,
-    events: EventLogWriter,
+    events: EventLogThread,
     last_flush_wall: u64,
 }
 
@@ -243,7 +245,7 @@ impl<'a> Runner<'a> {
         )?;
         let dir = take_dir(&self.cfg.project, id);
         let media = self.factory.begin(&dir, self.cfg)?;
-        let events = EventLogWriter::create(&dir.join("events.jsonl"))?;
+        let events = self.factory.open_event_log(&dir.join("events.jsonl"))?;
         self.run = Some(TakeRun { id, media: Some(media), events, last_flush_wall: self.clock.now_ms() });
         self.last_take = id;
         self.media_ms = 0;
@@ -263,7 +265,17 @@ impl<'a> Runner<'a> {
             Some(media) => media.finish(media_ms)?,
             None => 0,
         };
-        run.events.flush_sync()?;
+        // The log is written from a thread of its own; this waits for it to put everything on the disk.
+        let saves = run.events.finish()?;
+        if saves.slow_saves > 0 {
+            let message = format!(
+                "The drive was slow to confirm {} of {} saves of this take's notes (the longest took {} ms). \
+                 The recording did not wait for them. If the video still stutters, record onto a faster drive, \
+                 such as an SSD.",
+                saves.slow_saves, saves.saves, saves.longest_ms
+            );
+            self.warn("slow-disk", &message);
+        }
         Ok((media_ms, files))
     }
 
@@ -1406,6 +1418,79 @@ mod tests {
             assert_eq!(slow.is_some(), warned, "{wait_ms} ms: {slow:?}");
             if let Some(message) = slow {
                 assert!(message.contains("Saving to the disk took 1") && message.contains("slow disk"), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_drive_that_is_slow_to_confirm_the_notes_does_not_hold_up_the_loop() {
+        use crate::media::{MediaFactory, TakeMedia};
+        use openstage_capture_project::{EventLogThread, LogSink};
+        struct Quiet;
+        impl TakeMedia for Quiet {
+            fn pump(&mut self, _: u64) -> Result<(), SessionError> {
+                Ok(())
+            }
+            fn flush(&mut self) -> Result<(), SessionError> {
+                Ok(())
+            }
+            fn levels(&self, _: u64) -> Vec<(&'static str, f32)> {
+                Vec::new()
+            }
+            fn finish(self: Box<Self>, _: u64) -> Result<u32, SessionError> {
+                Ok(1)
+            }
+        }
+        /// A log whose forced saves each take this long, like the owner's drive in the fourth long test.
+        struct SlowDrive(std::time::Duration);
+        impl LogSink for SlowDrive {
+            fn append(&mut self, _: u64, _: LogEvent) -> io::Result<()> {
+                Ok(())
+            }
+            fn flush_sync(&mut self) -> io::Result<()> {
+                std::thread::sleep(self.0);
+                Ok(())
+            }
+        }
+        struct Factory(std::time::Duration);
+        impl MediaFactory for Factory {
+            fn source_id(&self) -> String {
+                "slow-notes".into()
+            }
+            fn begin(&self, _: &std::path::Path, _: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError> {
+                Ok(Box::new(Quiet))
+            }
+            fn open_event_log(&self, _: &std::path::Path) -> io::Result<EventLogThread> {
+                Ok(EventLogThread::start(SlowDrive(self.0)))
+            }
+        }
+        let code_of = |sink: &VecSink, wanted: &str| {
+            sink.events.iter().find_map(|e| match e {
+                Event::Warning { code, message } if code == wanted => Some(message.clone()),
+                _ => None,
+            })
+        };
+        for (wait_ms, told) in [(300u64, true), (0, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut cfg = config(&dir);
+            cfg.max_duration_ms = Some(2500);
+            let mut sink = VecSink::default();
+            run_session(
+                &cfg,
+                &Factory(std::time::Duration::from_millis(wait_ms)),
+                &mut ScriptedInput::none(),
+                &mut sink,
+                &ManualClock::new(),
+            )
+            .unwrap();
+            assert!(code_of(&sink, "slow-save").is_none(), "the loop itself never waited for the drive");
+            let slow = code_of(&sink, "slow-disk");
+            assert_eq!(slow.is_some(), told, "{wait_ms} ms: {slow:?}");
+            if let Some(message) = slow {
+                assert!(
+                    message.contains("slow to confirm") && message.contains("did not wait") && message.contains("SSD"),
+                    "{message}"
+                );
             }
         }
     }

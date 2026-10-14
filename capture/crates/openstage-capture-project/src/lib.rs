@@ -38,7 +38,9 @@ pub use edit::{
     TrackKind as EditTrackKind, EDIT_FORMAT, FULL as EDIT_FULL,
 };
 pub use error::ProjectError;
-pub use events_log::{read_log, trim_incomplete_tail, EventLogWriter, LogEvent, LogLine};
+pub use events_log::{
+    read_log, trim_incomplete_tail, EventLogThread, EventLogWriter, LogEvent, LogLine, LogSink, SaveStats, SLOW_SAVE_MS,
+};
 pub use fsutil::{new_id, utc_now_iso, write_atomic};
 pub use manifest::{create_project, open_project, Manifest, Tracks, FORMAT_NAME, SCHEMA_VERSION};
 pub use recover::{recover_project, RecoverReport, RecoveredTake};

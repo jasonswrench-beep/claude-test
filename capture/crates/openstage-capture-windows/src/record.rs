@@ -355,7 +355,7 @@ struct ScreenTake {
     /// The recording thread's processor time when recording began.
     thread_cpu_start: Option<Duration>,
     pictures_received: u64,
-    /// The most pictures that were waiting at one look.
+    /// The most pictures taken at one look. The waiting line holds 8, but more can arrive while it is emptied.
     most_waiting: usize,
     looks: LookTracker,
 }

@@ -282,6 +282,12 @@ pub struct AudioAligner {
     /// Recording time at which each of those worst moments happened, in milliseconds.
     worst_ahead_at_ms: u64,
     worst_late_at_ms: u64,
+    /// How many times sound was asked for, and on how many of them the sound was held back, or was
+    /// missing, by more than `LATE_MS`. A single moment over the line is a blip; what matters for
+    /// keeping sound with the picture is how often it happens.
+    looks: u64,
+    looks_over_ahead: u64,
+    looks_over_late: u64,
 }
 
 impl AudioAligner {
@@ -302,6 +308,9 @@ impl AudioAligner {
             worst_late_frames: 0,
             worst_ahead_at_ms: 0,
             worst_late_at_ms: 0,
+            looks: 0,
+            looks_over_ahead: 0,
+            looks_over_late: 0,
         }
     }
 
@@ -321,6 +330,7 @@ impl AudioAligner {
         let need = target.saturating_sub(self.delivered_frames);
         let have = (self.pending.len() / channels) as u64;
         let mut out = Vec::new();
+        self.looks += 1;
 
         if have >= need {
             out.extend(self.pending.drain(..need as usize * channels));
@@ -329,6 +339,9 @@ impl AudioAligner {
             if ahead > self.worst_ahead_frames {
                 self.worst_ahead_frames = ahead;
                 self.worst_ahead_at_ms = media_ms;
+            }
+            if ahead > self.frames(Self::LATE_MS) {
+                self.looks_over_ahead += 1;
             }
             if ahead > self.frames(Self::AHEAD_MS) {
                 let drop_frames = ahead - self.frames(Self::LATE_MS);
@@ -341,6 +354,9 @@ impl AudioAligner {
             if deficit > self.worst_late_frames {
                 self.worst_late_frames = deficit;
                 self.worst_late_at_ms = media_ms;
+            }
+            if deficit > self.frames(Self::LATE_MS) {
+                self.looks_over_late += 1;
             }
             if deficit > self.frames(Self::LATE_MS) {
                 // The stream sent nothing for a while (a quiet computer, or the program was busy): fill the
@@ -388,6 +404,17 @@ impl AudioAligner {
     /// When, in recording time, the sound was missing the most, in milliseconds.
     pub fn worst_late_at_ms(&self) -> u64 {
         self.worst_late_at_ms
+    }
+
+    /// How many times sound was asked for, and on how many the sound was held back (or missing) by more than 40 ms.
+    pub fn looks(&self) -> u64 {
+        self.looks
+    }
+    pub fn looks_over_later(&self) -> u64 {
+        self.looks_over_ahead
+    }
+    pub fn looks_over_earlier(&self) -> u64 {
+        self.looks_over_late
     }
 
     /// Silence added because nothing arrived, in milliseconds.

@@ -6,6 +6,9 @@
 //! ([`RecordingReport`]) and [`summarize`] turns them into findings in plain words.
 
 use crate::timing::MAX_OFFSET_MS;
+
+/// The share of looks that may be over the 40 ms line before sound counts as out of step with the picture.
+const MAX_SHARE_OVER: f64 = 0.01;
 use crate::{check, Check, CPU_TARGET_PERCENT};
 
 /// How one sound track behaved.
@@ -27,6 +30,12 @@ pub struct TrackReport {
     /// quiet computer sends nothing, which looks the same.
     pub worst_earlier_ms: u64,
     pub worst_earlier_at_ms: u64,
+    /// How many times the sound was placed, and on how many of them it was more than 40 ms later (or,
+    /// for a microphone, missing by more than 40 ms). Zero when not counted, in which case only the
+    /// worst moment is judged.
+    pub looks: u64,
+    pub looks_over_later: u64,
+    pub looks_over_earlier: u64,
     /// How many times Windows reported lost sound.
     pub lost_moments: u64,
     /// Each time Windows moved the computer's sound to another output and the recording followed it.
@@ -219,8 +228,15 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
         let check_name = if t.microphone { "run-sound-microphone" } else { "run-sound-system" };
         // A quiet computer sends no sound at all, which looks like sound arriving too early, so only a
         // microphone (which sends sound all the time) can be judged on that.
-        let within =
-            t.worst_later_ms as f64 <= MAX_OFFSET_MS && (!t.microphone || t.worst_earlier_ms as f64 <= MAX_OFFSET_MS);
+        // What keeps sound with the picture is that it does not stay away from it: one moment over the
+        // line is a blip that corrects itself within a look, so a sound track passes if no more than 1
+        // percent of the looks were over. With no count, the worst moment alone is judged.
+        let ok_by = |worst: u64, over: u64| match t.looks {
+            0 => worst as f64 <= MAX_OFFSET_MS,
+            looks => over as f64 <= looks as f64 * MAX_SHARE_OVER,
+        };
+        let within = ok_by(t.worst_later_ms, t.looks_over_later)
+            && (!t.microphone || ok_by(t.worst_earlier_ms, t.looks_over_earlier));
         let lost = if t.lost_moments > 0 {
             format!(
                 " Windows reported {} moment{} of lost sound.",
@@ -230,14 +246,37 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
         } else {
             String::new()
         };
-        let later = format!("{} ms later than its picture (at {})", t.worst_later_ms, clock(t.worst_later_at_ms));
-        let too_far = if within { String::new() } else { format!(", more than the {MAX_OFFSET_MS:.0} ms allowed") };
+        let how_often = |over: u64| {
+            if t.looks > 0 && over > 0 {
+                format!(
+                    ", and over {MAX_OFFSET_MS:.0} ms on {over} of {} looks ({:.2} percent)",
+                    t.looks,
+                    over as f64 * 100.0 / t.looks as f64
+                )
+            } else {
+                String::new()
+            }
+        };
+        let later = format!(
+            "{} ms later than its picture (at {}){}",
+            t.worst_later_ms,
+            clock(t.worst_later_at_ms),
+            how_often(t.looks_over_later)
+        );
+        let earlier_often = how_often(t.looks_over_earlier);
+        let too_far = if within {
+            String::new()
+        } else if t.looks > 0 {
+            format!(", more than the {MAX_OFFSET_MS:.0} ms allowed for more than 1 percent of the recording")
+        } else {
+            format!(", more than the {MAX_OFFSET_MS:.0} ms allowed")
+        };
         let message = if t.microphone {
             // A microphone sends sound all the time, so its sound card's speed against the computer's clock can be told.
             let net = t.heard_ms as i64 - r.recorded_ms as i64;
             let ppm = if r.recorded_ms == 0 { 0.0 } else { net as f64 * 1_000_000.0 / r.recorded_ms as f64 };
             format!(
-                "The {name}'s sound card ran {} the computer's clock by {} ms over the recording ({:.0} parts per million). The program corrected this by dropping {} ms of sound and filling in {} ms of silence. At worst the sound played {later}, and {} ms earlier (at {}){too_far}.{lost}",
+                "The {name}'s sound card ran {} the computer's clock by {} ms over the recording ({:.0} parts per million). The program corrected this by dropping {} ms of sound and filling in {} ms of silence. At worst the sound played {later}, and {} ms earlier (at {}){earlier_often}{too_far}.{lost}",
                 if net >= 0 { "faster than" } else { "slower than" },
                 net.abs(),
                 ppm.abs(),
@@ -504,5 +543,47 @@ mod tests {
             "{}",
             system.message
         );
+    }
+
+    #[test]
+    fn one_moment_over_the_line_is_a_blip_but_often_over_it_is_not() {
+        // The owner's 70 second run: the computer's sound reached 55 ms once, in about 14,000 looks.
+        let mut r = good();
+        r.tracks[1].worst_later_ms = 55;
+        r.tracks[1].worst_later_at_ms = 30_000;
+        r.tracks[1].looks = 14_000;
+        r.tracks[1].looks_over_later = 1;
+        let checks = summarize(&r);
+        let system = find(&checks, "run-sound-system");
+        assert!(system.ok, "{}", system.message);
+        assert!(
+            system
+                .message
+                .contains("55 ms later than its picture (at 0:30), and over 40 ms on 1 of 14000 looks (0.01 percent)"),
+            "{}",
+            system.message
+        );
+        assert!(!system.message.contains("allowed"));
+
+        // The same worst moment, but over the line on 3 percent of the looks, is sound that stays away from the picture.
+        r.tracks[1].looks_over_later = 420;
+        let checks = summarize(&r);
+        let system = find(&checks, "run-sound-system");
+        assert!(!system.ok);
+        assert!(
+            system.message.contains("on 420 of 14000 looks (3.00 percent)")
+                && system.message.contains("for more than 1 percent of the recording")
+        );
+
+        // Exactly 1 percent is still fine; a microphone is judged the same way on being too early.
+        r.tracks[1].looks_over_later = 140;
+        assert!(find(&summarize(&r), "run-sound-system").ok);
+        let mut m = good();
+        m.tracks[0].looks = 1000;
+        m.tracks[0].worst_earlier_ms = 90;
+        m.tracks[0].looks_over_earlier = 50;
+        let checks = summarize(&m);
+        assert!(!find(&checks, "run-sound-microphone").ok);
+        assert!(find(&checks, "run-sound-microphone").message.contains("over 40 ms on 50 of 1000 looks"));
     }
 }

@@ -30,8 +30,14 @@ pub fn emit_check(plain: bool, c: Check) {
 /// Print the closing line (in plain mode) and choose the exit code: 0 all fine, 1 a problem was
 /// found, 2 this computer is not running Windows.
 pub fn finish_checks(plain: bool, all_fine: bool) -> ExitCode {
+    finish_checks_with(plain, all_fine, "All checks passed.", "At least one check found a problem.")
+}
+
+/// The same with the closing lines chosen by the command (a command that asks the author to choose
+/// something has no "checks" to pass).
+pub fn finish_checks_with(plain: bool, all_fine: bool, when_fine: &str, when_not: &str) -> ExitCode {
     if plain {
-        println!("{}", if all_fine { "All checks passed." } else { "At least one check found a problem." });
+        println!("{}", if all_fine { when_fine } else { when_not });
         let _ = io::stdout().flush();
     }
     if all_fine {

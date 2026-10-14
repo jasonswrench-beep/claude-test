@@ -344,6 +344,8 @@ struct LookTracker {
     /// How long the previous look took for the picture and for the sound.
     last_picture: Duration,
     last_sound: Duration,
+    /// Of that, how long writing sound into the video file took.
+    last_sound_video: Duration,
     /// How long saving to disk has taken since the previous look.
     saving_since: Duration,
 }
@@ -367,6 +369,7 @@ impl LookTracker {
                     gap_ms: gap.as_millis() as u64,
                     picture_ms: self.last_picture.as_millis() as u64,
                     sound_ms: self.last_sound.as_millis() as u64,
+                    sound_video_ms: self.last_sound_video.as_millis() as u64,
                     saving_ms: self.saving_since.as_millis() as u64,
                 });
                 self.slow.sort_by_key(|m| std::cmp::Reverse(m.gap_ms));
@@ -451,6 +454,7 @@ impl TakeMedia for ScreenTake {
         let sound_started = Instant::now();
         if let (Some(sound), Some(sink)) = (self.sound.as_mut(), self.sink.as_mut()) {
             sound.pump(media_ms, sink.as_mut())?;
+            self.looks.last_sound_video = sound.take_video_cost();
         }
         self.looks.last_sound = sound_started.elapsed();
         if media_ms >= self.next_sample_ms {
@@ -1335,7 +1339,7 @@ mod tests {
         assert!((s.average_gap_ms - 182.5).abs() < 0.1, "{}", s.average_gap_ms);
         assert_eq!(
             s.slow_moments,
-            vec![SlowMoment { at_ms: 710, gap_ms: 650, picture_ms: 3, sound_ms: 1, saving_ms: 640 }]
+            vec![SlowMoment { at_ms: 710, gap_ms: 650, picture_ms: 3, sound_ms: 1, sound_video_ms: 0, saving_ms: 640 }]
         );
     }
 

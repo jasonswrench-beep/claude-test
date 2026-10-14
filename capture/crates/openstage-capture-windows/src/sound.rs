@@ -21,7 +21,7 @@ use crate::report::{OutputMove, TrackReport};
 use crate::video::VideoSink;
 use crate::{check, Check};
 use openstage_capture::{describe_level, SessionError};
-use openstage_capture_project::{wav_info, MediaFile, MixInfo, WavWriter};
+use openstage_capture_project::{wav_info, MediaFile, MixInfo, WavThread, WavWriter};
 use std::cell::Cell;
 use std::path::Path;
 use std::rc::Rc;
@@ -274,8 +274,10 @@ impl OpenSound {
         let mut follow = self.follow;
         for (kind, source) in self.tracks {
             let path = take_dir.join(kind.file());
-            let wav = WavWriter::create(&path, SAMPLE_RATE, CHANNELS)
-                .map_err(|e| media_error(format!("Could not create the sound file {}: {e}", path.display())))?;
+            let wav = WavThread::start(
+                WavWriter::create(&path, SAMPLE_RATE, CHANNELS)
+                    .map_err(|e| media_error(format!("Could not create the sound file {}: {e}", path.display())))?,
+            );
             let db = if kind == Kind::Microphone { self.gains_db.0 } else { self.gains_db.1 };
             tracks.push(Track {
                 kind,
@@ -290,7 +292,12 @@ impl OpenSound {
                 follow: if kind == Kind::System { follow.take() } else { None },
             });
         }
-        Ok(SoundTake { tracks, mixed_frames: 0, last_disk_sync: std::time::Instant::now() })
+        Ok(SoundTake {
+            tracks,
+            mixed_frames: 0,
+            last_disk_sync: std::time::Instant::now(),
+            video_cost: std::time::Duration::ZERO,
+        })
     }
 }
 
@@ -300,7 +307,8 @@ struct Track {
     /// How much louder or quieter this sound is in the mix (1.0 leaves it as heard).
     gain: f32,
     aligner: AudioAligner,
-    wav: WavWriter,
+    /// The sound file, written by a thread of its own so that waiting for the disk never holds up the recording.
+    wav: WavThread,
     /// Sound laid on the recording clock but not yet mixed into the video's sound track.
     ready: Vec<i16>,
     /// The loudest moment since the level was last asked for.
@@ -442,6 +450,8 @@ pub(crate) struct SoundTake {
     last_disk_sync: std::time::Instant,
     /// How much mixed sound has gone into the video, in frames.
     mixed_frames: u64,
+    /// How long writing sound into the video file has taken since last asked, so a long wait can be traced to it.
+    video_cost: std::time::Duration,
 }
 
 impl SoundTake {
@@ -461,7 +471,7 @@ impl SoundTake {
             t.aligner.push(&got);
             let due = t.aligner.take_until(media_ms);
             t.wav
-                .append(&due)
+                .append(due.clone())
                 .map_err(|e| media_error(format!("Writing the {} file stopped with a problem: {e}", t.kind.label())))?;
             t.ready.extend(due);
         }
@@ -487,19 +497,27 @@ impl SoundTake {
             mixed = mix(&mixed, &part);
         }
         let pts = (self.mixed_frames * 10_000_000 / SAMPLE_RATE as u64) as i64;
-        sink.write_audio(&mixed, pts)
-            .map_err(|e| media_error(format!("Writing the sound into the video stopped with a problem: {e}")))?;
+        let started = std::time::Instant::now();
+        let written = sink.write_audio(&mixed, pts);
+        self.video_cost += started.elapsed();
+        written.map_err(|e| media_error(format!("Writing the sound into the video stopped with a problem: {e}")))?;
         self.mixed_frames += (n / channels) as u64;
         Ok(())
     }
 
+    /// How long writing sound into the video file took since this was last asked.
+    pub(crate) fn take_video_cost(&mut self) -> std::time::Duration {
+        std::mem::take(&mut self.video_cost)
+    }
+
     /// Push everything written so far to the disk, so a crash loses only what came after.
     pub(crate) fn sync(&mut self) -> Result<(), SessionError> {
-        // Every time: hand the sound to the operating system and record its length. Now and then: wait for
-        // the disk too. Waiting for the disk every second can stall everything else on a slow disk.
+        // Every time: have the sound handed to the operating system and its length recorded. Now and then: have
+        // the disk itself take it too. The files are written by threads of their own, so none of this holds up
+        // the recording, however long the disk takes; a crash loses what had not yet been written.
         let to_disk = self.last_disk_sync.elapsed() >= DISK_SYNC_EVERY;
         for t in &mut self.tracks {
-            let result = if to_disk { t.wav.sync_to_disk_in_background() } else { t.wav.sync() };
+            let result = if to_disk { t.wav.sync_to_disk() } else { t.wav.sync() };
             result.map_err(|e| media_error(format!("Saving the {} file failed: {e}", t.kind.label())))?;
         }
         if to_disk {
@@ -1558,5 +1576,40 @@ mod tests {
         let report = check_sound_files(dir.path(), &plan.unwrap(), 100_000);
         let w = report.warnings.iter().find(|w| w.0 == "sound-went-quiet").expect("a warning");
         assert!(w.1.contains("kept to the output you chose"), "{}", w.1);
+    }
+
+    #[test]
+    fn a_two_second_hold_up_in_the_middle_of_a_recording_leaves_no_hole_in_the_sound() {
+        // The recorder was held up for two seconds (as a real one was, waiting on the disk) between two looks, and
+        // the recording time it then handed to the sound was from before the hold-up. No sound may be lost.
+        let (clock, platform, plan) = choose(Some("default"), Some("default"));
+        let sound = Sound::new(Box::new(platform), plan.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let mut sink = FakeSink::default();
+        let mut take = sound.open().unwrap().begin(dir.path()).unwrap();
+        take.discard_backlog();
+        let mut media_ms = 0;
+        for _ in 0..50 {
+            clock.sleep_ms(20);
+            media_ms += 20;
+            take.pump(media_ms, &mut sink).unwrap();
+        }
+        clock.sleep_ms(2000); // held up
+        media_ms += 20;
+        take.pump(media_ms, &mut sink).unwrap(); // with a clock from before the hold-up
+        media_ms += 2000;
+        for _ in 0..50 {
+            clock.sleep_ms(20);
+            media_ms += 20;
+            take.pump(media_ms, &mut sink).unwrap();
+        }
+        let reports = take.finish(media_ms, &mut sink).unwrap();
+        assert_eq!(system_report(&reports).padded_ms, 0, "nothing was made up");
+        assert_eq!(system_report(&reports).trimmed_ms, 0, "nothing was cut");
+        for file in ["system.wav", "mic.wav"] {
+            let heard = loudness(&dir.path().join(file), 500);
+            assert!(heard.len() >= 6, "{file}: {} windows", heard.len());
+            assert!(heard.iter().all(|v| *v > 900.0), "{file} has a hole in it: {heard:?}");
+        }
     }
 }

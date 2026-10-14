@@ -12,7 +12,7 @@ mod checks;
 mod demo;
 mod plain;
 
-use checks::{emit_check, finish_checks, run_recorder_crash_test, run_video_crash_test};
+use checks::{emit_check, finish_checks, finish_checks_with, run_recorder_crash_test, run_video_crash_test};
 use clap::{Parser, Subcommand};
 use openstage_capture::{
     run_session_with_cues, CuePlayer, EventSink, Input, InputSource, MediaFactory, NoCues, ScriptedInput,
@@ -23,10 +23,11 @@ use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolEr
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
     compare_size_readback, describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_cue_test,
-    run_find_output, run_screen_test, run_setup_check, run_timing_test, run_video_test, summarize,
+    run_find_output, run_pick_region, run_screen_test, run_setup_check, run_timing_test, run_video_test, summarize,
     system_audio_platform, system_cue_player, system_platform, system_video_platform, AudioChoice, AudioTestOptions,
-    Check, CueTestOptions, DeviceKind, FindOutputOptions, Mix, Region, ScreenMedia, ScreenTestOptions, SetupOptions,
-    SoundPlan, TimingTestOptions, VideoTestOptions, MIC_FILE, SCREEN_FILE, SYSTEM_FILE,
+    Check, CueTestOptions, DeviceKind, FindOutputOptions, Mix, PickRegionOptions, Region, ScreenMedia,
+    ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, MIC_FILE, SCREEN_FILE,
+    SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -43,6 +44,8 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+// The command line is read once, so one big variant (Record has many options) costs nothing.
+#[allow(clippy::large_enum_variant)]
 enum Cmd {
     /// Say what this program can record on this computer.
     Probe,
@@ -96,6 +99,11 @@ enum Cmd {
         /// How loud those sounds are, from 0 (silent) to 100.
         #[arg(long, default_value_t = 70, value_parser = clap::value_parser!(u8).range(0..=100))]
         cue_volume: u8,
+        /// With `--region`: whether a thin frame is shown on the screen round the region from the start of
+        /// the countdown until the recording ends, so you can see what is being kept: `on` or `off`. The
+        /// frame is drawn just outside the region and is never in the video.
+        #[arg(long, default_value = "on")]
+        outline: String,
         /// Count the summary findings (skipped pictures, processor use, memory growth, sound drifting
         /// from the picture) as part of passing or failing. Meant for long test recordings.
         #[arg(long)]
@@ -135,6 +143,23 @@ enum Cmd {
         /// Where recordings will be kept; the free space of its drive is reported.
         #[arg(long, default_value = ".")]
         dir: PathBuf,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// Choose the part of a display to record: drag a rectangle with corner handles on the dimmed screen,
+    /// or type its four numbers in a small window (which works with the keyboard and a screen reader).
+    /// Prints the numbers `--region` takes. Windows only.
+    PickRegion {
+        /// Which display to choose from (1 is the main display).
+        #[arg(long, default_value_t = 1)]
+        display: u32,
+        /// Start from this rectangle (four numbers, as for `--region`) instead of the middle of the display.
+        #[arg(long)]
+        region: Option<String>,
+        /// Save the chosen numbers in this file, as `left,top,width,height` on one line.
+        #[arg(long)]
+        out: Option<PathBuf>,
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
         plain: bool,
@@ -390,6 +415,15 @@ fn say(event: Event) {
     StdoutSink.emit(event);
 }
 
+/// `on` or `off` (or yes/no, true/false) for an option, or a sentence saying what was wrong.
+fn on_or_off(option: &str, value: &str) -> Result<bool, String> {
+    match value.trim().to_lowercase().as_str() {
+        "on" | "yes" | "true" => Ok(true),
+        "off" | "no" | "false" => Ok(false),
+        other => Err(format!("{option} must be on or off, not \"{other}\".")),
+    }
+}
+
 fn hello() {
     say(Event::hello(env!("CARGO_PKG_VERSION")));
 }
@@ -486,6 +520,7 @@ fn main() -> ExitCode {
             system_gain_db,
             cues,
             cue_volume,
+            outline,
             strict,
             countdown_ms,
             segment_ms,
@@ -501,15 +536,10 @@ fn main() -> ExitCode {
             if !plain {
                 hello();
             }
-            let cues_on = match cues.trim().to_lowercase().as_str() {
-                "on" | "yes" | "true" => true,
-                "off" | "no" | "false" => false,
-                other => {
-                    sink.emit(Event::Error {
-                        code: "bad-option".into(),
-                        message: format!("--cues must be on or off, not \"{other}\"."),
-                        fatal: true,
-                    });
+            let (cues_on, outline_on) = match (on_or_off("--cues", &cues), on_or_off("--outline", &outline)) {
+                (Ok(cues_on), Ok(outline_on)) => (cues_on, outline_on),
+                (Err(message), _) | (_, Err(message)) => {
+                    sink.emit(Event::Error { code: "bad-option".into(), message, fatal: true });
                     return ExitCode::from(2);
                 }
             };
@@ -556,6 +586,9 @@ fn main() -> ExitCode {
                                     message.push(' ');
                                     message.push_str(&note);
                                 }
+                                if outline_on {
+                                    message.push_str(" A thin frame is shown round it on the screen from the start of the countdown until the recording ends. It is not in the video. Turn it off with --outline off.");
+                                }
                                 sink.emit(Event::Check { check: "region".into(), ok: true, message });
                                 chosen_region = Some(fitted);
                             }
@@ -568,7 +601,7 @@ fn main() -> ExitCode {
                     let mut media = ScreenMedia::for_this_computer(display, fps, bitrate_kbps)
                         .with_sound(platform, sound_plan.clone());
                     if let Some(r) = chosen_region {
-                        media = media.with_region(r);
+                        media = media.with_region(r).with_outline(outline_on);
                     }
                     report_handle = Some(media.report_handle());
                     Box::new(media)
@@ -840,6 +873,14 @@ fn main() -> ExitCode {
             let dir = if dir.as_os_str().is_empty() { PathBuf::from(".") } else { dir };
             let all_fine = run_setup_check(&SetupOptions { dir }, &mut |c| emit_check(plain, c));
             finish_checks(plain, all_fine)
+        }
+        Cmd::PickRegion { display, region, out, plain } => {
+            if !plain {
+                hello();
+            }
+            let opts = PickRegionOptions { display, start: region, out };
+            let all_fine = run_pick_region(&opts, &mut |c| emit_check(plain, c));
+            finish_checks_with(plain, all_fine, "A region was chosen.", "No region was chosen.")
         }
         Cmd::CueTest { volume, out, plain } => {
             if !plain {

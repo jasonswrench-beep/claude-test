@@ -617,3 +617,45 @@ fn a_folder_given_with_a_trailing_dot_is_named_without_it() {
     assert!(text.contains("the drive that holds /some/folder could not be told"), "{text}");
     assert!(!text.contains("/some/folder/."), "{text}");
 }
+
+#[test]
+fn the_outline_option_is_checked_in_words_and_either_choice_records_the_same() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, events) =
+        run_once(&["record", "--project", dir.path().join("p.capture").to_str().unwrap(), "--outline", "sometimes"]);
+    assert_eq!(status.code(), Some(2));
+    assert!(events.iter().any(|e| matches!(e, Event::Error { code, message, fatal: true }
+        if code == "bad-option" && message.contains("--outline must be on or off, not \"sometimes\""))));
+    for outline in ["on", "off"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (status, events) = run_once(&[
+            "record",
+            "--project",
+            dir.path().join("p.capture").to_str().unwrap(),
+            "--countdown-ms",
+            "0",
+            "--duration-ms",
+            "600",
+            "--outline",
+            outline,
+            "--ignore-stdin-eof",
+        ]);
+        assert!(status.success(), "outline {outline}");
+        let (ok, _, state, _, _) = result_of(&events);
+        assert!(ok && state == "complete", "outline {outline}");
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn choosing_a_region_says_it_needs_windows_and_exits_with_2() {
+    let out = Command::new(BIN).args(["pick-region", "--plain"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("PROBLEM:"), "{text}");
+    assert_eq!(text.lines().last(), Some("No region was chosen."));
+    // A start that cannot be read is explained the same way before anything is shown.
+    let out = Command::new(BIN).args(["pick-region", "--plain", "--region", "1,2,3"]).output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("has 3 numbers"), "{text}");
+}

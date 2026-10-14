@@ -19,12 +19,15 @@ echo.
 echo For example 100,200,1280,720 is a rectangle 1280 wide and 720 tall,
 echo starting 100 pixels from the left edge and 200 from the top.
 echo.
-echo NOTHING IS DRAWN ON THE SCREEN to show the rectangle. While it
-echo records, Windows draws its own thin frame around the WHOLE display to
-echo show that the screen is being recorded. That frame is not in the
-echo video, and it does not show your rectangle. Only the rectangle you
-echo give is kept. Choosing the rectangle by dragging on the screen is
-echo planned.
+echo To choose the rectangle by dragging it on the screen, run CHOOSE
+echo REGION.bat first. If you did, this script offers that choice.
+echo.
+echo While it records, a thin orange frame is shown just OUTSIDE the
+echo rectangle from the countdown until the end, so you can see what is
+echo being kept. It is not in the video. Windows also draws its own thin
+echo frame around the WHOLE display to show that the screen is being
+echo recorded; that one is Windows, not this program, and is not in the
+echo video either.
 echo.
 echo PRIVACY: this records part of your screen. It is saved only on this
 echo computer, in the folder region-test-output next to this file. Nothing
@@ -45,12 +48,15 @@ set "DISPLAY_NUMBER="
 set /p DISPLAY_NUMBER=Display number: 
 if "%DISPLAY_NUMBER%"=="" set DISPLAY_NUMBER=1
 echo.
+set "DEFAULT_AREA=0,0,640,360"
+set "WHERE=the top left corner of the display, which fits any display"
+if exist "%~dp0chosen-region.txt" set /p DEFAULT_AREA=<"%~dp0chosen-region.txt"
+if exist "%~dp0chosen-region.txt" set "WHERE=the region you chose with CHOOSE REGION.bat"
 echo WHICH RECTANGLE? Type four numbers separated by commas and press
-echo Enter, or just press Enter for 0,0,640,360, the top left corner of the
-echo display, which fits any display.
+echo Enter, or just press Enter for %DEFAULT_AREA%, %WHERE%.
 set "AREA="
 set /p AREA=Rectangle: 
-if "%AREA%"=="" set AREA=0,0,640,360
+if "%AREA%"=="" set AREA=%DEFAULT_AREA%
 echo.
 echo WHAT TO DO: put a window with something you will recognise (a
 echo document, a web page) inside that rectangle and keep something moving
@@ -93,6 +99,9 @@ echo ------------------------------------------------------------
 echo.
 echo Please tell me what the video showed: only the rectangle, in the
 echo right place, not stretched, with nothing missing or cut off.
+echo.
+echo And did you see a thin orange frame just outside the rectangle from
+echo the countdown until the end? Was it easy to see on your screen?
 goto done
 
 :no_rust

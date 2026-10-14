@@ -122,6 +122,17 @@ impl Platform for WindowsPlatform {
         let source = Capture::start_monitor(HMONITOR(display.handle as *mut c_void), with_cursor)?;
         Ok(Box::new(source))
     }
+
+    fn show_region_outline(&self, display: &DisplayInfo, region: &crate::Region) -> Option<crate::Outline> {
+        match crate::win_outline::FrameWindow::show(display, region) {
+            Ok(frame) => frame.map(|f| Box::new(f) as crate::Outline),
+            Err(e) => {
+                // Not seeing the frame does not stop the recording.
+                eprintln!("The frame around the region could not be shown (the recording is not affected): {e}");
+                None
+            }
+        }
+    }
 }
 
 /// What the picture-arrived callback needs, shared with the thread that owns the capture.

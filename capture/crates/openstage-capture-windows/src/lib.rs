@@ -15,9 +15,12 @@ mod bmp;
 mod crash;
 mod cue_player;
 mod echo;
+mod pick;
 mod queue;
 mod record;
 mod region;
+mod region_editor;
+mod region_paint;
 mod report;
 mod setup;
 mod sound;
@@ -30,6 +33,12 @@ mod win;
 mod win_audio;
 #[cfg(windows)]
 mod win_cues;
+#[cfg(windows)]
+mod win_layered;
+#[cfg(windows)]
+mod win_outline;
+#[cfg(windows)]
+mod win_region;
 #[cfg(windows)]
 mod win_setup;
 #[cfg(windows)]
@@ -50,9 +59,21 @@ pub use crash::{run_recorder_crash_report, MAX_LOSS_MS as RECORDER_CRASH_MAX_LOS
 pub use cue_player::{run_cue_test, run_cue_test_with, system_cue_player, CueTestOptions};
 pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, EchoFinding, EchoVerdict, Envelope};
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
+pub use pick::{region_numbers, run_pick_region, run_pick_region_with, PickRegionOptions};
 pub use queue::{FramePool, FrameQueue};
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
 pub use region::{crop, crop_into, CroppedSource, Region, MIN_SIDE as REGION_MIN_SIDE};
+pub use region_editor::{Handle as RegionHandle, PickOutcome, RegionEditor};
+pub use region_paint::{picker_overlay, recording_frame, Canvas};
+#[cfg(windows)]
+pub use win_region::pick_region;
+
+/// Let the author choose a rectangle of a display by dragging it, and by typing four numbers. Only works
+/// on Windows.
+#[cfg(not(windows))]
+pub fn pick_region(_display: &DisplayInfo, _number: u32, _initial: Option<Region>) -> Result<PickOutcome, String> {
+    Err("Choosing a region on the screen only works on Windows.".to_string())
+}
 pub use report::{summarize, OutputMove, PictureWork, RecordingReport, TrackReport};
 pub use setup::{run_setup_check, run_setup_check_with, system_facts, Access, SetupOptions, SystemFacts};
 pub use sound::{
@@ -204,6 +225,10 @@ pub trait FrameSource {
     }
 }
 
+/// A thin frame on the screen around the region being recorded. It stays for as long as this value is
+/// kept and goes when it is dropped. What is inside does not matter to the caller.
+pub type Outline = Box<dyn std::any::Any>;
+
 /// Everything the checks need from the operating system.
 pub trait Platform {
     fn windows_version(&self) -> Result<WindowsVersion, ScreenError>;
@@ -215,6 +240,12 @@ pub trait Platform {
         display: &DisplayInfo,
         with_cursor: bool,
     ) -> Result<Box<dyn FrameSource>, ScreenError>;
+    /// Show a thin frame around `region` of `display` for as long as the returned value is kept, so the
+    /// author can see what is being recorded. It is left out of the video. `None` when it cannot be shown
+    /// (or on a system that cannot).
+    fn show_region_outline(&self, _display: &DisplayInfo, _region: &Region) -> Option<Outline> {
+        None
+    }
 }
 
 /// The real thing on Windows; on any other system a stand-in that says so.

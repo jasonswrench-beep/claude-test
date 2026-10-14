@@ -16,7 +16,7 @@ use crate::region::{CroppedSource, Region};
 use crate::report::{LookStats, PictureWork, RecordingReport, SlowMoment};
 use crate::sound::{Sound, SoundPlan, SoundTake, MIXED_BITRATE_KBPS};
 use crate::video::{AudioSpec, Pacer};
-use crate::{CaptureWork, Frame, FrameSource, Platform, SinkSpec, VideoPlatform, VideoSink};
+use crate::{CaptureWork, Frame, FrameSource, Outline, Platform, SinkSpec, VideoPlatform, VideoSink};
 use openstage_capture::{MediaFactory, SessionConfig, SessionError, TakeMedia};
 use openstage_capture_project::{MediaFile, RegionInfo};
 use std::cell::RefCell;
@@ -44,6 +44,8 @@ pub struct ScreenMedia {
     bitrate_kbps: u32,
     /// Record only this part of the display, if set.
     region: Option<Region>,
+    /// Whether to show a thin frame around the region on the screen while it is recorded.
+    outline: bool,
     sound: Option<Sound>,
     /// What the most recent take did, filled in when it finishes.
     report: Rc<RefCell<Option<RecordingReport>>>,
@@ -68,6 +70,7 @@ impl ScreenMedia {
             fps: fps.max(1),
             bitrate_kbps,
             region: None,
+            outline: false,
             sound: None,
             report: Rc::new(RefCell::new(None)),
             prepared: RefCell::new(None),
@@ -84,6 +87,14 @@ impl ScreenMedia {
     /// display when the countdown starts, and an odd width or height is made one pixel smaller.
     pub fn with_region(mut self, region: Region) -> Self {
         self.region = Some(region);
+        self
+    }
+
+    /// Show a thin frame around the region on the screen from the start of the countdown until the take
+    /// ends, so the author can see what is being kept. It is left out of the video. Does nothing without
+    /// a region.
+    pub fn with_outline(mut self, on: bool) -> Self {
+        self.outline = on;
         self
     }
 
@@ -152,7 +163,7 @@ impl MediaFactory for ScreenMedia {
             None => (self.prepare()?, false),
         };
         let prepared_at = started.elapsed();
-        let Prepared { source, first, listening, .. } = prepared;
+        let Prepared { source, first, listening, outline } = prepared;
         let dropped_at_start = source.dropped();
         let received_at_start = source.received();
         let capture_work_at_start = source.work();
@@ -189,6 +200,7 @@ impl MediaFactory for ScreenMedia {
             started.elapsed().as_millis()
         );
         Ok(Box::new(ScreenTake {
+            _outline: outline,
             source: Some(source),
             sink: Some(sink),
             pacer: Pacer::new(self.fps),
@@ -220,6 +232,8 @@ struct Prepared {
     source: Box<dyn FrameSource>,
     first: Frame,
     listening: Option<crate::sound::OpenSound>,
+    /// The frame shown around the region, if any; it goes when this is dropped.
+    outline: Option<Outline>,
 }
 
 impl ScreenMedia {
@@ -245,6 +259,10 @@ impl ScreenMedia {
             source = Box::new(CroppedSource::new(source, region));
         }
         let capture_started = started.elapsed();
+        let outline = match (self.outline, region) {
+            (true, Some(r)) => self.screen.show_region_outline(display, &r),
+            _ => None,
+        };
         let first = source.next_frame(Duration::from_secs(3)).ok_or_else(|| {
             media_error(
                 "No picture arrived from the screen within 3 seconds. Windows only sends a picture when something changes: try again while moving a window.",
@@ -269,7 +287,7 @@ impl ScreenMedia {
             first_picture.as_millis(),
             started.elapsed().as_millis()
         );
-        Ok(Prepared { source, first, listening })
+        Ok(Prepared { source, first, listening, outline })
     }
 
     /// Make and throw away a small video file, so the encoder is awake when the real one is made. Any
@@ -308,6 +326,8 @@ impl ScreenMedia {
 
 /// One take being recorded.
 struct ScreenTake {
+    /// The frame shown around the region; it goes when the take ends.
+    _outline: Option<Outline>,
     source: Option<Box<dyn FrameSource>>,
     sink: Option<Box<dyn VideoSink>>,
     pacer: Pacer,
@@ -559,7 +579,7 @@ impl TakeMedia for ScreenTake {
 mod tests {
     use super::*;
     use crate::{DisplayInfo, EncoderInfo, ScreenError, VideoInspection, WindowsVersion};
-    use openstage_capture::{run_session, Input, ManualClock, ScriptedInput, SessionConfig, VecSink};
+    use openstage_capture::{run_session, EventSink, Input, ManualClock, ScriptedInput, SessionConfig, VecSink};
     use openstage_capture_project::{read_take, take_dir, TakeState};
     use openstage_capture_protocol::{Command, Event};
     use std::cell::RefCell;
@@ -587,6 +607,17 @@ mod tests {
         positional: bool,
         /// How many times a capture of the screen was started.
         captures: Rc<std::cell::Cell<u32>>,
+        /// The regions a frame was shown around, and how many such frames are on the screen right now.
+        outlines: Rc<RefCell<Vec<Region>>>,
+        outlines_showing: Rc<std::cell::Cell<i32>>,
+    }
+
+    /// A frame on the fake screen; it counts itself off when it goes.
+    struct FakeFrame(Rc<std::cell::Cell<i32>>);
+    impl Drop for FakeFrame {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() - 1);
+        }
     }
     impl Platform for FakeScreen {
         fn windows_version(&self) -> Result<WindowsVersion, ScreenError> {
@@ -606,6 +637,11 @@ mod tests {
                 system_name: "D1".into(),
                 handle: 1,
             }])
+        }
+        fn show_region_outline(&self, _: &DisplayInfo, region: &Region) -> Option<crate::Outline> {
+            self.outlines.borrow_mut().push(*region);
+            self.outlines_showing.set(self.outlines_showing.get() + 1);
+            Some(Box::new(FakeFrame(Rc::clone(&self.outlines_showing))))
         }
         fn start_display_capture(&self, _: &DisplayInfo, _: bool) -> Result<Box<dyn FrameSource>, ScreenError> {
             self.captures.set(self.captures.get() + 1);
@@ -722,6 +758,8 @@ mod tests {
             gives_picture: true,
             positional: false,
             captures: Rc::new(std::cell::Cell::new(0)),
+            outlines: Rc::new(RefCell::new(Vec::new())),
+            outlines_showing: Rc::new(std::cell::Cell::new(0)),
         }
     }
 
@@ -1491,5 +1529,65 @@ mod tests {
         assert_eq!(r.work.capture.readback, Duration::from_millis(2 * (u64::from(given.get()) - 1)));
         assert_eq!(r.work.sink.pictures, r.pictures_written, "every picture written to the video is counted");
         assert_eq!(r.work.loop_cpu, None, "the fake computer cannot say, so none is claimed");
+    }
+
+    #[test]
+    fn a_frame_is_shown_only_when_asked_for_and_only_with_a_region_and_is_gone_when_the_take_ends() {
+        for (frame_on, region, shown) in [(true, true, 1usize), (false, true, 0), (true, false, 0)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut cfg = config(&dir);
+            cfg.max_duration_ms = Some(1000);
+            let screen = wide_screen();
+            let (outlines, showing) = (Rc::clone(&screen.outlines), Rc::clone(&screen.outlines_showing));
+            let (media, _files) = factory(screen);
+            let mut media = media.with_outline(frame_on);
+            if region {
+                media = media.with_region(Region { x: 30, y: 20, width: 64, height: 64 });
+            }
+            run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new())
+                .unwrap();
+            assert_eq!(outlines.borrow().len(), shown, "frame {frame_on}, region {region}");
+            assert_eq!(showing.get(), 0, "no frame is left on the screen once the take has ended");
+            if shown == 1 {
+                assert_eq!(outlines.borrow()[0], Region { x: 30, y: 20, width: 64, height: 64 }, "round the region");
+            }
+        }
+    }
+
+    #[test]
+    fn the_frame_is_on_the_screen_during_the_countdown_and_all_through_the_recording() {
+        use openstage_capture_protocol::State;
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 3000;
+        cfg.max_duration_ms = Some(1000);
+        let screen = wide_screen();
+        let showing = Rc::clone(&screen.outlines_showing);
+        let (media, _files) = factory(screen);
+        let media = media.with_region(Region { x: 30, y: 20, width: 64, height: 64 }).with_outline(true);
+        // How many frames were on the screen each time the session reported its state.
+        struct Watch<'a> {
+            inner: &'a mut VecSink,
+            showing: Rc<std::cell::Cell<i32>>,
+            during: Vec<(State, i32)>,
+        }
+        impl EventSink for Watch<'_> {
+            fn emit(&mut self, event: Event) -> bool {
+                if let Event::State { state, .. } = &event {
+                    self.during.push((*state, self.showing.get()));
+                }
+                self.inner.emit(event)
+            }
+        }
+        let mut sink = VecSink::default();
+        let mut watch = Watch { inner: &mut sink, showing: Rc::clone(&showing), during: Vec::new() };
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut watch, &ManualClock::new()).unwrap();
+        let of = |wanted: State| -> Vec<i32> {
+            watch.during.iter().filter(|(s, _)| *s == wanted).map(|(_, n)| *n).collect()
+        };
+        assert!(of(State::Countdown).contains(&1), "seen during the countdown: {:?}", watch.during);
+        assert!(!of(State::Recording).is_empty() && of(State::Recording).iter().all(|n| *n == 1), "{:?}", watch.during);
+        assert!(of(State::Stopped).iter().all(|n| *n == 0), "gone once the take has ended: {:?}", watch.during);
+        assert_eq!(showing.get(), 0);
     }
 }

@@ -835,6 +835,9 @@ fn main() -> ExitCode {
             if !plain {
                 hello();
             }
+            // "folder\." and "folder" are the same place; say it the short way.
+            let dir: PathBuf = dir.components().collect();
+            let dir = if dir.as_os_str().is_empty() { PathBuf::from(".") } else { dir };
             let all_fine = run_setup_check(&SetupOptions { dir }, &mut |c| emit_check(plain, c));
             finish_checks(plain, all_fine)
         }

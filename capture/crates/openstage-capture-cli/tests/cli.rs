@@ -608,3 +608,12 @@ fn the_setup_check_says_it_needs_windows_and_exits_with_2() {
     assert!(text.contains("The free space on the drive that holds"), "{text}");
     assert_eq!(text.lines().last(), Some("At least one check found a problem."));
 }
+
+#[cfg(not(windows))]
+#[test]
+fn a_folder_given_with_a_trailing_dot_is_named_without_it() {
+    let out = Command::new(BIN).args(["setup-check", "--plain", "--dir", "/some/folder/."]).output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("the drive that holds /some/folder could not be told"), "{text}");
+    assert!(!text.contains("/some/folder/."), "{text}");
+}

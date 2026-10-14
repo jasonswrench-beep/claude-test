@@ -288,13 +288,17 @@ pub struct AudioAligner {
     looks: u64,
     looks_over_ahead: u64,
     looks_over_late: u64,
+    /// How many looks in a row have found more than `AHEAD_MS` of sound waiting beyond the clock.
+    ahead_streak: u32,
 }
 
 impl AudioAligner {
     /// Sound later than this is waited for, not replaced by silence (packets arrive in small bursts).
     const LATE_MS: u64 = 40;
-    /// More sound than this ahead of the clock is trimmed back (the sound card's clock runs fast).
+    /// More sound than this ahead of the clock is trimmed back (the sound card's clock runs fast), once it has
+    /// stayed that far ahead for `TRIM_AFTER_LOOKS` looks in a row.
     const AHEAD_MS: u64 = 80;
+    const TRIM_AFTER_LOOKS: u32 = 2;
 
     pub fn new(sample_rate: u32, channels: u16) -> Self {
         Self {
@@ -311,6 +315,7 @@ impl AudioAligner {
             looks: 0,
             looks_over_ahead: 0,
             looks_over_late: 0,
+            ahead_streak: 0,
         }
     }
 
@@ -343,10 +348,20 @@ impl AudioAligner {
             if ahead > self.frames(Self::LATE_MS) {
                 self.looks_over_ahead += 1;
             }
+            // A sound card running fast shows as surplus that is still there at the next look. Surplus seen
+            // once is more likely the recording clock being behind because the program was held up (by the
+            // disk, say) while sound went on arriving: the next look, with a fresh clock, takes it. Cutting
+            // it at once threw away two seconds of real sound in a real recording.
             if ahead > self.frames(Self::AHEAD_MS) {
+                self.ahead_streak += 1;
+            } else {
+                self.ahead_streak = 0;
+            }
+            if self.ahead_streak >= Self::TRIM_AFTER_LOOKS {
                 let drop_frames = ahead - self.frames(Self::LATE_MS);
                 self.pending.drain(..drop_frames as usize * channels);
                 self.trimmed_frames += drop_frames;
+                self.ahead_streak = 0;
             }
             self.delivered_frames += need;
         } else {
@@ -908,15 +923,37 @@ mod tests {
     }
 
     #[test]
-    fn a_sound_card_clock_that_runs_fast_is_trimmed_back_in_step() {
+    fn a_sound_card_clock_that_runs_fast_is_trimmed_back_once_the_surplus_stays() {
         let mut a = AudioAligner::new(R, 2);
         a.push(&stereo_frames(R as usize * 3, 9)); // three seconds arrive at once
         let out = a.take_until(1000);
         assert_eq!(out.len(), R as usize * 2, "exactly the one second that is due");
+        assert_eq!(a.trimmed_ms(), 0, "surplus seen once is not yet cut");
+        // Still far ahead at the next look: now the sound card really is running fast.
+        assert!(a.take_until(1000).is_empty());
         assert!(a.trimmed_ms() > 1800, "the surplus was dropped, got {} ms", a.trimmed_ms());
         // Only a short cushion is kept.
         let next = a.take_until(1100);
         assert_eq!(next.len(), 4800 * 2);
+    }
+
+    #[test]
+    fn a_hold_up_that_leaves_the_clock_behind_loses_no_sound() {
+        // The program was held up for two seconds in the middle of a look (the disk, say). Sound went on arriving, but
+        // the recording time it was given was from before the hold-up. A real recording lost two seconds of the
+        // computer's sound by cutting that sound as if the sound card were running fast.
+        let mut a = AudioAligner::new(R, 2);
+        for ms in (10..=1000).step_by(10) {
+            a.push(&stereo_frames(480, 3));
+            a.take_until(ms);
+        }
+        a.push(&stereo_frames(R as usize * 2, 7));
+        let held = a.take_until(1010); // the stale clock
+        let after = a.take_until(3010); // a fresh one
+        assert_eq!(a.trimmed_ms(), 0, "nothing was cut");
+        assert_eq!(a.padded_ms(), 0, "nothing was made up");
+        let sevens = held.iter().chain(after.iter()).filter(|s| **s == 7).count();
+        assert_eq!(sevens, R as usize * 2 * 2, "all two seconds of the new sound are there, both channels");
     }
 
     #[test]

@@ -88,6 +88,8 @@ pub struct SlowMoment {
     /// How long the look just before took for the picture, and for the sound.
     pub picture_ms: u64,
     pub sound_ms: u64,
+    /// Of the sound's time, how long writing sound into the video file took.
+    pub sound_video_ms: u64,
     /// How long saving to disk took in the gap.
     pub saving_ms: u64,
 }
@@ -163,11 +165,12 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
             .take(3)
             .map(|m| {
                 format!(
-                    "{} ms at {} (the picture took {} ms and the sound {} ms just before; saving to disk took {} ms; the rest was waiting or other work)",
+                    "{} ms at {} (the picture took {} ms and the sound {} ms just before, of which {} ms was writing sound into the video file; saving to disk took {} ms; the rest was waiting or other work)",
                     m.gap_ms,
                     clock(m.at_ms),
                     m.picture_ms,
                     m.sound_ms,
+                    m.sound_video_ms,
                     m.saving_ms
                 )
             })
@@ -436,8 +439,14 @@ mod tests {
         let mut r = good();
         r.looks.longest_gap_ms = 650;
         r.looks.gaps_over_100_ms = 31;
-        r.looks.slow_moments =
-            vec![SlowMoment { at_ms: 192_000, gap_ms: 650, picture_ms: 3, sound_ms: 1, saving_ms: 640 }];
+        r.looks.slow_moments = vec![SlowMoment {
+            at_ms: 192_000,
+            gap_ms: 650,
+            picture_ms: 3,
+            sound_ms: 1,
+            sound_video_ms: 0,
+            saving_ms: 640,
+        }];
         let c = summarize(&r);
         let stalls = find(&c, "run-stalls");
         assert!(!stalls.ok);

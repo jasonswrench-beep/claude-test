@@ -129,6 +129,9 @@ pub fn describe_level(peak: f32) -> &'static str {
     }
 }
 
+/// Saving that takes this long is worth a warning.
+const SLOW_SAVE: std::time::Duration = std::time::Duration::from_millis(100);
+
 struct TakeRun {
     id: u32,
     media: Option<Box<dyn TakeMedia>>,
@@ -377,12 +380,23 @@ impl<'a> Runner<'a> {
 
     fn flush_now(&mut self) -> Result<(), SessionError> {
         let now = self.clock.now_ms();
+        let started = std::time::Instant::now();
         if let Some(run) = self.run.as_mut() {
             if let Some(media) = run.media.as_mut() {
                 media.flush()?;
             }
             run.events.flush_sync()?;
             run.last_flush_wall = now;
+        }
+        // Waiting for the disk holds up everything else in this loop. Say so when it takes long, so a slow
+        // disk can be told apart from other causes of a stutter.
+        let took = started.elapsed();
+        if took >= SLOW_SAVE {
+            let message = format!(
+                "Saving to the disk took {} ms just now. A slow disk can make the video stutter.",
+                took.as_millis()
+            );
+            self.warn("slow-save", &message);
         }
         Ok(())
     }
@@ -1341,6 +1355,58 @@ mod tests {
                 None,
             );
             assert_eq!(cues_of(&log), ["cue:start", "cue:stop"]);
+        }
+    }
+
+    #[test]
+    fn saving_that_takes_long_is_said_so_the_disk_can_be_blamed_or_cleared() {
+        use crate::media::{MediaFactory, TakeMedia};
+        struct Slow(std::time::Duration);
+        impl TakeMedia for Slow {
+            fn pump(&mut self, _: u64) -> Result<(), SessionError> {
+                Ok(())
+            }
+            fn flush(&mut self) -> Result<(), SessionError> {
+                std::thread::sleep(self.0);
+                Ok(())
+            }
+            fn levels(&self, _: u64) -> Vec<(&'static str, f32)> {
+                Vec::new()
+            }
+            fn finish(self: Box<Self>, _: u64) -> Result<u32, SessionError> {
+                Ok(1)
+            }
+        }
+        struct Factory(std::time::Duration);
+        impl MediaFactory for Factory {
+            fn source_id(&self) -> String {
+                "slow".into()
+            }
+            fn begin(&self, _: &std::path::Path, _: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError> {
+                Ok(Box::new(Slow(self.0)))
+            }
+        }
+        for (wait_ms, warned) in [(150u64, true), (0, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut cfg = config(&dir);
+            cfg.max_duration_ms = Some(1200);
+            let mut sink = VecSink::default();
+            run_session(
+                &cfg,
+                &Factory(std::time::Duration::from_millis(wait_ms)),
+                &mut ScriptedInput::none(),
+                &mut sink,
+                &ManualClock::new(),
+            )
+            .unwrap();
+            let slow = sink.events.iter().find_map(|e| match e {
+                Event::Warning { code, message } if code == "slow-save" => Some(message.clone()),
+                _ => None,
+            });
+            assert_eq!(slow.is_some(), warned, "{wait_ms} ms: {slow:?}");
+            if let Some(message) = slow {
+                assert!(message.contains("Saving to the disk took 1") && message.contains("slow disk"), "{message}");
+            }
         }
     }
 }

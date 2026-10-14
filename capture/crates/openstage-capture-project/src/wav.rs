@@ -107,22 +107,116 @@ impl WavWriter {
         self.file.get_ref().sync_data()
     }
 
-    /// Like [`WavWriter::sync`], and then ask the disk to take the sound in the background, without making
-    /// the caller wait. Waiting for the disk took up to a fifth of a second on a real computer, which is
-    /// long enough to make a video stutter.
-    pub fn sync_to_disk_in_background(&mut self) -> io::Result<()> {
-        self.sync()?;
-        let handle = self.file.get_ref().try_clone()?;
-        std::thread::spawn(move || {
-            let _ = handle.sync_data();
-        });
-        Ok(())
-    }
-
     /// Complete the file, on the disk. Returns the number of frames in it.
     pub fn finish(mut self) -> io::Result<u64> {
         self.sync_to_disk()?;
         Ok(self.frames)
+    }
+}
+
+/// What the writer thread is asked to do, in order.
+enum Job {
+    Append(Vec<i16>),
+    /// Record the length in the header (quick).
+    Sync,
+    /// The same, and wait until the disk itself has the sound.
+    SyncToDisk,
+}
+
+/// A sound file written by a thread of its own.
+///
+/// Waiting on the disk must never hold up the recording. On a real computer a single write to one of
+/// these files waited two seconds, behind the disk being made to take the same file's earlier sound,
+/// and the recorder's main loop stood still with it: it lost two seconds of the computer's sound and
+/// the picture stuttered. So the recorder never touches the file: it hands the sound to this thread
+/// and carries on, and every wait for the disk happens here, in order, while the sound queues up
+/// (a few hundred kilobytes a second, however long the wait).
+///
+/// A write that fails is remembered, and the next call says so.
+pub struct WavThread {
+    tx: Option<std::sync::mpsc::Sender<Job>>,
+    thread: Option<std::thread::JoinHandle<io::Result<u64>>>,
+    failure: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl WavThread {
+    /// Take over a sound file that is being written.
+    pub fn start(mut writer: WavWriter) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        let failure = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let for_thread = std::sync::Arc::clone(&failure);
+        let thread = std::thread::spawn(move || {
+            for job in rx {
+                if for_thread.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+                    continue; // after a failure, do nothing more with the file; the first failure is the one reported
+                }
+                let result = match job {
+                    Job::Append(samples) => writer.append(&samples),
+                    Job::Sync => writer.sync(),
+                    Job::SyncToDisk => writer.sync_to_disk(),
+                };
+                if let Err(e) = result {
+                    *for_thread.lock().unwrap_or_else(|p| p.into_inner()) = Some(e.to_string());
+                }
+            }
+            // Whether the program finished or went away, complete the file with what it was given.
+            writer.finish()
+        });
+        Self { tx: Some(tx), thread: Some(thread), failure }
+    }
+
+    fn check(&self) -> io::Result<()> {
+        match self.failure.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            Some(why) => Err(io::Error::other(why.clone())),
+            None => Ok(()),
+        }
+    }
+
+    fn send(&self, job: Job) -> io::Result<()> {
+        self.check()?;
+        self.tx
+            .as_ref()
+            .ok_or_else(|| io::Error::other("The sound file was already closed."))?
+            .send(job)
+            .map_err(|_| io::Error::other("The thread that writes the sound file has stopped."))
+    }
+
+    /// Queue sound to be written. Returns at once.
+    pub fn append(&self, samples: Vec<i16>) -> io::Result<()> {
+        self.send(Job::Append(samples))
+    }
+
+    /// Queue a record of the length so far in the file's header. Returns at once.
+    pub fn sync(&self) -> io::Result<()> {
+        self.send(Job::Sync)
+    }
+
+    /// Queue the same and a wait for the disk itself. Returns at once; the wait is the thread's.
+    pub fn sync_to_disk(&self) -> io::Result<()> {
+        self.send(Job::SyncToDisk)
+    }
+
+    /// Write everything that is queued, complete the file on the disk, and say how many frames it holds.
+    pub fn finish(mut self) -> io::Result<u64> {
+        drop(self.tx.take());
+        let result = match self.thread.take() {
+            Some(thread) => {
+                thread.join().map_err(|_| io::Error::other("The thread that writes the sound file failed."))?
+            }
+            None => Ok(0),
+        };
+        self.check()?;
+        result
+    }
+}
+
+impl Drop for WavThread {
+    fn drop(&mut self) {
+        // If the recording was abandoned, still let the thread complete the file.
+        drop(self.tx.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -366,18 +460,77 @@ mod tests {
     }
 
     #[test]
-    fn the_disk_can_be_asked_to_take_the_sound_in_the_background_without_losing_any() {
+    fn a_sound_file_written_by_its_thread_ends_up_exactly_as_if_written_directly() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mic.wav");
-        let mut w = WavWriter::create(&path, 48_000, 2).unwrap();
-        w.append(&tone(4800, 2, 9)).unwrap();
-        w.sync_to_disk_in_background().unwrap();
-        // The header already tells the truth when the call returns.
-        assert_eq!(wav_info(&path).unwrap().frames, 4800);
-        w.append(&tone(4800, 2, 9)).unwrap();
-        assert_eq!(w.finish().unwrap(), 9600);
+        let thread = WavThread::start(WavWriter::create(&path, 48_000, 2).unwrap());
+        for round in 0..20 {
+            thread.append(tone(480, 2, 9)).unwrap();
+            if round % 5 == 0 {
+                thread.sync().unwrap();
+            }
+            if round == 10 {
+                thread.sync_to_disk().unwrap();
+            }
+        }
+        assert_eq!(thread.finish().unwrap(), 9600);
         let info = wav_info(&path).unwrap();
         assert_eq!((info.frames, info.peak > 0.0), (9600, true));
+        // The same samples, in the same order, as writing them directly.
+        let direct = dir.path().join("direct.wav");
+        let mut w = WavWriter::create(&direct, 48_000, 2).unwrap();
+        for _ in 0..20 {
+            w.append(&tone(480, 2, 9)).unwrap();
+        }
+        w.finish().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&direct).unwrap());
+    }
+
+    #[test]
+    fn handing_over_sound_never_waits_for_the_file() {
+        // Take the file's lock away from the thread by making it busy with a very long queue of syncs to disk:
+        // the caller must still get its calls back at once.
+        let dir = tempfile::tempdir().unwrap();
+        let thread = WavThread::start(WavWriter::create(&dir.path().join("mic.wav"), 48_000, 2).unwrap());
+        let started = std::time::Instant::now();
+        for _ in 0..200 {
+            thread.append(tone(4800, 2, 9)).unwrap();
+            thread.sync_to_disk().unwrap();
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "queueing took {:?}", started.elapsed());
+        assert_eq!(thread.finish().unwrap(), 960_000);
+    }
+
+    #[test]
+    fn a_write_that_fails_is_reported_by_the_next_call_and_by_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut writer = WavWriter::create(&dir.path().join("mic.wav"), 48_000, 2).unwrap();
+        // A file already at its size limit refuses more sound.
+        writer.frames = MAX_DATA_BYTES / 4;
+        let thread = WavThread::start(writer);
+        thread.append(tone(100, 2, 9)).unwrap(); // accepted for queueing; the thread finds it cannot write it
+        let mut told = false;
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if let Err(e) = thread.append(tone(10, 2, 9)) {
+                assert!(e.to_string().contains("cannot hold more than about 6 hours"), "{e}");
+                told = true;
+                break;
+            }
+        }
+        assert!(told, "the failure is reported to the caller");
+        assert!(thread.finish().is_err());
+    }
+
+    #[test]
+    fn a_file_whose_thread_is_dropped_without_finishing_is_still_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mic.wav");
+        {
+            let thread = WavThread::start(WavWriter::create(&path, 48_000, 2).unwrap());
+            thread.append(tone(4800, 2, 9)).unwrap();
+        }
+        assert_eq!(wav_info(&path).unwrap().frames, 4800);
     }
 
     #[test]

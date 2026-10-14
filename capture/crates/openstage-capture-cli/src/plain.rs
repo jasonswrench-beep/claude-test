@@ -20,7 +20,13 @@ pub struct PlainSink {
     last_level_text: HashMap<String, String>,
     /// When, in recording time, each sound's level was last said.
     last_level_said_ms: HashMap<String, u64>,
+    /// Advice already said as a note (`balance`, `echo`), so its warning is not said a second time.
+    advice_said: Vec<String>,
 }
+
+/// Findings that are advice for the author, not faults of the recorder. They never change the verdict of
+/// a recording, so they are not called a PROBLEM; a line saying PROBLEM above a verdict of PASS only confuses.
+const ADVICE_CHECKS: [&str; 2] = ["balance", "echo"];
 
 /// The least recording time between two spoken levels of the same sound, in milliseconds.
 const LEVEL_EVERY_MS: u64 = 5000;
@@ -76,7 +82,18 @@ impl PlainSink {
                 };
                 Some(format!("Sound level, {name}: {text}."))
             }
-            Event::Warning { message, .. } => Some(format!("Warning: {message}")),
+            Event::Warning { code, message } => {
+                // The same advice was said a moment ago as a note; hearing it twice only wastes the listener's time.
+                let topic = match code.as_str() {
+                    "balance-off" => "balance",
+                    "echo-likely" => "echo",
+                    _ => "",
+                };
+                if !topic.is_empty() && self.advice_said.iter().any(|said| said == topic) {
+                    return None;
+                }
+                Some(format!("Warning: {message}"))
+            }
             Event::Error { message, .. } => Some(format!("PROBLEM: {message}")),
             Event::Marker { label, elapsed_ms } => Some(if label.is_empty() {
                 format!("Marker added at {}.", secs(*elapsed_ms))
@@ -86,7 +103,13 @@ impl PlainSink {
             Event::TakeSetAside { take, next_take } => Some(format!(
                 "Start again: take {take} was set aside (it is kept, not erased). Beginning take {next_take}."
             )),
-            Event::Check { ok, message, .. } => Some(format!("{}: {message}", if *ok { "OK" } else { "PROBLEM" })),
+            Event::Check { check, ok, message } => {
+                if !*ok && ADVICE_CHECKS.contains(&check.as_str()) {
+                    self.advice_said.push(check.clone());
+                    return Some(format!("Note: {message}"));
+                }
+                Some(format!("{}: {message}", if *ok { "OK" } else { "PROBLEM" }))
+            }
             Event::Result { ok, project, take, state, duration_ms, segments } => Some(if *take == 0 {
                 format!("Finished. No take was recorded. Project folder: {project}")
             } else {
@@ -179,6 +202,26 @@ mod tests {
             p.describe(&done).as_deref(),
             Some("Finished. Take 1 is complete: 7.4 seconds, 1 media file(s). Project folder: lesson.capture")
         );
+    }
+
+    #[test]
+    fn advice_about_balance_and_echo_is_a_note_said_once_and_a_real_fault_is_a_problem() {
+        let mut p = PlainSink::new();
+        let check = |name: &str, ok: bool| Event::Check { check: name.into(), ok, message: format!("{name} words") };
+        let warning = |code: &str| Event::Warning { code: code.into(), message: format!("{code} words") };
+        // Advice that found something: a note, then its warning is not said again.
+        assert_eq!(p.describe(&check("balance", false)).as_deref(), Some("Note: balance words"));
+        assert_eq!(p.describe(&warning("balance-off")), None);
+        assert_eq!(p.describe(&check("echo", false)).as_deref(), Some("Note: echo words"));
+        assert_eq!(p.describe(&warning("echo-likely")), None);
+        // Advice that found nothing is still OK, and other warnings are still said.
+        assert_eq!(p.describe(&check("balance", true)).as_deref(), Some("OK: balance words"));
+        assert_eq!(p.describe(&warning("slow-disk")).as_deref(), Some("Warning: slow-disk words"));
+        // A check that is a fault of the recorder is a problem.
+        assert_eq!(p.describe(&check("video-readback", false)).as_deref(), Some("PROBLEM: video-readback words"));
+        // With no note said first, a warning is not dropped.
+        let mut fresh = PlainSink::new();
+        assert_eq!(fresh.describe(&warning("echo-likely")).as_deref(), Some("Warning: echo-likely words"));
     }
 
     fn level_at(source: &str, text: &str, elapsed_ms: u64) -> Event {

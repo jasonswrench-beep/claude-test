@@ -199,7 +199,7 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
             r.pictures_replaced,
             if r.pictures_received > 0 {
                 format!(
-                    " (it delivered {} in all, about {:.0} a second, and at one look as many as {} were waiting; the line holds 8)",
+                    " (it delivered {} in all, about {:.0} a second, and at one look it took as many as {} at once; the waiting line holds 8, and more can arrive while it is emptied)",
                     r.pictures_received,
                     r.pictures_received as f64 * 1000.0 / r.recorded_ms.max(1) as f64,
                     r.most_waiting
@@ -447,8 +447,9 @@ mod tests {
         let summary = &find(&checks, "run-summary").message;
         assert!(summary.starts_with("Recorded 1:00:00. 108000 pictures were written. 12 steps"), "{summary}");
         assert!(
-            summary
-                .contains("it delivered 216000 in all, about 60 a second, and at one look as many as 3 were waiting"),
+            summary.contains(
+                "it delivered 216000 in all, about 60 a second, and at one look it took as many as 3 at once"
+            ),
             "{summary}"
         );
         let cpu = &find(&checks, "run-cpu").message;

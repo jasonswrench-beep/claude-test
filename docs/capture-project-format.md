@@ -200,7 +200,7 @@ One JSON object per line, only ever appended to. `t` is milliseconds of recordin
 | `element` | `name`, `role` of the clicked item, from Windows' accessibility information |
 | `marker` | `label` |
 
-Interaction capture is **off unless the author turns it on** (this is a requirement for the real Windows capture, Phase 2; in version 0.1 the only thing written is `marker`). A line that cannot be read, such as one cut short by a crash, is skipped when reading and trimmed by `recover`. The log is the raw material for step lists, alt text, and interactive steps; it is not published.
+Interaction capture is **off unless the author turns it on** (this is a requirement for the real Windows capture, Phase 2; in version 0.1 the only thing written is `marker`). A line that cannot be read, such as one cut short by a crash, is skipped when reading and trimmed by `recover`. The recorder writes the log from a thread of its own and forces it to the disk about every `flushMs`, so that a drive that is slow to confirm a save (the owner's drive took up to 0.8 seconds, several times a minute) cannot hold up the picture or the sound. The price is that on such a drive a crash can lose more of the log than `flushMs`; the video and sound files are not affected, because they are written elsewhere. The log is the raw material for step lists, alt text, and interactive steps; it is not published.
 
 ## 7. Versions
 
@@ -209,7 +209,7 @@ Interaction capture is **off unless the author turns it on** (this is a requirem
 ## 8. Rules this format keeps
 
 - Nothing the author recorded is erased by the software. Start again sets a take aside.
-- A crash costs at most `flushMs` of recording (1 second for segment takes, 2 for screen recordings, sound files included).
+- A crash costs at most `flushMs` of recording (1 second for segment takes, 2 for screen recordings, sound files included); the interaction log can lose more on a drive that is very slow, see section 6).
 - A newer, unknown schema is refused with a plain message, never half-read.
 - Raw footage and the interaction log stay out of published courses.
 - Narration is text. Nothing in this format stores narration as audio only.

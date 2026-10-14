@@ -4,10 +4,13 @@
 //! This file only builds on Windows. It has been type-checked for Windows but, until the owner
 //! runs `TEST SCREEN CAPTURE.bat`, it has never been run. Treat every line of it as unproven.
 
-use crate::{number_displays, DisplayInfo, Frame, FrameQueue, FrameSource, Platform, ScreenError, WindowsVersion};
+use crate::{
+    number_displays, CaptureWork, DisplayInfo, Frame, FrameQueue, FrameSource, Platform, ScreenError, WindowsVersion,
+};
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::core::{factory, Interface, BOOL};
 use windows::Foundation::TypedEventHandler;
@@ -123,11 +126,22 @@ impl Platform for WindowsPlatform {
 
 /// What the picture-arrived callback needs, shared with the thread that owns the capture.
 struct Shared {
+    /// Where the time of reading pictures back went.
+    work: WorkCounters,
     device: ID3D11Device,
     /// The device context may only be used by one thread at a time.
     gpu: Mutex<Gpu>,
     queue: FrameQueue,
     first_ticks: Mutex<Option<i64>>,
+}
+
+/// Totals kept by the thread that Windows delivers pictures on, read by the recording thread.
+#[derive(Default)]
+struct WorkCounters {
+    pictures: AtomicU64,
+    memory_ns: AtomicU64,
+    readback_ns: AtomicU64,
+    rows_ns: AtomicU64,
 }
 
 struct Gpu {
@@ -174,6 +188,7 @@ impl Capture {
         session.SetIsCursorCaptureEnabled(with_cursor).map_err(|e| failed("Could not set the pointer option", e))?;
 
         let shared = Arc::new(Shared {
+            work: WorkCounters::default(),
             device,
             gpu: Mutex::new(Gpu { context, staging: None }),
             queue: FrameQueue::new(QUEUE_DEPTH),
@@ -212,6 +227,21 @@ impl FrameSource for Capture {
 
     fn received(&self) -> u64 {
         self.shared.queue.pushed()
+    }
+
+    fn recycle(&mut self, frame: Frame) {
+        self.shared.queue.recycle(frame);
+    }
+
+    fn work(&self) -> CaptureWork {
+        let w = &self.shared.work;
+        CaptureWork {
+            pictures: w.pictures.load(Ordering::Relaxed),
+            reused: self.shared.queue.reused(),
+            memory: Duration::from_nanos(w.memory_ns.load(Ordering::Relaxed)),
+            readback: Duration::from_nanos(w.readback_ns.load(Ordering::Relaxed)),
+            rows: Duration::from_nanos(w.rows_ns.load(Ordering::Relaxed)),
+        }
     }
 }
 
@@ -286,11 +316,20 @@ fn handle_frame(shared: &Shared, frame: &Direct3D11CaptureFrame) -> windows::cor
     }
     let Some((staging, _, _)) = gpu.staging.clone() else { return Ok(()) };
 
-    let mut bgra = vec![0u8; width as usize * height as usize * 4];
+    // Memory an earlier picture used is used again (all of it is overwritten below), because asking
+    // Windows for several megabytes of new memory for every picture costs processor time.
+    let memory_started = Instant::now();
+    let mut bgra = shared.queue.take_buffer(width as usize * height as usize * 4);
+    let memory = memory_started.elapsed();
+    let readback_started = Instant::now();
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     unsafe {
         gpu.context.CopyResource(&staging, &texture);
-        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         gpu.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+    }
+    let readback = readback_started.elapsed();
+    let rows_started = Instant::now();
+    unsafe {
         let row_bytes = width as usize * 4;
         for y in 0..height as usize {
             let src = (mapped.pData as *const u8).add(y * mapped.RowPitch as usize);
@@ -298,7 +337,13 @@ fn handle_frame(shared: &Shared, frame: &Direct3D11CaptureFrame) -> windows::cor
         }
         gpu.context.Unmap(&staging, 0);
     }
+    let rows = rows_started.elapsed();
     drop(gpu);
+    let w = &shared.work;
+    w.pictures.fetch_add(1, Ordering::Relaxed);
+    w.memory_ns.fetch_add(memory.as_nanos() as u64, Ordering::Relaxed);
+    w.readback_ns.fetch_add(readback.as_nanos() as u64, Ordering::Relaxed);
+    w.rows_ns.fetch_add(rows.as_nanos() as u64, Ordering::Relaxed);
 
     shared.queue.push(Frame {
         width,

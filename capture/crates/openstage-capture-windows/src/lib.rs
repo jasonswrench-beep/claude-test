@@ -50,10 +50,10 @@ pub use crash::{run_recorder_crash_report, MAX_LOSS_MS as RECORDER_CRASH_MAX_LOS
 pub use cue_player::{run_cue_test, run_cue_test_with, system_cue_player, CueTestOptions};
 pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, EchoFinding, EchoVerdict, Envelope};
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
-pub use queue::FrameQueue;
+pub use queue::{FramePool, FrameQueue};
 pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
-pub use region::{crop, CroppedSource, Region, MIN_SIDE as REGION_MIN_SIDE};
-pub use report::{summarize, OutputMove, RecordingReport, TrackReport};
+pub use region::{crop, crop_into, CroppedSource, Region, MIN_SIDE as REGION_MIN_SIDE};
+pub use report::{summarize, OutputMove, PictureWork, RecordingReport, TrackReport};
 pub use setup::{run_setup_check, run_setup_check_with, system_facts, Access, SetupOptions, SystemFacts};
 pub use sound::{
     check_sound_files, output_may_have_changed, plan_sound, Sound, SoundFileReport, SoundPlan, MAX_GAIN_DB, MIC_FILE,
@@ -63,7 +63,7 @@ pub use stats::{FrameStats, FrameSummary};
 pub use timing::{now_100ns, run_timing_test, run_timing_test_with, Spread, TimingTestOptions, MAX_OFFSET_MS};
 pub use video::{
     compare_audio_readback, compare_readback, compare_size_readback, plain_name, run_crash_report, run_video_test,
-    run_video_test_with, system_video_platform, AudioInspection, AudioSpec, EncoderInfo, Pacer, SinkSpec,
+    run_video_test_with, system_video_platform, AudioInspection, AudioSpec, EncoderInfo, Pacer, SinkSpec, SinkWork,
     VideoInspection, VideoPlatform, VideoSink, VideoTestOptions, CPU_TARGET_PERCENT,
 };
 
@@ -155,6 +155,35 @@ pub struct Frame {
     pub bgra: Vec<u8>,
 }
 
+/// Where the time went when pictures were taken from the screen into memory, summed over the pictures
+/// (wall-clock time, so time spent waiting for the graphics card counts too).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CaptureWork {
+    /// Pictures read back from the graphics card into memory.
+    pub pictures: u64,
+    /// Of those, how many were put into memory that an earlier picture had used, instead of new memory.
+    pub reused: u64,
+    /// Getting memory for the pictures.
+    pub memory: Duration,
+    /// The graphics card's copy and the wait for it.
+    pub readback: Duration,
+    /// Copying the rows into the picture's memory.
+    pub rows: Duration,
+}
+
+impl CaptureWork {
+    /// What was done since `earlier` (a reading taken before).
+    pub fn since(&self, earlier: &CaptureWork) -> CaptureWork {
+        CaptureWork {
+            pictures: self.pictures.saturating_sub(earlier.pictures),
+            reused: self.reused.saturating_sub(earlier.reused),
+            memory: self.memory.saturating_sub(earlier.memory),
+            readback: self.readback.saturating_sub(earlier.readback),
+            rows: self.rows.saturating_sub(earlier.rows),
+        }
+    }
+}
+
 /// Something pictures come out of.
 pub trait FrameSource {
     /// The next picture, or `None` if none arrived within `timeout`.
@@ -164,6 +193,14 @@ pub trait FrameSource {
     /// How many pictures arrived in all, if the source counts them.
     fn received(&self) -> u64 {
         0
+    }
+    /// Give back a picture that is no longer needed, so its memory can hold a later one. A picture is
+    /// about 8 megabytes at 1080p; asking Windows for that much new memory dozens of times a second
+    /// costs processor time that reusing it does not. Sources that have nothing to reuse ignore this.
+    fn recycle(&mut self, _frame: Frame) {}
+    /// Where the time of taking pictures went so far, if the source measures it.
+    fn work(&self) -> CaptureWork {
+        CaptureWork::default()
     }
 }
 

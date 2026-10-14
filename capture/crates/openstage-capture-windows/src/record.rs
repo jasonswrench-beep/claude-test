@@ -13,10 +13,10 @@
 
 use crate::audio::{AudioPlatform, CHANNELS, SAMPLE_RATE};
 use crate::region::{CroppedSource, Region};
-use crate::report::{LookStats, RecordingReport, SlowMoment};
+use crate::report::{LookStats, PictureWork, RecordingReport, SlowMoment};
 use crate::sound::{Sound, SoundPlan, SoundTake, MIXED_BITRATE_KBPS};
 use crate::video::{AudioSpec, Pacer};
-use crate::{Frame, FrameSource, Platform, SinkSpec, VideoPlatform, VideoSink};
+use crate::{CaptureWork, Frame, FrameSource, Platform, SinkSpec, VideoPlatform, VideoSink};
 use openstage_capture::{MediaFactory, SessionConfig, SessionError, TakeMedia};
 use openstage_capture_project::{MediaFile, RegionInfo};
 use std::cell::RefCell;
@@ -155,6 +155,7 @@ impl MediaFactory for ScreenMedia {
         let Prepared { source, first, listening, .. } = prepared;
         let dropped_at_start = source.dropped();
         let received_at_start = source.received();
+        let capture_work_at_start = source.work();
 
         let spec = SinkSpec {
             path: take_dir.join(SCREEN_FILE),
@@ -204,6 +205,9 @@ impl MediaFactory for ScreenMedia {
             pictures_replaced: 0,
             dropped_at_start,
             received_at_start,
+            capture_work_at_start,
+            thread_cpu_start: self.video.thread_cpu_time(),
+            capture_work: CaptureWork::default(),
             pictures_received: 0,
             most_waiting: 0,
             looks: LookTracker::default(),
@@ -324,6 +328,12 @@ struct ScreenTake {
     dropped_at_start: u64,
     /// Pictures delivered before recording began, for the same reason.
     received_at_start: u64,
+    /// What the source had done before recording began (the countdown reads pictures back too), and,
+    /// once recording ends, what it did while recording.
+    capture_work_at_start: CaptureWork,
+    capture_work: CaptureWork,
+    /// The recording thread's processor time when recording began.
+    thread_cpu_start: Option<Duration>,
     pictures_received: u64,
     /// The most pictures that were waiting at one look.
     most_waiting: usize,
@@ -442,7 +452,9 @@ impl TakeMedia for ScreenTake {
         if let Some(source) = self.source.as_mut() {
             let mut waiting = 0;
             while let Some(newer) = source.next_frame(Duration::ZERO) {
-                self.latest = newer;
+                // The picture being replaced is used up: give its memory back for a later one.
+                let older = std::mem::replace(&mut self.latest, newer);
+                source.recycle(older);
                 waiting += 1;
             }
             self.most_waiting = self.most_waiting.max(waiting);
@@ -500,6 +512,8 @@ impl TakeMedia for ScreenTake {
         self.pictures_replaced = self.source.as_ref().map_or(0, |s| s.dropped()).saturating_sub(self.dropped_at_start);
         self.pictures_received =
             self.source.as_ref().map_or(0, |s| s.received()).saturating_sub(self.received_at_start);
+        self.capture_work =
+            self.source.as_ref().map(|s| s.work().since(&self.capture_work_at_start)).unwrap_or_default();
         self.source = None;
         if self.written == 0 {
             // A recording stopped at once still gets one picture, so the file is a valid video.
@@ -530,6 +544,11 @@ impl TakeMedia for ScreenTake {
             memory_peak_mb: self.memory_peak_mb,
             tracks,
             looks: std::mem::take(&mut self.looks).stats(),
+            work: PictureWork {
+                capture: self.capture_work,
+                sink: sink.work(),
+                loop_cpu: self.thread_cpu_start.zip(self.video.thread_cpu_time()).map(|(a, b)| b.saturating_sub(a)),
+            },
         });
         sink.finish().map_err(|e| media_error(format!("The video file could not be completed: {e}")))?;
         Ok(files)
@@ -628,6 +647,9 @@ mod tests {
 
     struct FakeSink(Rc<RefCell<File>>);
     impl VideoSink for FakeSink {
+        fn work(&self) -> crate::SinkWork {
+            crate::SinkWork { pictures: self.0.borrow().beats.len() as u64, ..Default::default() }
+        }
         fn write(&mut self, frame: &Frame, pts: i64, dur: i64) -> Result<(), ScreenError> {
             let mut file = self.0.borrow_mut();
             file.beats.push((pts, dur));
@@ -1385,5 +1407,89 @@ mod tests {
         let r = report.borrow().clone().unwrap();
         assert!(r.looks.looks > 100, "the program looked at the screen over and over: {}", r.looks.looks);
         assert_eq!(r.pictures_replaced, 0, "nothing was thrown away while recording");
+    }
+
+    #[test]
+    fn pictures_that_are_used_up_are_given_back_for_reuse_and_the_picture_work_is_reported() {
+        use std::cell::Cell;
+        /// A screen that has one fresh picture for every other time it is asked, like Windows delivering
+        /// pictures as the screen changes. It counts the pictures given out and the ones handed back.
+        struct Stream {
+            asks: u32,
+            given: Rc<Cell<u32>>,
+            recycled: Rc<Cell<u32>>,
+        }
+        impl FrameSource for Stream {
+            fn next_frame(&mut self, _: Duration) -> Option<Frame> {
+                self.asks += 1;
+                (self.asks % 2 == 1).then(|| {
+                    self.given.set(self.given.get() + 1);
+                    Frame {
+                        width: 8,
+                        height: 4,
+                        t_ms: 0,
+                        captured_100ns: None,
+                        arrived_100ns: None,
+                        bgra: vec![9; 128],
+                    }
+                })
+            }
+            fn dropped(&self) -> u64 {
+                0
+            }
+            fn recycle(&mut self, _: Frame) {
+                self.recycled.set(self.recycled.get() + 1);
+            }
+            fn work(&self) -> CaptureWork {
+                let n = self.given.get() as u64;
+                CaptureWork { pictures: n, readback: Duration::from_millis(2 * n), ..CaptureWork::default() }
+            }
+        }
+        struct StreamScreen(Rc<Cell<u32>>, Rc<Cell<u32>>);
+        impl Platform for StreamScreen {
+            fn windows_version(&self) -> Result<WindowsVersion, ScreenError> {
+                Ok(WindowsVersion { major: 10, minor: 0, build: 26200 })
+            }
+            fn capture_supported(&self) -> bool {
+                true
+            }
+            fn list_displays(&self) -> Result<Vec<DisplayInfo>, ScreenError> {
+                good_screen().list_displays()
+            }
+            fn start_display_capture(&self, _: &DisplayInfo, _: bool) -> Result<Box<dyn FrameSource>, ScreenError> {
+                Ok(Box::new(Stream { asks: 0, given: Rc::clone(&self.0), recycled: Rc::clone(&self.1) }))
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(2000);
+        let (given, recycled) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let files = Files::default();
+        let video = FakeVideo { files: Rc::clone(&files.0), memory: Cell::new(100.0) };
+        let media = ScreenMedia::new(
+            Box::new(StreamScreen(Rc::clone(&given), Rc::clone(&recycled))),
+            Box::new(video),
+            1,
+            30,
+            8000,
+        );
+        let report = media.report_handle();
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new()).unwrap();
+
+        // The first picture came before recording began and was replaced by the second, and so on: every
+        // picture but the last one given out went back.
+        assert!(given.get() > 10, "pictures kept arriving: {}", given.get());
+        assert_eq!(recycled.get(), given.get() - 1, "each picture that was replaced was handed back");
+
+        let r = report.borrow().clone().unwrap();
+        assert_eq!(
+            r.work.capture.pictures,
+            u64::from(given.get() - 1),
+            "only the pictures taken while recording count, not the one the countdown read"
+        );
+        assert_eq!(r.work.capture.readback, Duration::from_millis(2 * (u64::from(given.get()) - 1)));
+        assert_eq!(r.work.sink.pictures, r.pictures_written, "every picture written to the video is counted");
+        assert_eq!(r.work.loop_cpu, None, "the fake computer cannot say, so none is claimed");
     }
 }

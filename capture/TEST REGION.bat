@@ -19,6 +19,13 @@ echo.
 echo For example 100,200,1280,720 is a rectangle 1280 wide and 720 tall,
 echo starting 100 pixels from the left edge and 200 from the top.
 echo.
+echo NOTHING IS DRAWN ON THE SCREEN to show the rectangle. While it
+echo records, Windows draws its own thin frame around the WHOLE display to
+echo show that the screen is being recorded. That frame is not in the
+echo video, and it does not show your rectangle. Only the rectangle you
+echo give is kept. Choosing the rectangle by dragging on the screen is
+echo planned.
+echo.
 echo PRIVACY: this records part of your screen. It is saved only on this
 echo computer, in the folder region-test-output next to this file. Nothing
 echo is sent anywhere. No sound is recorded in this test.

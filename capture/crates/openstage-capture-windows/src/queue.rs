@@ -7,8 +7,64 @@
 
 use crate::Frame;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
+
+/// Memory for pictures, kept for reuse.
+///
+/// A 1080p picture is about 8 megabytes. Allocating that fresh for every picture and handing it back to
+/// Windows afterwards makes the system find, clear and map two thousand pages each time, dozens of times a
+/// second, which is processor time spent on nothing. A few buffers kept here are used over and over.
+pub struct FramePool {
+    free: Mutex<Vec<Vec<u8>>>,
+    reused: AtomicU64,
+}
+
+impl FramePool {
+    /// The most buffers kept; a picture handed back beyond that is let go.
+    pub const KEEP: usize = 6;
+
+    pub fn new() -> Self {
+        Self { free: Mutex::new(Vec::new()), reused: AtomicU64::new(0) }
+    }
+
+    /// A buffer of exactly `len` bytes: a kept one if its size is right, else a new zeroed one.
+    /// A kept buffer still holds an earlier picture; whoever takes it must overwrite all of it.
+    pub fn take(&self, len: usize) -> Vec<u8> {
+        let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
+        // A change of size (the display was changed) makes the kept buffers useless: let them go.
+        if free.iter().any(|b| b.len() != len) {
+            free.retain(|b| b.len() == len);
+        }
+        match free.pop() {
+            Some(buffer) => {
+                self.reused.fetch_add(1, Ordering::Relaxed);
+                buffer
+            }
+            None => vec![0u8; len],
+        }
+    }
+
+    /// Keep a buffer for later, unless enough are kept already.
+    pub fn give(&self, buffer: Vec<u8>) {
+        let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
+        if free.len() < Self::KEEP {
+            free.push(buffer);
+        }
+    }
+
+    /// How many times a kept buffer was used instead of new memory.
+    pub fn reused(&self) -> u64 {
+        self.reused.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for FramePool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 struct State {
     frames: VecDeque<Frame>,
@@ -24,6 +80,7 @@ pub struct FrameQueue {
     capacity: usize,
     state: Mutex<State>,
     arrived: Condvar,
+    pool: FramePool,
 }
 
 impl FrameQueue {
@@ -32,14 +89,32 @@ impl FrameQueue {
             capacity: capacity.max(1),
             state: Mutex::new(State { frames: VecDeque::new(), replaced: 0, pushed: 0, most_waiting: 0 }),
             arrived: Condvar::new(),
+            pool: FramePool::new(),
         }
+    }
+
+    /// Memory for a picture of `len` bytes, reused when possible (see [`FramePool`]).
+    pub fn take_buffer(&self, len: usize) -> Vec<u8> {
+        self.pool.take(len)
+    }
+
+    /// A picture nobody needs any more: keep its memory for the next one.
+    pub fn recycle(&self, frame: Frame) {
+        self.pool.give(frame.bgra);
+    }
+
+    /// How many pictures were put into memory that an earlier picture had used.
+    pub fn reused(&self) -> u64 {
+        self.pool.reused()
     }
 
     /// Add a picture. If the line is full, the oldest picture is dropped to make room.
     pub fn push(&self, frame: Frame) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.frames.len() >= self.capacity {
-            state.frames.pop_front();
+            if let Some(oldest) = state.frames.pop_front() {
+                self.pool.give(oldest.bgra);
+            }
             state.replaced += 1;
         }
         state.frames.push_back(frame);
@@ -128,6 +203,55 @@ mod tests {
         assert_eq!(q.pushed(), 9);
         assert_eq!(q.most_waiting(), 4, "never more than the line holds");
         assert_eq!(q.replaced(), 3);
+    }
+
+    #[test]
+    fn memory_handed_back_is_used_again_instead_of_asking_for_new() {
+        let q = FrameQueue::new(4);
+        let first = q.take_buffer(1000);
+        let address = first.as_ptr();
+        assert_eq!(q.reused(), 0, "the first buffer is new");
+        q.recycle(Frame { bgra: first, ..pic(1) });
+        let second = q.take_buffer(1000);
+        assert_eq!(second.as_ptr(), address, "the same memory came back");
+        assert_eq!(q.reused(), 1);
+    }
+
+    #[test]
+    fn a_picture_thrown_away_for_a_newer_one_gives_its_memory_to_the_next() {
+        let q = FrameQueue::new(2);
+        for t in 1..=3 {
+            q.push(Frame { bgra: q.take_buffer(64), ..pic(t) });
+        }
+        assert_eq!(q.replaced(), 1);
+        let _ = q.take_buffer(64);
+        assert_eq!(q.reused(), 1, "the dropped picture's memory was kept, not freed");
+    }
+
+    #[test]
+    fn memory_of_the_wrong_size_is_not_reused_and_is_let_go() {
+        let pool = FramePool::new();
+        pool.give(vec![7u8; 100]);
+        let other = pool.take(200);
+        assert_eq!((other.len(), pool.reused()), (200, 0), "a smaller buffer cannot hold a bigger picture");
+        assert!(other.iter().all(|&b| b == 0), "new memory is cleared");
+        // The old, wrong-sized buffer is gone, not kept for ever.
+        assert_eq!(pool.take(100).len(), 100);
+        assert_eq!(pool.reused(), 0);
+    }
+
+    #[test]
+    fn only_a_few_buffers_are_kept() {
+        let pool = FramePool::new();
+        for _ in 0..FramePool::KEEP + 10 {
+            pool.give(vec![0u8; 16]);
+        }
+        for _ in 0..FramePool::KEEP {
+            let _ = pool.take(16);
+        }
+        assert_eq!(pool.reused(), FramePool::KEEP as u64);
+        let _ = pool.take(16);
+        assert_eq!(pool.reused(), FramePool::KEEP as u64, "the rest were let go");
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! H.264 video needs an even width and height, so an odd size is made one pixel smaller, and the
 //! author is told. A region may also not be tiny: Windows' video encoders refuse very small pictures.
 
-use crate::{Frame, FrameSource};
+use crate::{CaptureWork, Frame, FrameSource};
 use std::time::Duration;
 
 /// The smallest width or height of a region, in pixels. A choice made to keep Windows' video
@@ -102,16 +102,29 @@ impl Region {
 /// Cut a region out of a picture. If the picture is smaller than the region needs (the display changed
 /// size during a recording), the part that is missing is black, so the video keeps its size.
 pub fn crop(frame: &Frame, region: &Region) -> Frame {
+    crop_into(frame, region, Vec::new())
+}
+
+/// The same, writing into `memory` when it is the right size (any picture it held is overwritten), so a
+/// recording does not need new memory for every picture.
+pub fn crop_into(frame: &Frame, region: &Region, mut memory: Vec<u8>) -> Frame {
     let (w, h) = (region.width as usize, region.height as usize);
-    let mut bgra = vec![0u8; w * h * 4];
     let (fw, fh) = (frame.width as usize, frame.height as usize);
     let (x, y) = (region.x as usize, region.y as usize);
+    let wanted = w * h * 4;
+    let fits = x + w <= fw && y + h <= fh;
+    if memory.len() != wanted {
+        memory = vec![0u8; wanted];
+    } else if !fits {
+        // Part of the region is outside the picture: what is not copied below must be black, not an old picture.
+        memory.fill(0);
+    }
     if x < fw && y < fh {
         let columns = w.min(fw - x);
         for row in 0..h.min(fh - y) {
             let from = ((y + row) * fw + x) * 4;
             let to = row * w * 4;
-            bgra[to..to + columns * 4].copy_from_slice(&frame.bgra[from..from + columns * 4]);
+            memory[to..to + columns * 4].copy_from_slice(&frame.bgra[from..from + columns * 4]);
         }
     }
     Frame {
@@ -120,7 +133,7 @@ pub fn crop(frame: &Frame, region: &Region) -> Frame {
         t_ms: frame.t_ms,
         captured_100ns: frame.captured_100ns,
         arrived_100ns: frame.arrived_100ns,
-        bgra,
+        bgra: memory,
     }
 }
 
@@ -128,23 +141,40 @@ pub fn crop(frame: &Frame, region: &Region) -> Frame {
 pub struct CroppedSource {
     inner: Box<dyn FrameSource>,
     region: Region,
+    /// Memory of cropped pictures that are no longer needed, for the next ones.
+    spare: Vec<Vec<u8>>,
 }
 
 impl CroppedSource {
+    /// How many spare pictures' memory is kept.
+    const KEEP: usize = 4;
+
     pub fn new(inner: Box<dyn FrameSource>, region: Region) -> Self {
-        Self { inner, region }
+        Self { inner, region, spare: Vec::new() }
     }
 }
 
 impl FrameSource for CroppedSource {
     fn next_frame(&mut self, timeout: Duration) -> Option<Frame> {
-        self.inner.next_frame(timeout).map(|f| crop(&f, &self.region))
+        let full = self.inner.next_frame(timeout)?;
+        let cropped = crop_into(&full, &self.region, self.spare.pop().unwrap_or_default());
+        // The full picture is big and has been used up: give it back so the next one can use its memory.
+        self.inner.recycle(full);
+        Some(cropped)
     }
     fn dropped(&self) -> u64 {
         self.inner.dropped()
     }
     fn received(&self) -> u64 {
         self.inner.received()
+    }
+    fn recycle(&mut self, frame: Frame) {
+        if self.spare.len() < Self::KEEP {
+            self.spare.push(frame.bgra);
+        }
+    }
+    fn work(&self) -> CaptureWork {
+        self.inner.work()
     }
 }
 
@@ -285,5 +315,52 @@ mod tests {
         assert_eq!(source.next_frame(Duration::ZERO).map(|f| (f.width, f.height)), Some((64, 64)));
         assert!(source.next_frame(Duration::ZERO).is_none());
         assert_eq!((source.dropped(), source.received()), (7, 9));
+    }
+
+    #[test]
+    fn memory_that_held_an_old_picture_is_fully_overwritten_or_blacked_out() {
+        let region = Region { x: 30, y: 20, width: 64, height: 64 };
+        // A normal picture overwrites every byte of the old memory.
+        let reused = crop_into(&picture(200, 100), &region, vec![0xEE; 64 * 64 * 4]);
+        assert_eq!(reused.bgra, crop(&picture(200, 100), &region).bgra, "no byte of the old picture is left");
+        // A picture too small for the region leaves black where it has nothing, not the old picture.
+        let small = Region { x: 50, y: 40, width: 64, height: 64 };
+        let reused = crop_into(&picture(100, 80), &small, vec![0xEE; 64 * 64 * 4]);
+        assert_eq!(reused.bgra, crop(&picture(100, 80), &small).bgra);
+        // Memory of the wrong size is not trusted.
+        let reused = crop_into(&picture(200, 100), &region, vec![0xEE; 10]);
+        assert_eq!(reused.bgra.len(), 64 * 64 * 4);
+    }
+
+    #[test]
+    fn a_cropped_source_gives_big_pictures_back_and_reuses_the_small_ones() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Fake(Rc<RefCell<Vec<usize>>>);
+        impl FrameSource for Fake {
+            fn next_frame(&mut self, _: Duration) -> Option<Frame> {
+                Some(picture(200, 100))
+            }
+            fn dropped(&self) -> u64 {
+                0
+            }
+            fn recycle(&mut self, frame: Frame) {
+                self.0.borrow_mut().push(frame.bgra.len());
+            }
+            fn work(&self) -> CaptureWork {
+                CaptureWork { pictures: 42, ..CaptureWork::default() }
+            }
+        }
+        let given_back = Rc::new(RefCell::new(Vec::new()));
+        let mut source =
+            CroppedSource::new(Box::new(Fake(Rc::clone(&given_back))), Region { x: 0, y: 0, width: 64, height: 64 });
+        let first = source.next_frame(Duration::ZERO).unwrap();
+        assert_eq!(*given_back.borrow(), vec![200 * 100 * 4], "the full picture went back to where it came from");
+        let address = first.bgra.as_ptr();
+        source.recycle(first);
+        assert_eq!(*given_back.borrow(), vec![200 * 100 * 4], "the small cropped picture is not sent there");
+        let second = source.next_frame(Duration::ZERO).unwrap();
+        assert_eq!(second.bgra.as_ptr(), address, "its memory was used for the next cropped picture");
+        assert_eq!(source.work().pictures, 42, "the work counters come from the real source");
     }
 }

@@ -217,11 +217,26 @@ def check_edit_package():
         record("PASS", "edit model has no runtime dependencies")
 
 
+def batch_path_problems(text):
+    """Lines that pass "%~dp0" (the script's folder, which ends in a backslash) as a quoted argument. A backslash
+    before the closing quote escapes it, so the program receives the path with a stray quote and glued to the
+    next argument. `cd /d "%~dp0"` is fine; for a program, write "%~dp0." instead. Returns (line number, line) pairs."""
+    problems = []
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if '"%~dp0"' in line and not line.lower().startswith("cd "):
+            problems.append((number, line))
+    return problems
+
+
 def check_batch_files():
     bad = []
     for path in sorted(ROOT.glob("*.bat")):
-        for number, line in batch_block_problems(path.read_text(encoding="ascii", errors="replace")):
+        text = path.read_text(encoding="ascii", errors="replace")
+        for number, line in batch_block_problems(text):
             bad.append(f"{path.name} line {number}")
+        for number, line in batch_path_problems(text):
+            bad.append(f"{path.name} line {number} (a quoted folder ending in a backslash)")
     if bad:
         record("FAIL", "batch files (no brackets in echo lines inside blocks)", ", ".join(bad))
     else:

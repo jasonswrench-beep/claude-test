@@ -26,7 +26,7 @@ cargo build --release -p openstage-capture-cli > setup-check-log.txt 2>&1
 if errorlevel 1 goto build_failed
 
 echo.
-"%~dp0target\release\openstage-capture.exe" setup-check --plain --dir "%~dp0" > setup-check-log.txt 2>&1
+"%~dp0target\release\openstage-capture.exe" setup-check --plain --dir "%~dp0." > setup-check-log.txt 2>&1
 set RESULT=%errorlevel%
 type setup-check-log.txt
 echo.

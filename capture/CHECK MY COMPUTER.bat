@@ -18,11 +18,12 @@ echo It only LOOKS. It records nothing, asks for nothing, and sends nothing
 echo anywhere.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > setup-check-log.txt 2>&1
+if exist "setup-check-log.txt" del "setup-check-log.txt"
+call "%~dp0cargo-run.bat" "setup-check-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

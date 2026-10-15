@@ -23,11 +23,12 @@ echo PRIVACY: nothing is saved and nothing is sent anywhere. It only
 echo measures timing, not what is on the screen or what is said.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > timing-test-log.txt 2>&1
+if exist "timing-test-log.txt" del "timing-test-log.txt"
+call "%~dp0cargo-run.bat" "timing-test-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

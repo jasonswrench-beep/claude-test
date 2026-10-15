@@ -26,11 +26,12 @@ echo recording is not running: during the countdown, while paused, and after
 echo the stop.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > cue-test-log.txt 2>&1
+if exist "cue-test-log.txt" del "cue-test-log.txt"
+call "%~dp0cargo-run.bat" "cue-test-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

@@ -68,6 +68,18 @@ The first Windows-only piece is in `crates/openstage-capture-windows`. It finds 
 19. Double-click **`TEST INTERACTIONS.bat`**. It records about half a minute of your screen while keeping the private interaction log, tells you what to do (move the mouse, click a few things, type a few words in Notepad, try a password box, click while paused), then prints in words everything it noted and asks whether to delete it. It is the first time this part has run on Windows. Do not type anything private: the keys go into the log and onto the screen. The log stays on your computer.
 20. Double-click **`CHECK MY COMPUTER.bat`**. It looks at your computer and says, in plain words, whether it is ready to record: the Windows version, screen capture, the video and sound parts MP4 needs, your microphone and its permission, and free disk space. It records nothing.
 
+### A computer where Rust is installed but is not on the PATH
+
+Some computers (a work computer where you are not an administrator, for example) have Rust installed but deliberately not on the PATH, so a plain window says "cargo is not found". Every script in this folder now copes with that, without installing anything and without administrator rights:
+
+* `rust-setup.bat` is called first by every script. If `cargo` is already found, it does nothing. If not, it looks for the helper `C:\Dev\tools\rust-env.ps1` (set the variable `OPENSTAGE_RUST_ENV` to the full path of a helper somewhere else), runs it in PowerShell, and copies the settings it makes (the PATH, INCLUDE and LIB, and a few more) into the script's own window. That lasts only until the script ends. If there is no helper it tries `.cargo\bin` in your user folder. If that fails too, it prints what PowerShell said, so you can send it to me.
+* `cargo-run.bat` runs cargo for every build and test and writes everything cargo says to the script's log file. It tries **without downloading anything** first. Rust keeps the libraries it has already fetched in `.cargo\registry` in your user folder, and a computer that has all of them never downloads. If some are missing, it says so and **asks before downloading them**, once, from crates.io. Type D and press Enter to allow it; anything else stops, with nothing downloaded.
+* `tools/check_rules.py` now fails if any script calls cargo on its own or forgets `rust-setup.bat`, so a new script cannot quietly skip this.
+
+This was written without that computer and has never been run on it. If the first script says it could not find Rust, or asks to download, send me what the window says.
+
+**Where to extract it:** somewhere that is not synced by OneDrive, such as a folder under `C:\Dev`. The build makes thousands of files (several gigabytes), and OneDrive syncing them slows the build and can lock files in the middle of it.
+
 **Tip when updating:** extract each new ZIP into a **new, empty folder** rather than over an old one. Extracting over an old folder can skip some files and leave a mix of old and new code, which shows up as a build error that says something was "not found" or a "variant" is missing. (The old folder's build files are not needed; the first build in the new folder just takes a few minutes.)
 
 If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, `screen-test-log.txt`, `video-test-log.txt`, `video-crash-log.txt`, `record-test-log.txt`, `find-output-log.txt`, `audio-test-log.txt`, `timing-test-log.txt`, `recorder-crash-log.txt`, `choose-region-log.txt`, `window-test-log.txt`, `webcam-test-log.txt`, `export-test-log.txt`, `export-log.txt`, `hands-free-log.txt`, `interactions-test-log.txt`, `interactions-test-list.txt`, or `long-test-log.txt`, saved in this folder).

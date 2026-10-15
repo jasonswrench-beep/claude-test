@@ -243,6 +243,49 @@ def check_batch_files():
         record("PASS", "batch files (no brackets in echo lines inside blocks)")
 
 
+HELPER_SCRIPTS = {"rust-setup.bat", "cargo-run.bat"}
+
+
+def batch_rust_problems(name, raw):
+    """Problems with how a script finds and runs cargo. Some computers have Rust installed but not on the PATH
+    (rust-setup.bat deals with that), and the libraries may need to be downloaded (cargo-run.bat asks first), so no
+    script may call cargo for a build or a test on its own."""
+    problems = []
+    if b"\n" in raw.replace(b"\r\n", b""):
+        problems.append("lines must end with CR LF")
+    if any(byte > 127 for byte in raw):
+        problems.append("only plain ASCII is allowed")
+    if name in HELPER_SCRIPTS:
+        return problems
+    text = raw.decode("ascii", errors="replace")
+    lines = [line.strip() for line in text.splitlines()]
+    uses_cargo = [i for i, line in enumerate(lines) if line.startswith("cargo ") or "cargo-run.bat" in line]
+    for i in uses_cargo:
+        line = lines[i]
+        if line.startswith("cargo ") and not line.startswith("cargo --version"):
+            problems.append(f"line {i + 1} runs cargo directly: use call \"%~dp0cargo-run.bat\"")
+    if uses_cargo:
+        setup = [i for i, line in enumerate(lines) if line.startswith("call") and "rust-setup.bat" in line]
+        if not setup or setup[0] > uses_cargo[0]:
+            problems.append("must call rust-setup.bat before the first use of cargo")
+    return problems
+
+
+def check_batch_rust():
+    bad = []
+    for helper in sorted(HELPER_SCRIPTS):
+        if not (ROOT / helper).is_file():
+            bad.append(f"{helper} is missing")
+    for path in sorted(ROOT.glob("*.bat")):
+        for problem in batch_rust_problems(path.name, path.read_bytes()):
+            bad.append(f"{path.name}: {problem}")
+    name = "batch files (find Rust through rust-setup.bat, run cargo through cargo-run.bat)"
+    if bad:
+        record("FAIL", name, "; ".join(bad))
+    else:
+        record("PASS", name)
+
+
 def write_third_party(packages):
     members = {p["name"] for p in packages if p.get("source") is None}
     rows = sorted((p["name"], p["version"], p.get("license") or "unknown") for p in packages if p["name"] not in members)
@@ -268,6 +311,7 @@ def main():
     check_ffmpeg_flags()
     check_style()
     check_batch_files()
+    check_batch_rust()
     check_edit_package()
     if "--write-third-party" in sys.argv and packages:
         write_third_party(packages)

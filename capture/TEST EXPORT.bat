@@ -24,11 +24,12 @@ echo saved only on this computer, in the folder export-test-output next
 echo to this file. Nothing is sent anywhere.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > export-test-log.txt 2>&1
+if exist "export-test-log.txt" del "export-test-log.txt"
+call "%~dp0cargo-run.bat" "export-test-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

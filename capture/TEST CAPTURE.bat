@@ -16,7 +16,7 @@ echo anything while it works. A full log is saved in this folder as
 echo test-log.txt.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Found Rust:
@@ -26,7 +26,7 @@ echo.
 echo Running the tests. Please wait...
 ver > test-log.txt
 cargo --version >> test-log.txt
-cargo test --workspace >> test-log.txt 2>&1
+call "%~dp0cargo-run.bat" test-log.txt test --workspace
 set TESTS_RESULT=%errorlevel%
 
 echo.

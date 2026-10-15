@@ -25,11 +25,12 @@ echo Nothing is sent anywhere. Your camera's light comes on while it
 echo records. A camera is never used unless you ask for it.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > webcam-test-log.txt 2>&1
+if exist "webcam-test-log.txt" del "webcam-test-log.txt"
+call "%~dp0cargo-run.bat" "webcam-test-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

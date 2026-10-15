@@ -288,17 +288,39 @@ pub struct AudioAligner {
     looks: u64,
     looks_over_ahead: u64,
     looks_over_late: u64,
-    /// How many looks in a row have found more than `AHEAD_MS` of sound waiting beyond the clock.
-    ahead_streak: u32,
+    /// The current stretch of recording time over which the lowest amount of sound waiting beyond the clock
+    /// is being found: when it ends, how many looks it held, and the lowest amount (in frames, `u64::MAX`
+    /// before any look). Sound that is always waiting, even at its lowest, is the sound card running fast.
+    window_end_ms: Option<u64>,
+    window_looks: u32,
+    window_lowest: u64,
+    /// The lowest amount of the stretch before, if it held enough looks to count.
+    previous_lowest: Option<u64>,
+    /// The last frame handed out, so that where sound is cut out the join can be smoothed.
+    last_frame: Vec<i16>,
+    /// A slide still to be laid over sound about to be handed out, after a cut: per channel, how far the
+    /// sound after the cut was from where the sound before it ended, and how many frames of the slide are done.
+    glide: Option<(Vec<i32>, usize)>,
 }
 
 impl AudioAligner {
     /// Sound later than this is waited for, not replaced by silence (packets arrive in small bursts).
     const LATE_MS: u64 = 40;
-    /// More sound than this ahead of the clock is trimmed back (the sound card's clock runs fast), once it has
-    /// stayed that far ahead for `TRIM_AFTER_LOOKS` looks in a row.
-    const AHEAD_MS: u64 = 80;
-    const TRIM_AFTER_LOOKS: u32 = 2;
+    /// A sound card whose clock runs fast delivers a little more sound than the recording clock asks for, so
+    /// sound waits, and the sound in the recording plays later and later than its picture. The lowest amount
+    /// waiting over a stretch of this much recording time is the part that is always there (a burst of
+    /// packets shows as a peak above it and is not counted).
+    const WINDOW_MS: u64 = 2_000;
+    /// Fewest looks a stretch must hold to count; a stretch of one or two looks says nothing.
+    const WINDOW_MIN_LOOKS: u32 = 20;
+    /// When the amount that is always waiting stays above this for two stretches in a row, it is cut back.
+    /// The requirement is that sound stays within 40 ms of its picture, and bursts add to what is waiting, so
+    /// the always-waiting part is kept well below that.
+    const TRIM_ABOVE_MS: u64 = 20;
+    /// What is left waiting after a cut: a cushion for bursts.
+    const KEEP_MS: u64 = 5;
+    /// Over this many frames the join where sound was cut is smoothed (10 ms): a slide, not a step.
+    const SMOOTH_FRAMES: usize = 480;
 
     pub fn new(sample_rate: u32, channels: u16) -> Self {
         Self {
@@ -315,7 +337,12 @@ impl AudioAligner {
             looks: 0,
             looks_over_ahead: 0,
             looks_over_late: 0,
-            ahead_streak: 0,
+            window_end_ms: None,
+            window_looks: 0,
+            window_lowest: u64::MAX,
+            previous_lowest: None,
+            last_frame: Vec::new(),
+            glide: None,
         }
     }
 
@@ -336,10 +363,11 @@ impl AudioAligner {
         let have = (self.pending.len() / channels) as u64;
         let mut out = Vec::new();
         self.looks += 1;
+        let waiting_after;
 
         if have >= need {
             out.extend(self.pending.drain(..need as usize * channels));
-            // Too far ahead: the sound card's clock is running fast. Drop the oldest of the surplus.
+            // Sound still waiting beyond the clock: it plays later than its picture by this much.
             let ahead = (self.pending.len() / channels) as u64;
             if ahead > self.worst_ahead_frames {
                 self.worst_ahead_frames = ahead;
@@ -348,21 +376,7 @@ impl AudioAligner {
             if ahead > self.frames(Self::LATE_MS) {
                 self.looks_over_ahead += 1;
             }
-            // A sound card running fast shows as surplus that is still there at the next look. Surplus seen
-            // once is more likely the recording clock being behind because the program was held up (by the
-            // disk, say) while sound went on arriving: the next look, with a fresh clock, takes it. Cutting
-            // it at once threw away two seconds of real sound in a real recording.
-            if ahead > self.frames(Self::AHEAD_MS) {
-                self.ahead_streak += 1;
-            } else {
-                self.ahead_streak = 0;
-            }
-            if self.ahead_streak >= Self::TRIM_AFTER_LOOKS {
-                let drop_frames = ahead - self.frames(Self::LATE_MS);
-                self.pending.drain(..drop_frames as usize * channels);
-                self.trimmed_frames += drop_frames;
-                self.ahead_streak = 0;
-            }
+            waiting_after = ahead;
             self.delivered_frames += need;
         } else {
             let deficit = need - have;
@@ -373,6 +387,8 @@ impl AudioAligner {
             if deficit > self.frames(Self::LATE_MS) {
                 self.looks_over_late += 1;
             }
+            // Nothing waits beyond the clock now.
+            waiting_after = 0;
             if deficit > self.frames(Self::LATE_MS) {
                 // The stream sent nothing for a while (a quiet computer, or the program was busy): fill the
                 // gap with silence. The silence goes FIRST: sound that arrived after a quiet stretch belongs
@@ -387,12 +403,101 @@ impl AudioAligner {
                 self.delivered_frames += have;
             }
         }
+
+        self.apply_glide(&mut out);
+        // The last frame handed out comes first: if sound is cut below, the join is smoothed from it.
+        if out.len() >= channels {
+            self.last_frame.clear();
+            self.last_frame.extend_from_slice(&out[out.len() - channels..]);
+        }
+        self.settle(media_ms, waiting_after);
         out
+    }
+
+    /// Note how much sound waited beyond the clock at this look, and at the end of each stretch of recording
+    /// time cut back what has been waiting all along.
+    ///
+    /// A card whose clock runs fast has sound waiting that never goes away; a burst of packets, or the program
+    /// being held up so that the clock it was given was out of date, makes a peak that is gone at the next look
+    /// (a real recording once lost two seconds of sound by cutting such a peak). So only the LOWEST amount over
+    /// a stretch counts, and only when two stretches in a row agree.
+    fn settle(&mut self, media_ms: u64, waiting: u64) {
+        let end = *self.window_end_ms.get_or_insert(media_ms + Self::WINDOW_MS);
+        self.window_lowest = self.window_lowest.min(waiting);
+        self.window_looks += 1;
+        if media_ms < end {
+            return;
+        }
+        let this = (self.window_looks >= Self::WINDOW_MIN_LOOKS).then_some(self.window_lowest);
+        let always_there = match (self.previous_lowest, this) {
+            (Some(before), Some(now)) => Some(before.min(now)),
+            _ => None,
+        };
+        self.previous_lowest = this;
+        self.window_end_ms = Some(media_ms + Self::WINDOW_MS);
+        self.window_looks = 0;
+        self.window_lowest = u64::MAX;
+        let Some(always_there) = always_there else { return };
+        if always_there <= self.frames(Self::TRIM_ABOVE_MS) {
+            return;
+        }
+        let channels = self.channels as usize;
+        let drop_frames = (always_there - self.frames(Self::KEEP_MS)).min((self.pending.len() / channels) as u64);
+        if drop_frames == 0 {
+            return;
+        }
+        self.pending.drain(..drop_frames as usize * channels);
+        self.trimmed_frames += drop_frames;
+        self.start_glide();
+        // What was measured no longer holds.
+        self.previous_lowest = None;
+    }
+
+    /// Where sound was cut out, the sound after the cut starts at a different level than the sound before it
+    /// ended, which would be heard as a click. Start from the level where the last sound ended and slide to
+    /// the real sound over ten milliseconds, as the sound is handed out (see [`AudioAligner::apply_glide`]).
+    fn start_glide(&mut self) {
+        let channels = self.channels as usize;
+        if self.last_frame.len() != channels || self.pending.len() < channels {
+            self.glide = None;
+            return;
+        }
+        // A slide still going was laid over sound that has been handed out; this one starts from the level
+        // that sound ended at, so it replaces it.
+        let jump = (0..channels).map(|c| self.last_frame[c] as i32 - self.pending[c] as i32).collect();
+        self.glide = Some((jump, 0));
+    }
+
+    /// Lay the slide that follows a cut over the sound being handed out.
+    fn apply_glide(&mut self, out: &mut [i16]) {
+        let channels = self.channels as usize;
+        let Some((jump, done)) = self.glide.as_mut() else { return };
+        for frame in out.chunks_exact_mut(channels) {
+            if *done >= Self::SMOOTH_FRAMES {
+                break;
+            }
+            let remaining = (Self::SMOOTH_FRAMES - *done) as i32;
+            for (sample, jump) in frame.iter_mut().zip(jump.iter()) {
+                let smoothed = *sample as i32 + jump * remaining / Self::SMOOTH_FRAMES as i32;
+                *sample = smoothed.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            }
+            *done += 1;
+        }
+        if *done >= Self::SMOOTH_FRAMES {
+            self.glide = None;
+        }
     }
 
     /// Throw away sound captured but not yet used (while paused, the recording clock stands still).
     pub fn discard_pending(&mut self) {
         self.pending.clear();
+        // What was measured before the pause says nothing about the sound after it.
+        self.window_end_ms = None;
+        self.window_looks = 0;
+        self.window_lowest = u64::MAX;
+        self.previous_lowest = None;
+        self.last_frame.clear();
+        self.glide = None;
     }
 
     /// How much sound has been handed out, as seconds.
@@ -922,19 +1027,149 @@ mod tests {
         assert_eq!((a.worst_late_ms(), a.worst_late_at_ms()), (800, 1000), "when and how much was missing is noted");
     }
 
-    #[test]
-    fn a_sound_card_clock_that_runs_fast_is_trimmed_back_once_the_surplus_stays() {
+    /// Play a sound card against the recording clock: the clock is looked at every `look_ms`, and the card
+    /// delivers its sound in packets of `packet_ms`, at `ppm` parts per million faster than the clock (negative:
+    /// slower). Returns what was handed out (as a count of frames) and the aligner.
+    fn run_card(ppm: f64, seconds: u64, look_ms: u64, packet_ms: u64) -> (u64, AudioAligner) {
         let mut a = AudioAligner::new(R, 2);
-        a.push(&stereo_frames(R as usize * 3, 9)); // three seconds arrive at once
-        let out = a.take_until(1000);
-        assert_eq!(out.len(), R as usize * 2, "exactly the one second that is due");
-        assert_eq!(a.trimmed_ms(), 0, "surplus seen once is not yet cut");
-        // Still far ahead at the next look: now the sound card really is running fast.
-        assert!(a.take_until(1000).is_empty());
-        assert!(a.trimmed_ms() > 1800, "the surplus was dropped, got {} ms", a.trimmed_ms());
-        // Only a short cushion is kept.
-        let next = a.take_until(1100);
-        assert_eq!(next.len(), 4800 * 2);
+        let per_ms = 48.0 * (1.0 + ppm / 1_000_000.0);
+        let (mut pushed, mut handed) = (0u64, 0u64);
+        let mut t = 0;
+        while t < seconds * 1000 {
+            t += look_ms;
+            // Packets that have been completed by now.
+            let complete = (t / packet_ms) * packet_ms;
+            let have = (complete as f64 * per_ms) as u64;
+            if have > pushed {
+                a.push(&stereo_frames((have - pushed) as usize, 5));
+                pushed = have;
+            }
+            handed += (a.take_until(t).len() / 2) as u64;
+        }
+        (handed, a)
+    }
+
+    #[test]
+    fn a_sound_card_that_runs_fast_is_kept_within_a_few_milliseconds_of_the_clock() {
+        // 150 parts per million fast is 0.54 seconds an hour. Left alone the sound would play later and later
+        // than its picture; it is cut back in small steps instead, long before it reaches 40 ms.
+        for packet_ms in [10, 20] {
+            let (handed, a) = run_card(150.0, 3600, 6, packet_ms);
+            let drift_ms = 3600.0 * 150.0 / 1000.0; // 540
+            assert!(
+                (a.trimmed_ms() as f64 - drift_ms).abs() < 40.0,
+                "packets of {packet_ms} ms: trimmed {} ms, the card gained about {drift_ms}",
+                a.trimmed_ms()
+            );
+            assert!(a.worst_ahead_ms() <= 40, "packets of {packet_ms} ms: worst {} ms", a.worst_ahead_ms());
+            assert_eq!(a.looks_over_later(), 0, "never over the 40 ms line");
+            assert_eq!(a.padded_ms(), 0);
+            assert_eq!(handed, 3600 * 48_000, "the track is exactly as long as the recording");
+        }
+    }
+
+    #[test]
+    fn the_cuts_are_small_and_rare() {
+        let (_, a) = run_card(100.0, 600, 6, 10);
+        // 100 ppm over ten minutes is 60 ms: a few small cuts, not a steady shaving.
+        assert!((40..=75).contains(&a.trimmed_ms()), "{}", a.trimmed_ms());
+    }
+
+    #[test]
+    fn a_card_on_time_with_bursty_packets_loses_nothing() {
+        for packet_ms in [10, 20, 30] {
+            let (_, a) = run_card(0.0, 600, 6, packet_ms);
+            assert_eq!(a.trimmed_ms(), 0, "packets of {packet_ms} ms: nothing to cut");
+            assert_eq!(a.padded_ms(), 0);
+            assert!(a.worst_ahead_ms() <= 30, "{}", a.worst_ahead_ms());
+        }
+    }
+
+    #[test]
+    fn a_card_that_runs_slow_is_filled_with_silence_not_left_behind() {
+        let (handed, a) = run_card(-100.0, 600, 6, 10);
+        // Up to 40 ms missing is waited for rather than made up; the end of a recording tops it up.
+        assert!(handed + 40 * 48 >= 600 * 48_000 && handed <= 600 * 48_000, "{handed}");
+        assert_eq!(a.trimmed_ms(), 0);
+        assert!(a.padded_ms() > 0, "the missing sound is made up with silence");
+    }
+
+    #[test]
+    fn a_cut_leaves_no_click_at_the_join() {
+        // A smooth low note. Cutting out part of it leaves the sound after the cut at a different point of the wave
+        // than the sound before it ended; a step there would be heard as a click.
+        let note = |n: u64| (10_000.0 * (2.0 * std::f64::consts::PI * 130.0 * n as f64 / R as f64).sin()) as i16;
+        let mut a = AudioAligner::new(R, 1);
+        let (mut made, mut t) = (0u64, 0u64);
+        let mut push = |a: &mut AudioAligner, frames: u64| {
+            let samples: Vec<i16> = (made..made + frames).map(note).collect();
+            made += frames;
+            a.push(&samples);
+        };
+        push(&mut a, 4800); // 100 ms waiting beyond the clock from the start, and it stays: the card is fast
+        let mut all: Vec<i16> = Vec::new();
+        while t < 8_000 {
+            t += 10;
+            push(&mut a, 480);
+            let got = a.take_until(t);
+            all.extend(got);
+        }
+        assert!(a.trimmed_ms() > 50, "the waiting sound was cut: {}", a.trimmed_ms());
+        let steps = |v: &[i16]| v.windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).max().unwrap();
+        let note_alone: Vec<i16> = (0..all.len() as u64).map(note).collect();
+        let (normal, with_cut) = (steps(&note_alone), steps(&all));
+        // Without smoothing the step at the cut would be up to the whole height of the wave.
+        assert!(with_cut <= normal + 100, "the biggest step is {with_cut}, the note's own is {normal}");
+    }
+
+    #[test]
+    fn one_look_with_a_great_deal_waiting_cuts_nothing_however_big() {
+        // The stale-clock case, in the middle of a stretch and exactly at the end of one.
+        for stale_at in [1_010u64, 2_010, 3_990] {
+            let mut a = AudioAligner::new(R, 2);
+            let mut t = 0;
+            while t < 6_000 {
+                t += 10;
+                a.push(&stereo_frames(480, 3));
+                if t == stale_at {
+                    a.push(&stereo_frames(R as usize * 2, 3)); // two seconds arrive that the clock has not caught up with
+                    a.take_until(t);
+                    // the next look has a fresh clock, two seconds on
+                    t += 2_000;
+                }
+                a.take_until(t);
+            }
+            assert_eq!(a.trimmed_ms(), 0, "stale clock at {stale_at} ms");
+        }
+    }
+
+    #[test]
+    fn extra_sound_that_is_there_for_one_stretch_only_is_not_cut() {
+        // 100 ms of sound is waiting for the first two seconds, then the card stops for 100 ms and the clock
+        // catches up with it. Cutting at the end of the first stretch would have left a hole afterwards.
+        let mut a = AudioAligner::new(R, 2);
+        a.push(&stereo_frames(4800, 4));
+        let mut t = 0;
+        while t < 6_000 {
+            t += 10;
+            if !(2_200..2_300).contains(&t) {
+                a.push(&stereo_frames(480, 4));
+            }
+            a.take_until(t);
+        }
+        assert_eq!(a.trimmed_ms(), 0, "nothing was cut");
+        assert_eq!(a.padded_ms(), 0, "so nothing was missing afterwards");
+    }
+
+    #[test]
+    fn a_pause_forgets_what_was_measured_before_it() {
+        let (_, mut a) = run_card(150.0, 3, 6, 10);
+        let before = a.trimmed_ms();
+        a.discard_pending();
+        // Right after the pause the first stretch begins again; nothing is cut on old measurements.
+        a.push(&stereo_frames(480, 1));
+        a.take_until(3_010);
+        assert_eq!(a.trimmed_ms(), before);
     }
 
     #[test]

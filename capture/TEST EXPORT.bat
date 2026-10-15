@@ -72,6 +72,19 @@ set RESULT=%errorlevel%
 type export-log.txt
 echo.
 
+findstr /c:"THE PROGRAM STOPPED SUDDENLY" export-log.txt >nul 2>nul
+if errorlevel 1 goto render_done
+echo ------------------------------------------------------------
+echo   Windows stopped the program while it read the recordings.
+echo   Trying once more, with a different way of reading them.
+echo ------------------------------------------------------------
+echo.
+"%~dp0target\release\openstage-capture.exe" render --project "%~dp0export-test-output\lesson.capture" --take 1 --demo --out "%~dp0export-test-output\demo-video.mp4" --picture-reader nv12 --plain > export-log-2.txt 2>&1
+set RESULT=%errorlevel%
+type export-log-2.txt
+echo.
+:render_done
+
 set VIDEO=%~dp0export-test-output\demo-video.mp4
 if exist "%VIDEO%" (
   echo Opening the video it made.
@@ -84,8 +97,8 @@ echo ------------------------------------------------------------
 echo   The export did not work. See the lines above.
 echo ------------------------------------------------------------
 echo.
-echo Please send me the files export-test-log.txt and export-log.txt
-echo from this folder.
+echo Please send me the files export-test-log.txt and export-log.txt, and
+echo export-log-2.txt if it is there, from this folder.
 goto done
 
 :passed

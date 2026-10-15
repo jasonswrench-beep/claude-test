@@ -110,7 +110,7 @@ fn part_path(out: &Path) -> PathBuf {
 
 /// A line of diagnosis on standard error (which the test scripts keep in their logs), so that when an export stops
 /// suddenly the last line says how far it got and how long each step took.
-fn trace(what: impl fmt::Display) {
+pub(crate) fn trace(what: impl fmt::Display) {
     eprintln!("export: {what}");
 }
 
@@ -171,6 +171,18 @@ pub fn export(
             .map_err(|e| failed(format!("Could not make the folder {}: {e}", folder.display())))?;
     }
     video.start_media().map_err(|e| failed(format!("Windows' video tools would not start: {e}")))?;
+    // Open every recording and read its first picture now, before the video writer exists. Windows' file reader
+    // stopped the program the first time a second recording was opened after the writer had been made; opening them
+    // all first costs nothing, and shows in the log whether the order mattered.
+    let mut opened: Vec<EditSourceRef> = Vec::new();
+    for span in &plan.video {
+        let layer = plan.layer_for(span);
+        if !opened.contains(&layer.source) {
+            trace("opening a recording before the video file is made".to_string());
+            pictures.picture(&layer).map_err(failed)?;
+            opened.push(layer.source.clone());
+        }
+    }
     let mut sink = video.create_sink(&spec).map_err(|e| failed(format!("Could not start the video file: {e}")))?;
     trace(format!(
         "the video file {} was started: {width} by {height}, {} a second, {} frames, {}",
@@ -368,10 +380,16 @@ mod tests {
     struct Pictures {
         asked: Vec<u64>,
         fail_after: Option<usize>,
+        /// Where to note, in order, that a picture was asked for (shared with the fake video writer).
+        log: Option<Rc<RefCell<Written>>>,
     }
     impl PictureSource for Pictures {
         fn picture(&mut self, layer: &Layer) -> Result<Rc<Picture>, String> {
             self.asked.push(layer.source_time_ms);
+            if let Some(log) = &self.log {
+                let what = if layer.track_kind == EditTrackKind::Webcam { "webcam picture" } else { "screen picture" };
+                log.borrow_mut().order.push(what);
+            }
             if self.fail_after.is_some_and(|n| self.asked.len() > n) {
                 return Err("The recording screen.mp4 could not be read any further.".into());
             }
@@ -405,6 +423,8 @@ mod tests {
         size: (u32, u32),
         fps: u32,
         part: PathBuf,
+        /// What happened, in order: pictures asked for, and the video file being made.
+        order: Vec<&'static str>,
     }
 
     struct FakeSink(Rc<RefCell<Written>>);
@@ -443,6 +463,7 @@ mod tests {
                 w.size = (spec.width, spec.height);
                 w.fps = spec.fps;
                 w.part = spec.path.clone();
+                w.order.push("video file");
             }
             // Windows' writer chooses the kind of file from the end of its name and fails on one it does not know.
             let ends_in_mp4 = spec.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
@@ -495,7 +516,8 @@ mod tests {
     ) -> Run {
         let written = Rc::new(RefCell::new(Written::default()));
         let video = FakeVideo(Rc::clone(&written));
-        let mut pictures = Pictures { asked: Vec::new(), fail_after: pictures_fail_after };
+        let mut pictures =
+            Pictures { asked: Vec::new(), fail_after: pictures_fail_after, log: Some(Rc::clone(&written)) };
         let mut sounds = Sounds { value: 1000, fail: sound_fails, reads: 0 };
         let job = ExportJob {
             settings: RenderSettings { fps, reduce_motion: false, ..RenderSettings::default() },
@@ -534,6 +556,29 @@ mod tests {
             assert!(part.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4")), "{part:?}");
             assert_ne!(part, Path::new(p), "never the real name");
         }
+    }
+
+    #[test]
+    fn every_recording_is_opened_before_the_video_file_is_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = run(&edit("valid-placement.json"), &dir.path().join("lesson.mp4"), None, None, false);
+        r.result.unwrap();
+        let order = r.written.borrow().order.clone();
+        let file = order.iter().position(|w| *w == "video file").expect("the file was made");
+        assert!(order[..file].contains(&"screen picture"), "{order:?}");
+        assert!(order[..file].contains(&"webcam picture"), "{order:?}");
+        assert_eq!(order.iter().filter(|w| **w == "video file").count(), 1);
+    }
+
+    #[test]
+    fn a_recording_that_cannot_be_opened_stops_the_export_before_any_file_is_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("lesson.mp4");
+        // The screen's first picture is asked for twice before the webcam's: the third ask is the webcam's.
+        let r = run(&edit("valid-placement.json"), &out, None, Some(2), false);
+        assert!(r.result.is_err());
+        assert!(!r.written.borrow().order.contains(&"video file"), "{:?}", r.written.borrow().order);
+        assert!(!part_path(&out).exists() && !out.exists());
     }
 
     #[test]
@@ -668,7 +713,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let written = Rc::new(RefCell::new(Written::default()));
         let video = FakeVideo(Rc::clone(&written));
-        let mut pictures = Pictures { asked: Vec::new(), fail_after: None };
+        let mut pictures = Pictures { asked: Vec::new(), fail_after: None, log: None };
         let mut sounds = Sounds { value: 0, fail: false, reads: 0 };
         let job = ExportJob {
             settings: RenderSettings { fps: 5, ..RenderSettings::default() },

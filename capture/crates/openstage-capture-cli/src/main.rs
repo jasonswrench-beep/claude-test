@@ -36,9 +36,9 @@ use openstage_capture_windows::{
     run_audio_test, run_cue_test, run_find_output, run_pick_region, run_screen_test, run_setup_check, run_timing_test,
     run_video_test, summarize, system_audio_platform, system_camera_platform, system_cue_player,
     system_interaction_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check,
-    CueTestOptions, DeviceKind, FindOutputOptions, InteractionLevel, Mix, PickRegionOptions, Region, ScreenMedia,
-    ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo, MIC_FILE, SCREEN_FILE,
-    SYSTEM_FILE, WEBCAM_FILE,
+    CueTestOptions, DeviceKind, FindOutputOptions, InteractionLevel, Mix, PickRegionOptions, PictureReader, Region,
+    ScreenMedia, ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo, MIC_FILE,
+    SCREEN_FILE, SYSTEM_FILE, WEBCAM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -443,6 +443,11 @@ enum Cmd {
         /// Export even if the edit still lacks things OpenStage requires (alt text, descriptions).
         #[arg(long)]
         allow_unfinished: bool,
+        /// How the recorded videos are read back: `rgb32` (Windows converts the colours; the default) or `nv12`
+        /// (this program converts them). For working around a fault in Windows' own reader; `TEST EXPORT.bat` uses
+        /// `nv12` by itself if `rgb32` makes the program stop.
+        #[arg(long, default_value = "rgb32", hide = true)]
+        picture_reader: String,
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
         plain: bool,
@@ -1275,12 +1280,32 @@ fn main() -> ExitCode {
                 });
             finish_checks(plain, all_fine)
         }
-        Cmd::Render { project, out, edit, take, demo, assets, fps, size, reduce_motion, allow_unfinished, plain } => {
+        Cmd::Render {
+            project,
+            out,
+            edit,
+            take,
+            demo,
+            assets,
+            fps,
+            size,
+            reduce_motion,
+            allow_unfinished,
+            picture_reader,
+            plain,
+        } => {
             if !plain {
                 hello();
             }
             let size = match size.as_deref().map(parse_size).transpose() {
                 Ok(size) => size,
+                Err(message) => {
+                    emit_check(plain, Check { check: "export".into(), ok: false, message });
+                    return finish_checks_with(plain, false, "", "The export did not start.");
+                }
+            };
+            let reader = match PictureReader::parse(&picture_reader) {
+                Ok(reader) => reader,
                 Err(message) => {
                     emit_check(plain, Check { check: "export".into(), ok: false, message });
                     return finish_checks_with(plain, false, "", "The export did not start.");
@@ -1302,7 +1327,7 @@ fn main() -> ExitCode {
                 };
                 install_cancel_handler();
                 let video = system_video_platform();
-                let mut pictures = match WindowsPictures::new(&project, assets.as_deref()) {
+                let mut pictures = match WindowsPictures::new(&project, assets.as_deref(), reader) {
                     Ok(pictures) => pictures,
                     Err(message) => {
                         emit_check(plain, Check { check: "export".into(), ok: false, message });
@@ -1339,7 +1364,7 @@ fn main() -> ExitCode {
             }
             #[cfg(not(windows))]
             {
-                let _ = (project, out, edit, take, demo, assets, fps, size, reduce_motion, allow_unfinished);
+                let _ = (project, out, edit, take, demo, assets, fps, size, reduce_motion, allow_unfinished, reader);
                 emit_check(
                     plain,
                     Check {

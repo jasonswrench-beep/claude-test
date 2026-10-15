@@ -81,7 +81,7 @@ pub fn explanation(level: Level) -> String {
         "where the cursor is, each mouse click, the title and place of the window in front, and the name and kind of the item you click (such as the button Save). No keys are noted"
     };
     let mut text = format!(
-        "Interaction recording is on, because you asked for it. While recording time runs, the recorder writes a private log of {what}. It is the file events.jsonl in the take's folder. It stays on this computer, is never put into a published course, and is what lets the editor suggest zooms and write step lists. Nothing is noted while recording is paused. To read what was kept, or to delete it, use the interactions command: openstage-capture interactions --project <the recording folder> --take <number>."
+        "Interaction recording is on, because you asked for it. While recording time runs, the recorder writes a private log of {what}. It is the file events.jsonl in the take's folder. Window titles are noted exactly as they are, and some programs put what you type, or the page you are on, in the title (Notepad does, and web browsers do), so a title can show private things even when keys are left out: close or minimise any window that shows something private before you start. It stays on this computer, is never put into a published course, and is what lets the editor suggest zooms and write step lists. Nothing is noted while recording is paused. To read what was kept, or to delete it, use the interactions command: openstage-capture interactions --project <the recording folder> --take <number>."
     );
     if level.keys() {
         text.push_str(
@@ -892,12 +892,20 @@ mod tests {
     #[test]
     fn the_author_is_told_in_plain_words_what_is_noted_and_what_is_not() {
         let all = explanation(Level::All);
-        for needle in ["events.jsonl", "never put into a published course", "keys you press", "password", "no-keys"] {
+        for needle in [
+            "events.jsonl",
+            "never put into a published course",
+            "keys you press",
+            "password",
+            "no-keys",
+            "a title can show private things even when keys are left out",
+        ] {
             assert!(all.contains(needle), "missing {needle:?} in {all}");
         }
         assert!(all.contains("writes no letters, digits or symbols at all"), "the doubt rule is stated");
         let no_keys = explanation(Level::NoKeys);
         assert!(no_keys.contains("No keys are noted"), "{no_keys}");
+        assert!(no_keys.contains("a title can show private things even when keys are left out"), "{no_keys}");
         assert!(!no_keys.contains("keys you press"), "{no_keys}");
         assert!(announcement(Level::All).contains("Keys typed in password fields are never noted"));
         assert!(announcement(Level::NoKeys).contains("Keys are not."));

@@ -108,7 +108,7 @@ echo   - is the picture sharp, not blurry or blocky?
 echo.
 echo To test cancelling: run this again, and press Ctrl+C while it is
 echo exporting. It should say the export was cancelled, and leave no
-echo demo-video.mp4 behind (and no demo-video.mp4.part file).
+echo demo-video.mp4 behind (and no demo-video.part.mp4 file).
 goto done
 
 :record_failed

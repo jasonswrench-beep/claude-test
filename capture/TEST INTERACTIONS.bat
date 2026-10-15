@@ -23,6 +23,12 @@ echo can read it in words and delete it. Do not type anything private
 echo during this test: keys are written to the log, except in password
 echo boxes, and the log is shown on this screen at the end.
 echo.
+echo ALSO: window titles are noted exactly as they are, and some programs
+echo put what you type, or the page you are on, in the title. Notepad
+echo shows the first words you type, and a web browser shows the page's
+echo name. Close or minimise any window that shows something private
+echo before you start, and do not click it during the test.
+echo.
 echo You will hear four soft notes when the countdown starts. They mean
 echo what you do is about to be noted. They are not in the recording.
 echo.

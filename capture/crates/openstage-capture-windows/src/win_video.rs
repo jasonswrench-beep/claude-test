@@ -240,7 +240,7 @@ unsafe fn build_writer(spec: &SinkSpec, allow_hardware: bool) -> Result<(IMFSink
     }
 
     let writer = MFCreateSinkWriterFromURL(&HSTRING::from(path.as_os_str()), None, &attributes)
-        .map_err(|e| failed("Could not create the video file", e))?;
+        .map_err(|e| failed(&format!("Could not create the video file {}", path.display()), e))?;
 
     // What goes into the file: H.264.
     let out_type: IMFMediaType = MFCreateMediaType().map_err(|e| failed("Could not describe the video", e))?;

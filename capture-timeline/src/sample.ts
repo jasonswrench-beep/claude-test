@@ -92,3 +92,23 @@ export function sampleModel(): Model {
   ).model;
   return model;
 }
+
+/**
+ * A one hour recording cut into 720 clips (the screen and the voice, 360 pieces of 10 seconds each), to see that the
+ * screens stay quick on a long edit. Open the demo with `?long=1`.
+ */
+export function longSampleModel(): Model {
+  const screen: SourceRef = { kind: "take", take: 1, media: "screen.mp4" };
+  const mic: SourceRef = { kind: "take", take: 1, media: "mic.wav" };
+  let model = createModel([
+    { ref: screen, kind: "screen", name: "Screen of take 1", durationMs: 3_600_000 },
+    { ref: mic, kind: "microphone", name: "Microphone of take 1", durationMs: 3_600_000 },
+  ]);
+  const a = must(addTrack(model, "screen"));
+  const b = must(addTrack(a.model, "audio", "Voice"));
+  model = b.model;
+  model = must(addClip(model, a.focus?.[0] ?? "", { source: screen, startMs: 0, name: "Screen" })).model;
+  model = must(addClip(model, b.focus?.[0] ?? "", { source: mic, startMs: 0, name: "Voice" })).model;
+  for (let i = 1; i < 360; i++) model = must(splitAt(model, i * 10_000)).model;
+  return model;
+}

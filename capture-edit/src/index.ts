@@ -9,3 +9,6 @@ export * from "./contrast.ts";
 export * from "./regions.ts";
 export * from "./history.ts";
 export * from "./preview.ts";
+export * from "./limits.ts";
+export * from "./fromTakes.ts";
+export * from "./playback.ts";

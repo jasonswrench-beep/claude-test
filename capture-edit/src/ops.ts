@@ -540,6 +540,66 @@ export function reorderClip(model: Model, clipId: string, toIndex: number): Resu
   );
 }
 
+/** What a track takes, in words: "screen recordings", or "microphone recordings, computer sound and sound files". */
+function sourcesInWords(kinds: readonly string[]): string {
+  const words = kinds.map((k) => {
+    switch (k) {
+      case "screen":
+        return "screen recordings";
+      case "webcam":
+        return "webcam recordings";
+      case "microphone":
+        return "microphone recordings";
+      case "system-audio":
+        return "computer sound";
+      case "image":
+        return "images";
+      case "audio":
+        return "sound files";
+      case "video":
+        return "videos";
+      default:
+        return k;
+    }
+  });
+  return words.length <= 1 ? (words[0] ?? "nothing") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/**
+ * Move a clip to another track of a kind that takes its recording, keeping the time it starts. It may not run into a
+ * clip already there. (The vertical drag of a clip on the timeline, and the Track box in the clip list.)
+ */
+export function moveClipToTrack(model: Model, clipId: string, trackId: string): Result {
+  const found = locate(model, clipId);
+  if ("ok" in found) return found;
+  const { track: from, clip } = found;
+  const to = findTrack(model, trackId);
+  if (to === undefined) return refuse(`There is no track with the id ${trackId}.`);
+  if (to.id === from.id) return unchanged(model, `The clip ${quote(clip.name)} is already on the ${from.name} track.`);
+  const source = findSource(model, clip.source);
+  if (source === undefined || !ALLOWED_SOURCES[to.kind].includes(source.kind)) {
+    const takes = ALLOWED_SOURCES[to.kind];
+    return refuse(
+      `Cannot move ${quote(clip.name)} to the ${to.name} track: ${takes.length === 0 ? "that track holds overlays and zooms, not clips" : `that track takes ${sourcesInWords(takes)}`}.`,
+    );
+  }
+  const end = clipEndMs(clip);
+  const clash = to.clips.find((c) => clip.startMs < clipEndMs(c) && c.startMs < end);
+  if (clash !== undefined) {
+    return refuse(
+      `Cannot move ${quote(clip.name)} to the ${to.name} track: it would overlap the clip ${quote(clash.name)}, which runs from ${describeTime(clash.startMs)} to ${describeTime(clipEndMs(clash))} there.`,
+    );
+  }
+  const moved = withTrack(model, { ...from, clips: from.clips.filter((c) => c.id !== clip.id) });
+  const next = withTrack(moved, { ...to, clips: sortClips([...to.clips, clip]) });
+  return done(
+    next,
+    "move clip to another track",
+    `Clip ${quote(clip.name)} moved from the ${from.name} track to the ${to.name} track, still starting at ${describeTime(clip.startMs)}.`,
+    [clip.id],
+  );
+}
+
 // ---- clip settings ----
 
 export function renameClip(model: Model, clipId: string, name: string): Result {

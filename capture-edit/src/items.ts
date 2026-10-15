@@ -309,6 +309,32 @@ export function moveItem(model: Model, itemId: string, toMs: number): Result {
   return change(model, itemId, "move", (i) => ({ ...i, startMs: at }), (i) => `${describeItemName(i)} now starts at ${describeTime(at)}.`);
 }
 
+/** Move an overlay or zoom to another track that takes it, keeping its time. */
+export function moveItemToTrack(model: Model, itemId: string, trackId: string): Result {
+  const found = locate(model, itemId);
+  if ("ok" in found) return found;
+  const { track: from, item } = found;
+  const to = findTrack(model, trackId);
+  if (to === undefined) return refuse(`There is no track with the id ${trackId}.`);
+  if (to.id === from.id) return unchanged(model, `${describeItemName(item)} is already on the ${from.name} track.`);
+  if (!ALLOWED_ITEMS[to.kind].includes(item.kind)) {
+    const allowed = ALLOWED_ITEMS[to.kind];
+    return refuse(
+      `Cannot move ${quote(item.name)} to the ${to.name} track: ${allowed.length === 0 ? "that track holds clips, not overlays or zooms" : `that track takes ${allowed.join(", ")}`}.`,
+    );
+  }
+  const moved = withTrack(model, { ...from, items: from.items.filter((i) => i.id !== item.id) });
+  const next = withTrack(moved, { ...to, items: sortItems([...to.items, item]) });
+  const errors = newErrors(model, next);
+  if (errors[0] !== undefined) return refuse(errors[0].message);
+  return done(
+    next,
+    "move to another track",
+    `${describeItemName(item)} moved from the ${from.name} track to the ${to.name} track, still starting at ${describeTime(item.startMs)}.` + aboutItem(model, next, itemId),
+    [itemId],
+  );
+}
+
 /** Move the start grip: the end stays where it is. */
 export function trimItemStart(model: Model, itemId: string, toMs: number): Result {
   const at = wholeMs(toMs);

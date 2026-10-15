@@ -1,47 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addClip, addTrack, createModel, splitAt, type Model } from "../../capture-edit/src/index.ts";
-import { sampleModel, SAMPLE_SOURCES } from "../src/sample.ts";
+import { addClip, addTrack, createModel, splitAt } from "../../capture-edit/src/index.ts";
+import { SAMPLE_SOURCES, sampleModel } from "../src/sample.ts";
 import { EditSession, type ChangeKind } from "../src/session.ts";
-
-/** A session on the sample lesson, with the row called `name` selected. */
-function open(name?: string): EditSession {
-  const session = new EditSession(sampleModel());
-  if (name !== undefined) select(session, name);
-  return session;
-}
-
-function select(session: EditSession, name: string): void {
-  const row = session.rows.find((r) => r.name === name);
-  assert.ok(row, `no row called ${name}`);
-  assert.ok(session.select(row.clipId).ok);
-}
-
-function row(session: EditSession, name: string) {
-  const found = session.rows.find((r) => r.name === name);
-  assert.ok(found, `no row called ${name}`);
-  return found;
-}
-
-function names(session: EditSession, track?: string): string[] {
-  return session.rows.filter((r) => track === undefined || r.trackName === track).map((r) => r.name);
-}
-
-/** An edit with one 10 second clip on a screen track, and nothing else. */
-function solo(): Model {
-  let model = createModel(SAMPLE_SOURCES);
-  const track = addTrack(model, "screen");
-  model = track.model;
-  const added = addClip(model, track.focus?.[0] ?? "", {
-    source: { kind: "take", take: 1, media: "screen.mp4" },
-    startMs: 0,
-    lengthMs: 10_000,
-    name: "Only clip",
-  });
-  assert.ok(added.ok);
-  return added.model;
-}
+import { names, open, row, select, solo } from "./helpers.ts";
 
 // ---- the list and the selection ----
 
@@ -127,12 +90,16 @@ test("what the form shows: a clip can be muted, an overlay is not a clip", () =>
     id: row(s, "Voice, part 1").clipId,
     name: "Voice, part 1",
     type: "Microphone",
+    trackId: row(s, "Voice, part 1").trackId,
     trackName: "Voice",
     startMs: 0,
     lengthMs: 30_000,
     endMs: 30_000,
     isClip: true,
     muted: false,
+    volumeDb: 0,
+    fadeInMs: 0,
+    fadeOutMs: 0,
   });
   select(s, "Zoom on the totals");
   assert.equal(s.details?.isClip, false);

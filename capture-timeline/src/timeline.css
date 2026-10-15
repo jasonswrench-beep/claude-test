@@ -1,0 +1,306 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Styles for the timeline. They use the colour tokens of clip-list.css and add the colours of the tracks. A track is
+ * never told apart by colour alone: its name and kind are written at the start of its lane. Muted clips are hatched and
+ * say "muted". The chosen clips have a thick outline, the one with the focus a thicker edge, the playhead is a line.
+ * Dark mode and Windows high contrast (forced colours) are handled; nothing animates.
+ */
+
+:root {
+  --os-tl-gutter: 8rem;
+  --os-tl-ruler-h: 2.25rem;
+  --os-tl-lane-h: 3.5rem;
+  --os-tl-screen: #cfe2ff;
+  --os-tl-webcam: #e4d6ff;
+  --os-tl-audio: #d3f0d6;
+  --os-tl-media: #ffe6bf;
+  --os-tl-overlay: #ffd6df;
+  --os-tl-zoom: #fff1a8;
+  --os-tl-playline: #b00020;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --os-tl-screen: #1d3557;
+    --os-tl-webcam: #3a2a5c;
+    --os-tl-audio: #1e4a2b;
+    --os-tl-media: #5c4010;
+    --os-tl-overlay: #5c2230;
+    --os-tl-zoom: #55500f;
+    --os-tl-playline: #ff6b81;
+  }
+}
+
+:root[data-theme="dark"] {
+  --os-tl-screen: #1d3557;
+  --os-tl-webcam: #3a2a5c;
+  --os-tl-audio: #1e4a2b;
+  --os-tl-media: #5c4010;
+  --os-tl-overlay: #5c2230;
+  --os-tl-zoom: #55500f;
+  --os-tl-playline: #ff6b81;
+}
+
+.os-tl {
+  max-width: none;
+}
+
+.os-tl-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  align-items: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+.os-tl-addtrack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-end;
+  max-width: 100%;
+}
+
+.os-tl-addtrack select {
+  max-width: 100%;
+}
+
+.os-tl-frame {
+  border: 1px solid var(--os-cl-line);
+  border-radius: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.os-tl-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+  scroll-padding-left: var(--os-tl-gutter);
+}
+
+.os-tl-canvas {
+  position: relative;
+  min-width: 100%;
+}
+
+.os-tl-rulerrow {
+  display: flex;
+  height: var(--os-tl-ruler-h);
+  box-sizing: border-box;
+  border-bottom: 2px solid var(--os-cl-line);
+  background: var(--os-cl-head-bg);
+}
+
+.os-tl-corner,
+.os-tl-lane-name {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  flex: none;
+  width: var(--os-tl-gutter);
+  box-sizing: border-box;
+  padding: 0.25rem 0.5rem;
+  border-right: 2px solid var(--os-cl-line);
+  font-weight: 600;
+  overflow: hidden;
+}
+
+.os-tl-corner {
+  display: flex;
+  align-items: center;
+  background: var(--os-cl-head-bg);
+}
+
+.os-tl-lane-name {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background: var(--os-cl-bg);
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+
+.os-tl-lane-kind {
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--os-cl-muted);
+}
+
+.os-tl-ruler {
+  position: relative;
+  flex: none;
+  height: 100%;
+  cursor: pointer;
+}
+
+.os-tl-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding-left: 4px;
+  border-left: 1px solid var(--os-cl-line);
+  font-size: 0.75rem;
+  line-height: var(--os-tl-ruler-h);
+  color: var(--os-cl-muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.os-tl-lane {
+  display: flex;
+  height: var(--os-tl-lane-h);
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--os-cl-line);
+}
+
+.os-tl-track {
+  position: relative;
+  flex: none;
+  height: 100%;
+  touch-action: none;
+}
+
+.os-tl-clip {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.375rem;
+  overflow: hidden;
+  border: 2px solid var(--os-cl-line);
+  border-radius: 0.25rem;
+  background: var(--os-tl-screen);
+  color: var(--os-cl-fg);
+  cursor: grab;
+  user-select: none;
+}
+
+.os-tl-lane[data-kind="webcam"] .os-tl-clip { background-color: var(--os-tl-webcam); }
+.os-tl-lane[data-kind="audio"] .os-tl-clip { background-color: var(--os-tl-audio); }
+.os-tl-lane[data-kind="media"] .os-tl-clip { background-color: var(--os-tl-media); }
+.os-tl-lane[data-kind="overlay"] .os-tl-clip { background-color: var(--os-tl-overlay); }
+.os-tl-lane[data-kind="zoom"] .os-tl-clip { background-color: var(--os-tl-zoom); }
+
+.os-tl-clip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.os-tl-badge {
+  flex: none;
+  padding: 0 0.3rem;
+  border: 1px solid currentColor;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+}
+
+/* Muted clips are hatched, and say so. */
+.os-tl-muted {
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, rgba(128, 128, 128, 0.4) 6px 9px);
+}
+
+/* Chosen clips have a thick outline; the one with the focus also has a thicker, darker edge. */
+.os-tl-clip[aria-selected="true"] {
+  outline: 3px solid var(--os-cl-accent);
+  outline-offset: 1px;
+}
+
+.os-tl-clip.os-tl-primary {
+  border-width: 4px;
+  border-color: var(--os-cl-fg);
+}
+
+.os-tl-clip:focus-visible {
+  outline: 3px solid var(--os-cl-focus);
+  outline-offset: 2px;
+}
+
+.os-tl-dragging {
+  cursor: grabbing;
+  z-index: 4;
+}
+
+.os-tl-lane.os-tl-drop-ok {
+  outline: 3px dashed var(--os-cl-accent);
+  outline-offset: -3px;
+}
+
+.os-tl-lane.os-tl-drop-no {
+  outline: 3px dotted var(--os-cl-attention);
+  outline-offset: -3px;
+  cursor: not-allowed;
+}
+
+/* The two grips of the chosen clip, and the playhead line, sit over the lanes. */
+.os-tl-grips {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.os-tl-grip {
+  position: absolute;
+  z-index: 5;
+  box-sizing: border-box;
+  width: 0.875rem;
+  height: calc(var(--os-tl-lane-h) - 12px);
+  margin: 6px 0 0 -0.4375rem;
+  border: 2px solid var(--os-cl-fg);
+  border-radius: 0.25rem;
+  background: var(--os-cl-accent);
+  pointer-events: auto;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.os-tl-grip:focus-visible {
+  outline: 3px solid var(--os-cl-focus);
+  outline-offset: 2px;
+}
+
+.os-tl-playline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 4;
+  width: 0;
+  border-left: 3px solid var(--os-tl-playline);
+  pointer-events: none;
+}
+
+@media (max-width: 40rem) {
+  :root {
+    --os-tl-gutter: 5rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .os-tl-clip {
+    background: Canvas;
+    border-color: CanvasText;
+    color: CanvasText;
+  }
+  .os-tl-clip[aria-selected="true"] {
+    background: Highlight;
+    color: HighlightText;
+    outline-color: Highlight;
+  }
+  .os-tl-clip.os-tl-primary {
+    border-color: CanvasText;
+  }
+  .os-tl-grip {
+    background: Highlight;
+    border-color: CanvasText;
+  }
+  .os-tl-playline {
+    border-left-color: CanvasText;
+  }
+  .os-tl-tick {
+    color: CanvasText;
+  }
+}

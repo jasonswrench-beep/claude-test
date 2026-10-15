@@ -1,0 +1,118 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Styles for the preview. The picture is a 16 by 9 stage whose size units (cqh) are a hundredth of its height, so text
+ * and lines are drawn at the same share of the picture as the exporter draws them. Nothing here animates except what the
+ * edit itself asks for (a zoom), which can be turned into a cut.
+ */
+
+.os-pv {
+  max-width: none;
+}
+
+.os-pv-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+}
+
+.os-pv-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.os-pv-figure {
+  margin: 0.75rem 0;
+}
+
+.os-pv-stage {
+  position: relative;
+  width: min(100%, 60rem);
+  aspect-ratio: 16 / 9;
+  container-type: size;
+  overflow: hidden;
+  background: #000;
+  border: 2px solid var(--os-cl-line);
+}
+
+.os-pv-layer {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+
+.os-pv-box {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.os-pv-box > .os-pv-media {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+/* The webcam, when it does not say where it goes: the bottom right, about a fifth of the width. */
+.os-pv-box.os-pv-corner {
+  inset: auto;
+  right: 2%;
+  bottom: 3%;
+  width: 22%;
+  aspect-ratio: 16 / 9;
+  border: 2px solid #fff;
+}
+
+.os-pv-placeholder {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  text-align: center;
+  color: var(--os-cl-fg);
+  background: var(--os-tl-screen);
+  font-size: 3.5cqh;
+}
+
+.os-pv-placeholder span {
+  font-size: 0.7em;
+  opacity: 0.85;
+}
+
+.os-pv-placeholder.os-pv-webcam { background: var(--os-tl-webcam); }
+.os-pv-placeholder.os-pv-media { background: var(--os-tl-media); }
+
+.os-pv-text {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 0.3em 0.5em;
+  line-height: 1.25;
+  white-space: pre-wrap;
+}
+
+.os-pv-shape,
+.os-pv-redact,
+.os-pv-blur {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.os-pv-blur {
+  backdrop-filter: blur(1.5cqh);
+  background: rgba(128, 128, 128, 0.35);
+}
+
+.os-pv-arrow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}

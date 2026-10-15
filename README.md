@@ -21,6 +21,6 @@ This repository holds the design documents and the early code for the Capture mo
 
 The edit model (tracks, clips, trim, split, join, reorder, undo and redo, in plain words) is in [`capture-edit/`](capture-edit/), written in TypeScript and tested with Node's own test runner; its file format is in [docs/capture-edit-format.md](docs/capture-edit-format.md).
 
-The editing screens are in [`capture-timeline/`](capture-timeline/): so far the clip list (a table of everything in an edit, with keyboard commands to split, trim, delete, join, move and set exact times, each result said in words), with a demo page. It has not been heard with a screen reader yet; its README says what to listen for.
+The editing screens are in [`capture-timeline/`](capture-timeline/): the clip list, the timeline and a preview that plays the edit, on one edit that all three change, with a demo page that can open and save an edit and open a recording folder. They have not been heard with a screen reader yet; its README says what to listen for.
 
 The Rust workspace is in [`capture/`](capture/). See [capture/README.md](capture/README.md) for what is in it and how to build and test it, including double-click scripts for Windows.

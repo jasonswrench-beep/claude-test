@@ -22,10 +22,13 @@ must give the same findings.
 | `src/items.ts` | The actions on overlays and zooms: text, shapes, arrows, blur, redaction, zoom |
 | `src/contrast.ts`, `src/regions.ts` | Colours and contrast; rectangles on the picture and saying where they are in words |
 | `src/history.ts` | Undo and redo, with a drag as one step |
+| `src/limits.ts` | How far a clip, overlay or zoom can be moved or trimmed (the ends of a slider), found by asking the editing actions |
+| `src/fromTakes.ts` | The first edit of a project, made from its finished takes |
+| `src/playback.ts` | What plays at a moment: pictures, sounds and how loud, overlays, zoom |
 | `src/validate.ts` | The checks, with codes shared with the Rust reader |
 | `src/serialize.ts` | Saving and reading `edit.json` |
 | `src/preview.ts` | The clip list, a sentence for a clip (and `describeRows`, one for every row in a single pass, which the clip list screen uses), the described preview |
-| `test/` | The tests, including 150 random editing sessions that must stay sound and undo exactly |
+| `test/` | The tests, including 150 random editing sessions that must stay sound and undo exactly, and 60 random edits checking that every limit agrees with the actions |
 | `fixtures/` | Shared examples and `expected.json`, read by the TypeScript and the Rust tests |
 
 ## Running the tests

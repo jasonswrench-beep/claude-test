@@ -27,3 +27,5 @@ region-test-output/
 setup-check-log.txt
 choose-region-log.txt
 chosen-region.txt
+window-test-log.txt
+window-test-output/

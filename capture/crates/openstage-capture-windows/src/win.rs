@@ -8,7 +8,7 @@ use crate::{
     number_displays, CaptureWork, DisplayInfo, Frame, FrameQueue, FrameSource, Platform, ScreenError, WindowsVersion,
 };
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,7 @@ use windows::Graphics::Capture::{
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Wdk::System::SystemServices::RtlGetVersion;
-use windows::Win32::Foundation::{HMODULE, LPARAM, RECT};
+use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
@@ -34,6 +34,7 @@ use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDe
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 
 /// How many pictures may wait to be taken; beyond that the oldest is dropped for the newest.
 const QUEUE_DEPTH: usize = 8;
@@ -123,6 +124,20 @@ impl Platform for WindowsPlatform {
         Ok(Box::new(source))
     }
 
+    fn list_windows(&self) -> Result<Vec<crate::WindowInfo>, ScreenError> {
+        crate::win_windows::list_windows()
+    }
+
+    fn start_window_capture(
+        &self,
+        window: &crate::WindowInfo,
+        with_cursor: bool,
+    ) -> Result<Box<dyn FrameSource>, ScreenError> {
+        prepare();
+        let source = Capture::start_window(HWND(window.handle as *mut c_void), &window.title, with_cursor)?;
+        Ok(Box::new(source))
+    }
+
     fn show_region_outline(&self, display: &DisplayInfo, region: &crate::Region) -> Option<crate::Outline> {
         match crate::win_outline::FrameWindow::show(display, region) {
             Ok(frame) => frame.map(|f| Box::new(f) as crate::Outline),
@@ -144,6 +159,14 @@ struct Shared {
     gpu: Mutex<Gpu>,
     queue: FrameQueue,
     first_ticks: Mutex<Option<i64>>,
+    /// The graphics device Windows' capture service shares, and the size of the buffers it fills, so that
+    /// they can be made to match when the captured window is resized.
+    winrt_device: IDirect3DDevice,
+    pool_size: Mutex<windows::Graphics::SizeInt32>,
+    /// Set when the captured window is closed.
+    closed: AtomicBool,
+    /// The window being captured, if it is a window: its number and title.
+    window: Option<(isize, String)>,
 }
 
 /// Totals kept by the thread that Windows delivers pictures on, read by the recording thread.
@@ -169,18 +192,36 @@ struct Capture {
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     token: i64,
+    item: GraphicsCaptureItem,
+    closed_token: i64,
 }
 
 impl Capture {
+    fn start_window(hwnd: HWND, title: &str, with_cursor: bool) -> Result<Self, ScreenError> {
+        let interop = factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
+            .map_err(|e| failed("Windows' screen capture service could not be reached", e))?;
+        let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(hwnd) }.map_err(|e| {
+            failed(
+                "Windows would not let the program capture that window (a window of a program running as administrator cannot be captured by this program, and neither can some protected windows)",
+                e,
+            )
+        })?;
+        Self::start(item, with_cursor, Some((hwnd.0 as isize, title.to_string())))
+    }
+
     fn start_monitor(monitor: HMONITOR, with_cursor: bool) -> Result<Self, ScreenError> {
         let interop = factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
             .map_err(|e| failed("Windows' screen capture service could not be reached", e))?;
         let item: GraphicsCaptureItem = unsafe { interop.CreateForMonitor(monitor) }
             .map_err(|e| failed("Windows would not let the program capture that display", e))?;
-        Self::start(item, with_cursor)
+        Self::start(item, with_cursor, None)
     }
 
-    fn start(item: GraphicsCaptureItem, with_cursor: bool) -> Result<Self, ScreenError> {
+    fn start(
+        item: GraphicsCaptureItem,
+        with_cursor: bool,
+        window: Option<(isize, String)>,
+    ) -> Result<Self, ScreenError> {
         let (device, context) = create_device()?;
         let dxgi: IDXGIDevice = device.cast().map_err(|e| failed("The graphics device is not usable", e))?;
         let winrt_device: IDirect3DDevice = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi) }
@@ -204,6 +245,10 @@ impl Capture {
             gpu: Mutex::new(Gpu { context, staging: None }),
             queue: FrameQueue::new(QUEUE_DEPTH),
             first_ticks: Mutex::new(None),
+            winrt_device: winrt_device.clone(),
+            pool_size: Mutex::new(size),
+            closed: AtomicBool::new(false),
+            window,
         });
 
         let handler_shared = Arc::clone(&shared);
@@ -214,6 +259,25 @@ impl Capture {
                         if let Ok(frame) = pool.TryGetNextFrame() {
                             // A problem with one picture must not stop the capture; the next one may be fine.
                             let _ = handle_frame(&handler_shared, &frame);
+                            // A window that was resized sends pictures of its new size; the buffers must be made
+                            // to match, or Windows squeezes the new picture into the old size.
+                            if let Ok(content) = frame.ContentSize() {
+                                let mut current = handler_shared.pool_size.lock().unwrap_or_else(|e| e.into_inner());
+                                if content.Width > 0
+                                    && content.Height > 0
+                                    && (content.Width, content.Height) != (current.Width, current.Height)
+                                    && pool
+                                        .Recreate(
+                                            &handler_shared.winrt_device,
+                                            DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                                            3,
+                                            content,
+                                        )
+                                        .is_ok()
+                                {
+                                    *current = content;
+                                }
+                            }
                             // Hand the buffer back to Windows straight away so it can be reused.
                             let _ = frame.Close();
                         }
@@ -222,8 +286,16 @@ impl Capture {
                 },
             ))
             .map_err(|e| failed("Could not listen for pictures", e))?;
+        // Told when the window is closed (a display is never closed).
+        let closed_shared = Arc::clone(&shared);
+        let closed_token = item
+            .Closed(&TypedEventHandler::<GraphicsCaptureItem, windows::core::IInspectable>::new(move |_, _| {
+                closed_shared.closed.store(true, Ordering::SeqCst);
+                Ok(())
+            }))
+            .map_err(|e| failed("Could not listen for the window closing", e))?;
         session.StartCapture().map_err(|e| failed("Windows would not start the capture", e))?;
-        Ok(Self { shared, pool, session, token })
+        Ok(Self { shared, pool, session, token, item, closed_token })
     }
 }
 
@@ -244,6 +316,14 @@ impl FrameSource for Capture {
         self.shared.queue.recycle(frame);
     }
 
+    fn ended(&self) -> Option<String> {
+        let (handle, title) = self.shared.window.as_ref()?;
+        // Windows says so, or the window is simply no longer there.
+        let gone = self.shared.closed.load(Ordering::SeqCst)
+            || !unsafe { IsWindow(Some(HWND(*handle as *mut c_void))) }.as_bool();
+        gone.then(|| format!("The window {title} was closed. Everything recorded until then has been kept."))
+    }
+
     fn work(&self) -> CaptureWork {
         let w = &self.shared.work;
         CaptureWork {
@@ -259,6 +339,7 @@ impl FrameSource for Capture {
 impl Drop for Capture {
     fn drop(&mut self) {
         let _ = self.pool.RemoveFrameArrived(self.token);
+        let _ = self.item.RemoveClosed(self.closed_token);
         let _ = self.session.Close();
         let _ = self.pool.Close();
     }

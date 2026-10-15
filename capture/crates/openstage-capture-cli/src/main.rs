@@ -21,13 +21,13 @@ use openstage_capture::{
 use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
-    check_balance_in_files, check_echo_in_files, check_sound_files, compare_audio_readback, compare_readback,
-    compare_size_readback, describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_cue_test,
-    run_find_output, run_pick_region, run_screen_test, run_setup_check, run_timing_test, run_video_test, summarize,
-    system_audio_platform, system_cue_player, system_platform, system_video_platform, AudioChoice, AudioTestOptions,
-    Check, CueTestOptions, DeviceKind, FindOutputOptions, Mix, PickRegionOptions, Region, ScreenMedia,
-    ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, MIC_FILE, SCREEN_FILE,
-    SYSTEM_FILE,
+    check_balance_in_files, check_echo_in_files, check_sound_files, choose_window, compare_audio_readback,
+    compare_readback, compare_size_readback, describe_devices, output_may_have_changed, plan_sound, run_audio_test,
+    run_cue_test, run_find_output, run_pick_region, run_screen_test, run_setup_check, run_timing_test, run_video_test,
+    summarize, system_audio_platform, system_cue_player, system_platform, system_video_platform, AudioChoice,
+    AudioTestOptions, Check, CueTestOptions, DeviceKind, FindOutputOptions, Mix, PickRegionOptions, Region,
+    ScreenMedia, ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo, MIC_FILE,
+    SCREEN_FILE, SYSTEM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -66,6 +66,11 @@ enum Cmd {
         /// height, for example `100,200,1280,720`. An odd width or height is made one pixel smaller.
         #[arg(long)]
         region: Option<String>,
+        /// With `--source screen`: record just one window instead of a display: its number from the
+        /// `windows` command, or part of its title or program name. Nothing else on the screen is in the
+        /// video, whatever is in front of the window. Cannot be used with `--region`.
+        #[arg(long)]
+        window: Option<String>,
         /// With `--source screen`: pictures per second in the video.
         #[arg(long, default_value_t = 30)]
         fps: u32,
@@ -207,6 +212,13 @@ enum Cmd {
         /// How long to listen.
         #[arg(long, default_value_t = 6.0)]
         seconds: f64,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// List the open windows that can be recorded, numbered, so one can be chosen with `record --window`.
+    /// Windows that are minimized or hidden, and windows without a title, are not listed. Windows only.
+    Windows {
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
         plain: bool,
@@ -512,6 +524,7 @@ fn main() -> ExitCode {
             source,
             display,
             region,
+            window,
             fps,
             bitrate_kbps,
             microphone,
@@ -545,6 +558,7 @@ fn main() -> ExitCode {
             };
             let mut sound_plan = SoundPlan::default();
             let mut chosen_region: Option<Region> = None;
+            let mut chosen_window: Option<WindowInfo> = None;
             let mut report_handle = None;
             let factory: Box<dyn MediaFactory> = match source.as_str() {
                 "synthetic" => Box::new(|| -> Box<dyn Source> { Box::new(SyntheticSource::new()) }),
@@ -570,6 +584,38 @@ fn main() -> ExitCode {
                         }
                     };
                     sink.emit(Event::Check { check: "sound-devices".into(), ok: true, message: sound_plan.describe() });
+                    // A window is chosen now, so a mistake is explained before the countdown.
+                    if let Some(text) = &window {
+                        if region.is_some() {
+                            sink.emit(Event::Error {
+                                code: "bad-option".into(),
+                                message: "--window and --region cannot be used together: a window is recorded at its own size.".into(),
+                                fatal: true,
+                            });
+                            return ExitCode::from(2);
+                        }
+                        let chosen = system_platform()
+                            .list_windows()
+                            .map_err(|e| e.to_string())
+                            .and_then(|list| choose_window(&list, text).cloned());
+                        match chosen {
+                            Ok(found) => {
+                                sink.emit(Event::Check {
+                                    check: "window".into(),
+                                    ok: true,
+                                    message: format!(
+                                        "Recording the window {}. The video keeps the window's size from when recording begins. If the window is resized, its picture is made smaller to fit, in the middle on black. If it is minimized, its last picture stays until it is restored. If it is closed, the recording stops at once and keeps everything recorded until then.",
+                                        found.describe()
+                                    ),
+                                });
+                                chosen_window = Some(found);
+                            }
+                            Err(message) => {
+                                sink.emit(Event::Error { code: "bad-option".into(), message, fatal: true });
+                                return ExitCode::from(2);
+                            }
+                        }
+                    }
                     // A region is checked against the display now, so a mistake is explained before the countdown.
                     if let Some(text) = &region {
                         let fitted = Region::parse(text).and_then(|r| {
@@ -602,6 +648,9 @@ fn main() -> ExitCode {
                         .with_sound(platform, sound_plan.clone());
                     if let Some(r) = chosen_region {
                         media = media.with_region(r).with_outline(outline_on);
+                    }
+                    if let Some(found) = chosen_window {
+                        media = media.with_window(found);
                     }
                     report_handle = Some(media.report_handle());
                     Box::new(media)
@@ -813,6 +862,54 @@ fn main() -> ExitCode {
                 hello();
             }
             let all_fine = run_find_output(&FindOutputOptions { seconds }, &mut |c| emit_check(plain, c));
+            finish_checks(plain, all_fine)
+        }
+        Cmd::Windows { plain } => {
+            if !plain {
+                hello();
+            }
+            let mut all_fine = true;
+            match system_platform().list_windows() {
+                Ok(list) if !list.is_empty() => {
+                    emit_check(
+                        plain,
+                        Check {
+                            check: "windows".into(),
+                            ok: true,
+                            message: format!(
+                                "{} window{} can be recorded. Choose one with --window and its number, or part of its title or program name.",
+                                list.len(),
+                                if list.len() == 1 { "" } else { "s" }
+                            ),
+                        },
+                    );
+                    for window in &list {
+                        emit_check(plain, Check { check: "window".into(), ok: true, message: window.describe() });
+                    }
+                }
+                Ok(_) => {
+                    all_fine = false;
+                    emit_check(
+                        plain,
+                        Check {
+                            check: "windows".into(),
+                            ok: false,
+                            message: "There are no open windows that can be recorded. Windows that are minimized or hidden, and windows without a title, are not listed.".into(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    all_fine = false;
+                    emit_check(
+                        plain,
+                        Check {
+                            check: "windows".into(),
+                            ok: false,
+                            message: format!("Could not list the open windows: {e}"),
+                        },
+                    );
+                }
+            }
             finish_checks(plain, all_fine)
         }
         Cmd::AudioDevices { plain } => {

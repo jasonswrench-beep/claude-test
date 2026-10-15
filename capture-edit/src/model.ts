@@ -12,7 +12,7 @@
  */
 
 export const EDIT_FORMAT = "openstage-capture-edit";
-export const EDIT_SCHEMA_VERSION = "0.2.0";
+export const EDIT_SCHEMA_VERSION = "0.3.0";
 
 /** The shortest a clip may be, in milliseconds. */
 export const MIN_CLIP_MS = 100;
@@ -63,6 +63,12 @@ export interface Clip {
   readonly volumeDb: number;
   readonly fadeInMs: number;
   readonly fadeOutMs: number;
+  /**
+   * Where the picture sits in the finished video, as a rectangle on the frame (new in 0.3). Without it a screen,
+   * image or video fills the frame and a webcam is a small picture in the bottom right corner (or fills the frame
+   * when there is no other picture). Only clips that have a picture can have one.
+   */
+  readonly placement?: Rect;
   /** For an image: what it shows, in words, or `decorative` instead. */
   readonly altText?: string;
   readonly decorative?: boolean;

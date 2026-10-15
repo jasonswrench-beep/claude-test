@@ -1,6 +1,6 @@
 {
   "format": "openstage-capture-edit",
-  "schemaVersion": "0.3.0",
+  "schemaVersion": "0.9.0",
   "nextId": 10,
   "sources": [
     {

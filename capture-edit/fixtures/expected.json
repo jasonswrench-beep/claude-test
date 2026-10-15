@@ -13,6 +13,12 @@
         "bad-time:error"
       ]
     },
+    "bad-placement.json": {
+      "readable": true,
+      "problems": [
+        "bad-rect:error"
+      ]
+    },
     "bad-rect.json": {
       "readable": true,
       "problems": [
@@ -99,6 +105,12 @@
         "overlap:error"
       ]
     },
+    "placement-on-sound.json": {
+      "readable": true,
+      "problems": [
+        "placement-not-allowed:error"
+      ]
+    },
     "source-not-allowed.json": {
       "readable": true,
       "problems": [
@@ -152,6 +164,10 @@
       ]
     },
     "valid-basic.json": {
+      "readable": true,
+      "problems": []
+    },
+    "valid-placement.json": {
       "readable": true,
       "problems": []
     },

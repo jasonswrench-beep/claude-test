@@ -115,6 +115,9 @@ pub struct Clip {
     pub volume_db: f64,
     pub fade_in_ms: f64,
     pub fade_out_ms: f64,
+    /// Where the picture sits in the finished video (new in 0.3), or `None` for where it is drawn by default.
+    #[serde(default)]
+    pub placement: Option<Rect>,
     pub alt_text: Option<String>,
     pub decorative: Option<bool>,
 }
@@ -126,6 +129,25 @@ impl Clip {
     pub fn end_ms(&self) -> f64 {
         self.start_ms + self.length_ms()
     }
+}
+
+/// How the lines of a text overlay sit across its box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Align {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// What a shape is drawn as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShapeKind {
+    #[default]
+    Rectangle,
+    Ellipse,
 }
 
 /// A rectangle on the picture, in ten-thousandths of its width and height from its top left corner.
@@ -181,6 +203,8 @@ pub enum Item {
         background: Option<String>,
         #[serde(default)]
         bold: bool,
+        #[serde(default)]
+        align: Align,
     },
     #[serde(rename_all = "camelCase")]
     Shape {
@@ -188,6 +212,8 @@ pub enum Item {
         name: String,
         start_ms: f64,
         duration_ms: f64,
+        #[serde(default)]
+        shape: ShapeKind,
         rect: Rect,
         outline: String,
         fill: Option<String>,
@@ -425,6 +451,13 @@ pub fn validate(edit: &Edit) -> Vec<Problem> {
                 item_id: None,
             };
             let label = format!("The clip \"{}\" on the {} track", clip.name, track.name);
+            if clip.placement.is_some_and(|p| !p.is_valid()) {
+                out.push(here(
+                    "bad-rect",
+                    Severity::Error,
+                    format!("{label} has a place on the picture that is not a rectangle inside it."),
+                ));
+            }
 
             if ![clip.start_ms, clip.source_start_ms, clip.source_end_ms, clip.fade_in_ms, clip.fade_out_ms]
                 .iter()
@@ -457,6 +490,15 @@ pub fn validate(edit: &Edit) -> Vec<Problem> {
                     format!("{label} uses a recording or file that this edit does not know about."),
                 )),
                 Some(source) => {
+                    if clip.placement.is_some()
+                        && matches!(source.kind, SourceKind::Microphone | SourceKind::SystemAudio | SourceKind::Audio)
+                    {
+                        out.push(here(
+                            "placement-not-allowed",
+                            Severity::Error,
+                            format!("{label} holds {}, which is sound only, so it cannot have a place on the picture. Take the place away.", source.name),
+                        ));
+                    }
                     if !track.kind.allows(source.kind) {
                         out.push(here(
                             "source-not-allowed",
@@ -822,10 +864,10 @@ pub fn parse_edit(text: &str) -> Result<ParsedEdit, String> {
         return Err(format!("This is not an OpenStage Capture edit file: its format should be \"{EDIT_FORMAT}\"."));
     }
     match value.get("schemaVersion").and_then(|v| v.as_str()) {
-        Some(v) if v.starts_with("0.1.") || v.starts_with("0.2.") => {}
+        Some(v) if v.starts_with("0.1.") || v.starts_with("0.2.") || v.starts_with("0.3.") => {}
         other => {
             return Err(format!(
-                "This edit file is version {}, and this program reads versions 0.1 and 0.2. It was probably made by a newer program.",
+                "This edit file is version {}, and this program reads versions 0.1, 0.2 and 0.3. It was probably made by a newer program.",
                 other.unwrap_or("(missing)")
             ))
         }
@@ -927,7 +969,7 @@ mod tests {
             ("nonsense", "not a readable edit file"),
             ("[]", "not an OpenStage Capture edit file"),
             (r#"{"format":"openstage-capture-edit"}"#, "version (missing)"),
-            (r#"{"format":"openstage-capture-edit","schemaVersion":"0.3.0"}"#, "version 0.3.0"),
+            (r#"{"format":"openstage-capture-edit","schemaVersion":"0.4.0"}"#, "version 0.4.0"),
             (r#"{"format":"openstage-capture-edit","schemaVersion":"0.1.0"}"#, "cannot be read"),
         ] {
             let message = parse_edit(text).unwrap_err();

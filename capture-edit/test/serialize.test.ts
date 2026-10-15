@@ -10,6 +10,7 @@ import {
   setImageText,
   splitAt,
   EDIT_SCHEMA_VERSION,
+  setPlacement,
   type Model,
 } from "../src/index.ts";
 import { LOGO, MUSIC, ok, sample } from "./helpers.ts";
@@ -58,7 +59,7 @@ test("a file that is not an edit, or is a version this program does not read, is
     ["not json at all", /not a readable edit file/],
     ["[]", /not an OpenStage Capture edit file/],
     ['{"format":"something-else"}', /not an OpenStage Capture edit file/],
-    ['{"format":"openstage-capture-edit","schemaVersion":"0.3.0"}', /version 0.3.0, and this program reads versions 0.1 and 0.2/],
+    ['{"format":"openstage-capture-edit","schemaVersion":"0.4.0"}', /version 0.4.0, and this program reads versions 0.1, 0.2 and 0.3/],
     ['{"format":"openstage-capture-edit"}', /version undefined/],
     ['{"format":"openstage-capture-edit","schemaVersion":"0.1.0","nextId":1,"sources":[],"tracks":[{"id":"t","kind":"hologram","name":"x","clips":[]}]}', /does not know: hologram/],
     ['{"format":"openstage-capture-edit","schemaVersion":"0.1.0","nextId":"x","sources":[],"tracks":[]}', /nextId is missing or is not a number/],
@@ -78,4 +79,19 @@ test("a file with mistakes in it reads, and brings its problems with it", () => 
   assert.ok(r.ok);
   assert.ok(r.problems.some((p) => p.code === "bad-time"));
   assert.equal(isSound(r), false);
+});
+
+test("a picture's place is saved after its fades, is read back, and an older file without one reads as before", () => {
+  const s = sample();
+  const placed = ok(setPlacement(s.model, s.screen, { x: 7500, y: 7000, width: 2200, height: 2200 }));
+  const text = serialize(placed.model);
+  assert.match(text, /"fadeOutMs": 0,\n\s+"placement": \{\n\s+"x": 7500,/);
+  const back = parse(text);
+  assert.ok(back.ok);
+  assert.deepEqual(back.model, placed.model);
+  assert.equal(serialize(back.model), text, "saving again gives the same bytes");
+  const without = parse(serialize(s.model));
+  assert.ok(without.ok);
+  assert.ok(without.model.tracks.every((t) => t.clips.every((c) => c.placement === undefined)));
+  assert.doesNotMatch(serialize(s.model), /placement/);
 });

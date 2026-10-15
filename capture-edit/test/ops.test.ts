@@ -16,6 +16,7 @@ import {
   setFades,
   setImageText,
   setMuted,
+  setPlacement,
   setVolume,
   splitAt,
   trimEnd,
@@ -441,4 +442,52 @@ test("MUSIC and tracks: a second track of a kind is numbered", () => {
   const t = addTrack(s.model, "audio");
   assert.equal(t.message, 'Added the track "Audio 2".');
   assert.equal(addTrack(s.model, "audio", "Narration").message, 'Added the track "Narration".');
+});
+
+// ---- where a picture sits (version 0.3) ----
+
+test("a picture can be given a place on the frame, told in words, and the place can be taken away again", () => {
+  const s = sample();
+  const place = { x: 7500, y: 7000, width: 2200, height: 2200 };
+  const set = ok(setPlacement(s.model, s.screen, place));
+  assert.match(set.message, /^Clip "Lesson" is now drawn in the bottom right of the picture, 22 percent of its width and 22 percent of its height\.$/);
+  assert.equal(set.label, "set place");
+  assert.deepEqual(clipOf(set.model, s.screen).placement, place);
+  assert.equal(validate(set.model).filter((p) => p.severity === "error").length, 0);
+
+  const same = ok(setPlacement(set.model, s.screen, { ...place }));
+  assert.equal(same.model, set.model, "nothing changed, so the same model comes back");
+  assert.equal(same.label, "");
+
+  const cleared = ok(setPlacement(set.model, s.screen, null));
+  assert.equal(clipOf(cleared.model, s.screen).placement, undefined);
+  assert.match(cleared.message, /drawn where it is by default again/);
+  assert.equal(ok(setPlacement(cleared.model, s.screen, null)).label, "", "taking away what is not there changes nothing");
+});
+
+test("a place that is not a rectangle inside the picture is refused and changes nothing", () => {
+  const s = sample();
+  for (const bad of [
+    { x: 9000, y: 0, width: 2500, height: 2500 },
+    { x: -1, y: 0, width: 100, height: 100 },
+    { x: 0, y: 0, width: 0, height: 100 },
+    { x: 0.5, y: 0, width: 100, height: 100 },
+  ]) {
+    assert.match(refused(setPlacement(s.model, s.screen, bad)), /not a rectangle inside the picture/);
+  }
+});
+
+test("sound has no place on the picture", () => {
+  const s = sample();
+  assert.match(refused(setPlacement(s.model, s.mic, { x: 0, y: 0, width: 5000, height: 5000 })), /is sound only/);
+  assert.match(refused(setPlacement(s.model, "clip-404", { x: 0, y: 0, width: 5000, height: 5000 })), /no clip with the id clip-404/);
+});
+
+test("splitting a picture with a place keeps the place on both pieces", () => {
+  const s = sample();
+  const placed = ok(setPlacement(s.model, s.screen, { x: 100, y: 100, width: 3000, height: 3000 }));
+  const split = ok(splitAt(placed.model, 30_000, s.screenTrack));
+  const pieces = clipsOn(split.model, s.screenTrack);
+  assert.equal(pieces.length, 2);
+  assert.ok(pieces.every((c) => c.placement?.width === 3000));
 });

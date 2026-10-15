@@ -10,9 +10,15 @@
 //! Nothing here reads or writes a file.
 
 mod audio;
+mod canvas;
+mod compose;
 mod plan;
+mod text;
 mod zoom;
 
 pub use audio::{gain_at, mix_block, AudioSpan, StereoFrames};
+pub use canvas::{Canvas, Picture, PixelRect, Rgb, SourceRect};
+pub use compose::{compose_frame, PictureSource, DEFAULT_WEBCAM_PLACE};
 pub use plan::{plan, FrameRecipe, Layer, RenderPlan, RenderSettings, VideoSpan};
+pub use text::{line_start, padding, wrap_lines, BlockText, TextFit, TextRenderer, TextRequest, LINE_SPACING};
 pub use zoom::{zoom_view, ZoomSpan, ZoomView};

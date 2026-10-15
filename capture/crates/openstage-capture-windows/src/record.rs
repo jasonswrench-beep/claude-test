@@ -16,6 +16,7 @@ use crate::region::{CroppedSource, Region};
 use crate::report::{LookStats, PictureWork, RecordingReport, SlowMoment};
 use crate::sound::{Sound, SoundPlan, SoundTake, MIXED_BITRATE_KBPS};
 use crate::video::{AudioSpec, Pacer};
+use crate::window::{fit_into, recording_size, FittedSource, WindowInfo};
 use crate::{CaptureWork, Frame, FrameSource, Outline, Platform, SinkSpec, VideoPlatform, VideoSink};
 use openstage_capture::{MediaFactory, SessionConfig, SessionError, TakeMedia};
 use openstage_capture_project::{MediaFile, RegionInfo};
@@ -46,6 +47,8 @@ pub struct ScreenMedia {
     region: Option<Region>,
     /// Whether to show a thin frame around the region on the screen while it is recorded.
     outline: bool,
+    /// Record just this window instead of a display, if set.
+    window: Option<WindowInfo>,
     sound: Option<Sound>,
     /// What the most recent take did, filled in when it finishes.
     report: Rc<RefCell<Option<RecordingReport>>>,
@@ -71,6 +74,7 @@ impl ScreenMedia {
             bitrate_kbps,
             region: None,
             outline: false,
+            window: None,
             sound: None,
             report: Rc::new(RefCell::new(None)),
             prepared: RefCell::new(None),
@@ -87,6 +91,14 @@ impl ScreenMedia {
     /// display when the countdown starts, and an odd width or height is made one pixel smaller.
     pub fn with_region(mut self, region: Region) -> Self {
         self.region = Some(region);
+        self
+    }
+
+    /// Record just this window instead of a display. The video has the size the window has when recording
+    /// begins (made even); if the window is resized, its picture is made smaller to fit. If the window is
+    /// closed, the recording stops at once and keeps everything recorded until then.
+    pub fn with_window(mut self, window: WindowInfo) -> Self {
+        self.window = Some(window);
         self
     }
 
@@ -115,7 +127,10 @@ impl ScreenMedia {
 
 impl MediaFactory for ScreenMedia {
     fn source_id(&self) -> String {
-        format!("screen:{}", self.display)
+        match &self.window {
+            Some(window) => format!("window:{}", window.process),
+            None => format!("screen:{}", self.display),
+        }
     }
 
     fn media_files(&self) -> Vec<MediaFile> {
@@ -227,6 +242,15 @@ impl MediaFactory for ScreenMedia {
     }
 }
 
+/// What starting to capture gives: the pictures, the frame shown round a region (if any), how long starting
+/// took, and the first picture.
+struct Started {
+    source: Box<dyn FrameSource>,
+    outline: Option<Outline>,
+    capture_started: Duration,
+    first: Frame,
+}
+
 /// Everything that can be started before the take's folder is known.
 struct Prepared {
     source: Box<dyn FrameSource>,
@@ -242,6 +266,34 @@ impl ScreenMedia {
         let started = Instant::now();
         self.video.start_media().map_err(|e| media_error(format!("Windows' video tools would not start: {e}")))?;
         let tools_ready = started.elapsed();
+        let Started { source, outline, capture_started, first } = match &self.window {
+            Some(window) => self.prepare_window(window, started)?,
+            None => self.prepare_display(started)?,
+        };
+        let first_picture = started.elapsed();
+        if first.width % 2 != 0 || first.height % 2 != 0 {
+            return Err(media_error(format!(
+                "The display is {} by {} pixels. H.264 video needs an even width and height, and trimming is not built yet.",
+                first.width, first.height
+            )));
+        }
+        // Start listening before the video file exists, so a microphone that cannot be opened leaves nothing behind.
+        let listening = match &self.sound {
+            Some(sound) => Some(sound.open()?),
+            None => None,
+        };
+        eprintln!(
+            "preparing: video tools {} ms, screen capture started {} ms, first picture {} ms, sound listening {} ms (counted from the start of preparing)",
+            tools_ready.as_millis(),
+            capture_started.as_millis(),
+            first_picture.as_millis(),
+            started.elapsed().as_millis()
+        );
+        Ok(Prepared { source, first, listening, outline })
+    }
+
+    /// Start capturing the chosen display (or the part of it chosen as a region) and wait for its first picture.
+    fn prepare_display(&self, started: Instant) -> Result<Started, SessionError> {
         let displays = self.screen.list_displays().map_err(media_error)?;
         let display = displays.iter().find(|d| d.number == self.display).ok_or_else(|| {
             media_error(format!("There is no Display {}. Choose a number from 1 to {}.", self.display, displays.len()))
@@ -268,26 +320,38 @@ impl ScreenMedia {
                 "No picture arrived from the screen within 3 seconds. Windows only sends a picture when something changes: try again while moving a window.",
             )
         })?;
-        let first_picture = started.elapsed();
-        if first.width % 2 != 0 || first.height % 2 != 0 {
-            return Err(media_error(format!(
-                "The display is {} by {} pixels. H.264 video needs an even width and height, and trimming is not built yet.",
-                first.width, first.height
-            )));
-        }
-        // Start listening before the video file exists, so a microphone that cannot be opened leaves nothing behind.
-        let listening = match &self.sound {
-            Some(sound) => Some(sound.open()?),
-            None => None,
+        Ok(Started { source, outline, capture_started, first })
+    }
+
+    /// Start capturing the chosen window and wait for its first picture. The video gets that picture's size
+    /// (made even); a window that is later resized is fitted into it.
+    fn prepare_window(&self, window: &WindowInfo, started: Instant) -> Result<Started, SessionError> {
+        let source = self
+            .screen
+            .start_window_capture(window, false)
+            .map_err(|e| media_error(format!("Could not start capturing the window {}: {e}", window.describe())))?;
+        let capture_started = started.elapsed();
+        let mut source = source;
+        let first = source.next_frame(Duration::from_secs(3)).ok_or_else(|| {
+            media_error(format!(
+                "No picture arrived from the window {} within 3 seconds. Windows only sends a picture when something in the window changes, and none while it is minimized: restore it and move something in it, then try again.",
+                window.describe()
+            ))
+        })?;
+        let (width, height) = recording_size(first.width, first.height).map_err(media_error)?;
+        let first = if (first.width, first.height) == (width, height) {
+            first
+        } else {
+            let fitted = fit_into(&first, width, height, Vec::new());
+            source.recycle(first);
+            fitted
         };
-        eprintln!(
-            "preparing: video tools {} ms, screen capture started {} ms, first picture {} ms, sound listening {} ms (counted from the start of preparing)",
-            tools_ready.as_millis(),
-            capture_started.as_millis(),
-            first_picture.as_millis(),
-            started.elapsed().as_millis()
-        );
-        Ok(Prepared { source, first, listening, outline })
+        Ok(Started {
+            source: Box::new(FittedSource::new(source, width, height)),
+            outline: None,
+            capture_started,
+            first,
+        })
     }
 
     /// Make and throw away a small video file, so the encoder is awake when the real one is made. Any
@@ -478,6 +542,10 @@ impl TakeMedia for ScreenTake {
                 waiting += 1;
             }
             self.most_waiting = self.most_waiting.max(waiting);
+            // A window that was closed will send no more pictures: stop, keeping everything recorded so far.
+            if let Some(why) = source.ended() {
+                return Err(media_error(why));
+            }
         }
         if let Some(beat) = self.pacer.due(Duration::from_millis(media_ms)) {
             self.write_beat(beat)?;
@@ -1589,5 +1657,168 @@ mod tests {
         assert!(!of(State::Recording).is_empty() && of(State::Recording).iter().all(|n| *n == 1), "{:?}", watch.during);
         assert!(of(State::Stopped).iter().all(|n| *n == 0), "gone once the take has ended: {:?}", watch.during);
         assert_eq!(showing.get(), 0);
+    }
+
+    // ---- one window ----
+
+    /// A window that delivers a picture every other time it is asked, at sizes taken in turn from `sizes`
+    /// (the last one for ever), and is closed after `close_after` pictures if that is set.
+    struct WindowFrames {
+        sizes: Vec<(u32, u32)>,
+        asked: usize,
+        delivered: usize,
+        close_after: Option<usize>,
+    }
+    impl FrameSource for WindowFrames {
+        fn next_frame(&mut self, _: Duration) -> Option<Frame> {
+            self.asked += 1;
+            if self.asked & 1 == 0 {
+                return None;
+            }
+            let (width, height) = self.sizes[self.delivered.min(self.sizes.len() - 1)];
+            self.delivered += 1;
+            Some(Frame {
+                width,
+                height,
+                t_ms: 0,
+                captured_100ns: None,
+                arrived_100ns: None,
+                bgra: vec![9; (width * height * 4) as usize],
+            })
+        }
+        fn dropped(&self) -> u64 {
+            0
+        }
+        fn ended(&self) -> Option<String> {
+            self.close_after.filter(|n| self.delivered >= *n).map(|_| {
+                "The window Untitled - Notepad was closed. Everything recorded until then has been kept.".into()
+            })
+        }
+    }
+
+    struct WindowScreen {
+        sizes: Vec<(u32, u32)>,
+        close_after: Option<usize>,
+    }
+    impl Platform for WindowScreen {
+        fn windows_version(&self) -> Result<WindowsVersion, ScreenError> {
+            Ok(WindowsVersion { major: 10, minor: 0, build: 26200 })
+        }
+        fn capture_supported(&self) -> bool {
+            true
+        }
+        fn list_displays(&self) -> Result<Vec<DisplayInfo>, ScreenError> {
+            Ok(vec![])
+        }
+        fn start_display_capture(&self, _: &DisplayInfo, _: bool) -> Result<Box<dyn FrameSource>, ScreenError> {
+            Err(ScreenError::Failed("a window is recorded here, not a display".into()))
+        }
+        fn start_window_capture(&self, _: &WindowInfo, _: bool) -> Result<Box<dyn FrameSource>, ScreenError> {
+            Ok(Box::new(WindowFrames {
+                sizes: self.sizes.clone(),
+                asked: 0,
+                delivered: 0,
+                close_after: self.close_after,
+            }))
+        }
+    }
+
+    fn notepad() -> WindowInfo {
+        WindowInfo {
+            number: 1,
+            handle: 77,
+            title: "Untitled - Notepad".into(),
+            process: "notepad.exe".into(),
+            width: 201,
+            height: 121,
+        }
+    }
+
+    fn window_media(screen: WindowScreen) -> (ScreenMedia, Files) {
+        let files = Files::default();
+        let video = FakeVideo { files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
+        (ScreenMedia::new(Box::new(screen), Box::new(video), 1, 30, 8000).with_window(notepad()), files)
+    }
+
+    #[test]
+    fn a_window_is_recorded_at_its_own_even_size_and_named_in_take_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(1000);
+        let (media, files) = window_media(WindowScreen { sizes: vec![(201, 121)], close_after: None });
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new())
+            .unwrap();
+        assert!(out.ok);
+        let files = files.0.borrow();
+        let f = files[0].borrow();
+        assert_eq!(f.size, (200, 120), "the odd size is made even");
+        assert!(!f.pictures.is_empty() && f.pictures.iter().all(|p| (p.0, p.1) == (200, 120)), "{:?}", f.pictures);
+        assert_eq!(read_take(&cfg.project, 1).unwrap().sources, vec!["window:notepad.exe".to_string()]);
+    }
+
+    #[test]
+    fn a_window_that_is_resized_while_recording_keeps_the_size_of_the_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(1500);
+        // Its own size for a while, then much bigger, then smaller than it began.
+        let sizes: Vec<(u32, u32)> =
+            std::iter::repeat_n((200, 120), 5).chain(std::iter::repeat_n((600, 360), 5)).chain([(64, 64)]).collect();
+        let (media, files) = window_media(WindowScreen { sizes, close_after: None });
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new()).unwrap();
+        let files = files.0.borrow();
+        let f = files[0].borrow();
+        assert_eq!(f.size, (200, 120));
+        assert!(f.pictures.len() > 30);
+        assert!(
+            f.pictures.iter().all(|p| (p.0, p.1) == (200, 120)),
+            "every picture written is the size of the video, whatever the window did"
+        );
+    }
+
+    #[test]
+    fn a_window_that_is_closed_ends_the_recording_with_its_plain_message_and_keeps_what_was_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        // A time limit, so that if the closed window were not noticed the test would fail, not run for ever.
+        cfg.max_duration_ms = Some(5000);
+        let (media, files) = window_media(WindowScreen { sizes: vec![(200, 120)], close_after: Some(12) });
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        assert!(!out.ok);
+        let (code, message) = sink
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::Error { code, message, fatal: true } => Some((code.clone(), message.clone())),
+                _ => None,
+            })
+            .expect("a fatal error event");
+        assert_eq!(code, "media-failed");
+        assert!(message.contains("was closed") && message.contains("has been kept"), "{message}");
+        let files = files.0.borrow();
+        let f = files[0].borrow();
+        assert!(f.finished, "the video was completed");
+        assert!(!f.pictures.is_empty(), "what was recorded before the window closed is in it");
+    }
+
+    #[test]
+    fn a_window_that_is_too_small_is_refused_in_words_and_makes_no_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let (media, files) = window_media(WindowScreen { sizes: vec![(40, 700)], close_after: None });
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        assert!(!out.ok);
+        let message = sink
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::Error { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .expect("an error event");
+        assert!(message.contains("at least 64 by 64") && message.contains("40 by 700"), "{message}");
+        assert!(files.0.borrow().is_empty());
     }
 }

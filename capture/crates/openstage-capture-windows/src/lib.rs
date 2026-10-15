@@ -43,6 +43,9 @@ mod win_region;
 mod win_setup;
 #[cfg(windows)]
 mod win_video;
+#[cfg(windows)]
+mod win_windows;
+mod window;
 
 pub use audio::{
     choose_device, describe_devices, mix, peak, run_audio_test, run_audio_test_with, run_find_output,
@@ -67,6 +70,7 @@ pub use region_editor::{Handle as RegionHandle, PickOutcome, RegionEditor};
 pub use region_paint::{picker_overlay, recording_frame, Canvas};
 #[cfg(windows)]
 pub use win_region::pick_region;
+pub use window::{choose_window, fit_into, number_windows, recording_size, FittedSource, WindowInfo};
 
 /// Let the author choose a rectangle of a display by dragging it, and by typing four numbers. Only works
 /// on Windows.
@@ -223,6 +227,11 @@ pub trait FrameSource {
     fn work(&self) -> CaptureWork {
         CaptureWork::default()
     }
+    /// Whether the thing being captured has gone for good (a window that was closed), and what to tell the
+    /// author if so. The recording stops at once and keeps everything recorded until then.
+    fn ended(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A thin frame on the screen around the region being recorded. It stays for as long as this value is
@@ -240,6 +249,19 @@ pub trait Platform {
         display: &DisplayInfo,
         with_cursor: bool,
     ) -> Result<Box<dyn FrameSource>, ScreenError>;
+    /// The windows that can be recorded, numbered from 1 in the order Windows stacks them (the one in front
+    /// first). Minimized and hidden windows, and windows without a title, are left out.
+    fn list_windows(&self) -> Result<Vec<WindowInfo>, ScreenError> {
+        Err(ScreenError::NotWindows)
+    }
+    /// Start capturing just one window.
+    fn start_window_capture(
+        &self,
+        _window: &WindowInfo,
+        _with_cursor: bool,
+    ) -> Result<Box<dyn FrameSource>, ScreenError> {
+        Err(ScreenError::NotWindows)
+    }
     /// Show a thin frame around `region` of `display` for as long as the returned value is kept, so the
     /// author can see what is being recorded. It is left out of the video. `None` when it cannot be shown
     /// (or on a system that cannot).

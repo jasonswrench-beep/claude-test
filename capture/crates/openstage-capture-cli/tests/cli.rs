@@ -659,3 +659,13 @@ fn choosing_a_region_says_it_needs_windows_and_exits_with_2() {
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.contains("has 3 numbers"), "{text}");
 }
+
+#[cfg(not(windows))]
+#[test]
+fn listing_windows_says_it_needs_windows_and_exits_with_2() {
+    let out = Command::new(BIN).args(["windows", "--plain"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Could not list the open windows"), "{text}");
+    assert_eq!(text.lines().last(), Some("At least one check found a problem."));
+}

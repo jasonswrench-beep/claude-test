@@ -176,6 +176,9 @@ impl FrameSource for CroppedSource {
     fn work(&self) -> CaptureWork {
         self.inner.work()
     }
+    fn ended(&self) -> Option<String> {
+        self.inner.ended()
+    }
 }
 
 #[cfg(test)]

@@ -64,6 +64,17 @@ echo Enter for the default. To record no computer sound, type none.
 set "OUT="
 set /p OUT=Sound output number: 
 
+echo.
+echo WILL YOU BE AWAY? Type Y and press Enter to leave the computer alone
+echo for the whole test. The script then keeps Windows awake, plays a
+echo gentle looping sound through your default sound output, and shows a
+echo window with things moving in it, so the recording has real picture
+echo and sound without you. For that sound to be recorded, answer the
+echo sound output question above with just Enter. Press Enter alone if
+echo you will use the computer yourself, as before.
+set "AWAY="
+set /p AWAY=Away, Y or Enter: 
+
 set /a LENGTH_MS=%MINUTES_N%*60000
 set /a PAUSE_AT=5000+%LENGTH_MS%/2
 set /a RESUME_AT=%PAUSE_AT%+20000
@@ -78,6 +89,22 @@ if exist "%~dp0long-test-output" (
   pause >nul
   rmdir /s /q "%~dp0long-test-output"
 )
+if /i not "%AWAY%"=="Y" goto begin_recording
+del "%TEMP%\openstage-helper-ready.txt" >nul 2>nul
+del "%~dp0hands-free-log.txt" >nul 2>nul
+set /a HELPER_MINUTES=%MINUTES_N%+3
+start "" /min powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0tools\hands-free-helper.ps1" -Minutes %HELPER_MINUTES% -LogPath "%~dp0hands-free-log.txt"
+echo Getting the test picture and sound ready. This can take up to a minute.
+set /a WAITED=0
+:wait_for_helper
+if exist "%TEMP%\openstage-helper-ready.txt" goto begin_recording
+if exist "%~dp0hands-free-log.txt" goto helper_failed
+if %WAITED% GEQ 120 goto helper_failed
+timeout /t 2 /nobreak >nul
+set /a WAITED=%WAITED%+2
+goto wait_for_helper
+
+:begin_recording
 echo It starts in 8 seconds.
 timeout /t 8 /nobreak >nul
 echo Recording now. The result appears here when it finishes.
@@ -108,6 +135,14 @@ echo   PASS. The recorder kept up for the whole recording.
 echo ------------------------------------------------------------
 echo.
 echo Please send me the lines above anyway. The exact numbers matter.
+goto done
+
+:helper_failed
+echo.
+echo The test picture and sound could not be started, so nothing was
+echo recorded. If a file hands-free-log.txt appeared in this folder, please
+echo send it to me. You can run this script again and press Enter at the
+echo question about being away, then use the computer yourself.
 goto done
 
 :bad_minutes

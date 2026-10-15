@@ -1,0 +1,18 @@
+{
+  "name": "openstage-capture-timeline",
+  "version": "0.1.0",
+  "description": "The editing screens of OpenStage Capture: an accessible clip list (a table you can edit with the keyboard) over the edit model. TypeScript, plain DOM, no runtime dependencies.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "check": "tsc -p .",
+    "test": "node --test \"test/*.test.ts\"",
+    "demo": "node demo/serve.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.8"
+  }
+}

@@ -24,7 +24,7 @@ must give the same findings.
 | `src/history.ts` | Undo and redo, with a drag as one step |
 | `src/validate.ts` | The checks, with codes shared with the Rust reader |
 | `src/serialize.ts` | Saving and reading `edit.json` |
-| `src/preview.ts` | The clip list, a sentence for a clip, the described preview |
+| `src/preview.ts` | The clip list, a sentence for a clip (and `describeRows`, one for every row in a single pass, which the clip list screen uses), the described preview |
 | `test/` | The tests, including 150 random editing sessions that must stay sound and undo exactly |
 | `fixtures/` | Shared examples and `expected.json`, read by the TypeScript and the Rust tests |
 

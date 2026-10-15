@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { COLUMNS, addClip, describeAt, describeClip, listCaption, listRows, setFades, setMuted, setVolume, splitAt, trimStart } from "../src/index.ts";
+import { readdirSync, readFileSync } from "node:fs";
+import { COLUMNS, addClip, describeAt, describeClip, describeRows, listCaption, listRows, parse, setFades, setMuted, setVolume, splitAt, trimStart } from "../src/index.ts";
 import { LOGO, ok, sample } from "./helpers.ts";
 
 test("the clip list has a row for every clip, in words, with a caption", () => {
@@ -57,4 +58,26 @@ test("what is on screen at a moment is described in words, with what the rest of
 
 test("an edit with no tracks is described too", () => {
   assert.match(describeAt({ ...sample().model, tracks: [] }, 0), /The edit has no tracks yet\./);
+});
+
+test("describeRows gives, in one pass, the same sentence for every row as describeClip gives one at a time", () => {
+  const s = sample();
+  const models = [s.model, ok(splitAt(s.model, 30_000)).model];
+  const dir = new URL("../fixtures/", import.meta.url);
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".json") && f !== "expected.json")) {
+    const result = parse(readFileSync(new URL(file, dir), "utf8"));
+    if (result.ok) models.push(result.model);
+  }
+  let checked = 0;
+  for (const model of models) {
+    const sentences = describeRows(model);
+    const rows = listRows(model);
+    if (new Set(rows.map((r) => r.clipId)).size !== rows.length) continue; // the example with the same id twice
+    assert.equal(sentences.size, rows.length);
+    for (const row of rows) {
+      assert.equal(sentences.get(row.clipId), describeClip(model, row.clipId));
+      checked += 1;
+    }
+  }
+  assert.ok(checked > 40, `only ${checked} rows were compared`);
 });

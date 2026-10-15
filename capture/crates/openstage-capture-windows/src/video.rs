@@ -632,22 +632,31 @@ fn size_text(info: &VideoInspection) -> String {
     info.size.map(|(w, h)| format!(", {w} by {h} pixels")).unwrap_or_default()
 }
 
-/// Compare the size of the pictures Windows reads back from a saved recording with the size that was asked
-/// for (a region). A file that does not say its size is reported, not failed: the size is a convenience check.
-pub fn compare_size_readback(read: &Result<VideoInspection, ScreenError>, wanted: (u32, u32)) -> Check {
+/// What a saved video's size is compared with, for the words of the finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeOf {
+    /// The part of the display that was asked to be recorded.
+    Region,
+    /// The size an exported video was made at.
+    Export,
+}
+
+/// Compare the size of the pictures Windows reads back from a saved video with the size that was asked
+/// for (a region, or the size an export was made at). A file that does not say its size is reported, not failed:
+/// the size is a convenience check.
+pub fn compare_size_readback(read: &Result<VideoInspection, ScreenError>, wanted: (u32, u32), what: SizeOf) -> Check {
+    let (matches, differs) = match what {
+        SizeOf::Region => ("the size of the region", "the region is"),
+        SizeOf::Export => ("the size it was made at", "it was made at"),
+    };
     match read {
-        Ok(VideoInspection { size: Some(got), .. }) if *got == wanted => check(
-            "video-size",
-            true,
-            format!("The saved video is {} by {} pixels, the size of the region.", got.0, got.1),
-        ),
+        Ok(VideoInspection { size: Some(got), .. }) if *got == wanted => {
+            check("video-size", true, format!("The saved video is {} by {} pixels, {matches}.", got.0, got.1))
+        }
         Ok(VideoInspection { size: Some(got), .. }) => check(
             "video-size",
             false,
-            format!(
-                "The saved video is {} by {} pixels, but the region is {} by {}.",
-                got.0, got.1, wanted.0, wanted.1
-            ),
+            format!("The saved video is {} by {} pixels, but {differs} {} by {}.", got.0, got.1, wanted.0, wanted.1),
         ),
         Ok(_) => check(
             "video-size",
@@ -1448,13 +1457,27 @@ mod tests {
     #[test]
     fn the_size_of_a_saved_video_is_compared_with_the_region() {
         let with = |size| Ok(VideoInspection { frames: 10, duration_ms: 300, audio: None, size });
-        let ok = compare_size_readback(&with(Some((1280, 720))), (1280, 720));
+        let ok = compare_size_readback(&with(Some((1280, 720))), (1280, 720), SizeOf::Region);
         assert!(ok.ok && ok.message.contains("1280 by 720 pixels, the size of the region"), "{}", ok.message);
-        let wrong = compare_size_readback(&with(Some((1920, 1080))), (1280, 720));
+        let wrong = compare_size_readback(&with(Some((1920, 1080))), (1280, 720), SizeOf::Region);
         assert!(!wrong.ok && wrong.message.contains("1920 by 1080") && wrong.message.contains("region is 1280 by 720"));
-        let unknown = compare_size_readback(&with(None), (1280, 720));
+        let unknown = compare_size_readback(&with(None), (1280, 720), SizeOf::Region);
         assert!(unknown.ok && unknown.message.contains("so the size was not compared"), "{}", unknown.message);
-        let failed = compare_size_readback(&Err(ScreenError::Failed("nope".into())), (1280, 720));
+        let failed = compare_size_readback(&Err(ScreenError::Failed("nope".into())), (1280, 720), SizeOf::Region);
         assert!(!failed.ok && failed.message.contains("nope"));
+        // An export says "made at", not "the region": there is no region in an export.
+        let export = compare_size_readback(&with(Some((1920, 1080))), (1920, 1080), SizeOf::Export);
+        assert!(
+            export.ok && export.message.contains("1920 by 1080 pixels, the size it was made at"),
+            "{}",
+            export.message
+        );
+        assert!(!export.message.contains("region"));
+        let export_wrong = compare_size_readback(&with(Some((1920, 1088))), (1920, 1080), SizeOf::Export);
+        assert!(
+            !export_wrong.ok && export_wrong.message.contains("but it was made at 1920 by 1080"),
+            "{}",
+            export_wrong.message
+        );
     }
 }

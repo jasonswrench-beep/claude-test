@@ -150,7 +150,7 @@ pub use timing::{now_100ns, run_timing_test, run_timing_test_with, Spread, Timin
 pub use video::{
     compare_audio_readback, compare_readback, compare_size_readback, compare_webcam_readback, plain_name,
     run_crash_report, run_video_test, run_video_test_with, system_video_platform, AudioInspection, AudioSpec,
-    EncoderInfo, Pacer, SinkSpec, SinkWork, VideoInspection, VideoPlatform, VideoSink, VideoTestOptions,
+    EncoderInfo, Pacer, SinkSpec, SinkWork, SizeOf, VideoInspection, VideoPlatform, VideoSink, VideoTestOptions,
     CPU_TARGET_PERCENT,
 };
 

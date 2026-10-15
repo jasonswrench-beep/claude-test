@@ -37,8 +37,8 @@ use openstage_capture_windows::{
     run_video_test, summarize, system_audio_platform, system_camera_platform, system_cue_player,
     system_interaction_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check,
     CueTestOptions, DeviceKind, FindOutputOptions, InteractionLevel, Mix, PickRegionOptions, PictureReader, Region,
-    ScreenMedia, ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo, MIC_FILE,
-    SCREEN_FILE, SYSTEM_FILE, WEBCAM_FILE,
+    ScreenMedia, ScreenTestOptions, SetupOptions, SizeOf, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo,
+    MIC_FILE, SCREEN_FILE, SYSTEM_FILE, WEBCAM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -920,7 +920,7 @@ fn main() -> ExitCode {
                         let inspection = system_video_platform().inspect_video(&dir.join(SCREEN_FILE));
                         let mut findings: Vec<Check> = Vec::new();
                         if let Some(r) = chosen_region {
-                            findings.push(compare_size_readback(&inspection, (r.width, r.height)));
+                            findings.push(compare_size_readback(&inspection, (r.width, r.height), SizeOf::Region));
                         }
                         if !sound_plan.is_empty() {
                             findings.push(compare_audio_readback(&inspection, outcome.duration_ms));

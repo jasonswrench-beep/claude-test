@@ -8,7 +8,7 @@
 
 use crate::export::{export, ExportError, ExportJob, ExportReport, ExportTools, Progress};
 use crate::make_edit::{edit_from_take, EditOptions};
-use crate::video::{compare_audio_readback, compare_readback, compare_size_readback};
+use crate::video::{compare_audio_readback, compare_readback, compare_size_readback, SizeOf};
 use crate::{check, Check};
 use openstage_capture_project::{parse_edit, Edit, EditSeverity};
 use openstage_capture_render::RenderSettings;
@@ -147,7 +147,7 @@ pub fn run_render_with(
         read.as_ref().map(Clone::clone).map_err(|e| crate::ScreenError::Failed(e.to_string())),
         recorded_ms,
     )];
-    findings.push(compare_size_readback(&read, (finished.width, finished.height)));
+    findings.push(compare_size_readback(&read, (finished.width, finished.height), SizeOf::Export));
     if finished.sound {
         findings.push(compare_audio_readback(&read, recorded_ms));
     }

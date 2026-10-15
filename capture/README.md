@@ -11,8 +11,9 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 | Run on the owner's Windows computer, and working | Built, not yet run on Windows | Not built yet |
 |---|---|---|
 | The conversation with OpenStage (the protocol) | Repairing the sound files after a crash (tested here with made-up files) | Click-to-choose window picker, hiding chosen windows from the recording |
-| The capture project folder and its crash-safe files | Recording a webcam into its own file (`--camera`) | Cursor and click effects, suggested zooms (they will read the interaction log) |
+| The capture project folder and its crash-safe files | | Cursor and click effects, suggested zooms (they will read the interaction log) |
 | Countdown, record, pause, resume, stop, markers, start again | Turning a recording or an edit into a finished MP4 (`render`) | The editor panels inside OpenStage |
+| The webcam recorded into its own file beside the screen and the voice (`--camera`): the recorder's own checks passed on a Windows work PC on 2026-10-15; how the picture looks, and whether it lines up with a voice, are not confirmed yet | | |
 | Killing the program mid-recording and repairing it | Noting the cursor, clicks, windows, clicked item names and keys (`--interactions`, off unless asked), and reading back and deleting that log (`interactions`) | Captions, audio description, step-by-step output |
 | Capturing a real screen, and encoding it as H.264 video | Warning when the microphone hears the speakers (an echo); tested only on made-up sound | |
 | A crash during a video recording loses about a second | Long-recording numbers (skipped pictures, processor and memory use, sound against picture), the timing test, and the crash test of the real recorder with sound | Placing sound and picture by their capture times, if the long test shows it is needed |

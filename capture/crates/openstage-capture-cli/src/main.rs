@@ -32,12 +32,13 @@ use openstage_capture_windows::{
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, choose_camera, choose_window,
     compare_audio_readback, compare_readback, compare_size_readback, compare_webcam_readback, describe_cameras,
-    describe_devices, interactions_explanation, output_may_have_changed, plan_sound, run_audio_test, run_cue_test,
-    run_find_output, run_pick_region, run_screen_test, run_setup_check, run_timing_test, run_video_test, summarize,
-    system_audio_platform, system_camera_platform, system_cue_player, system_interaction_platform, system_platform,
-    system_video_platform, AudioChoice, AudioTestOptions, Check, CueTestOptions, DeviceKind, FindOutputOptions,
-    InteractionLevel, Mix, PickRegionOptions, Region, ScreenMedia, ScreenTestOptions, SetupOptions, SoundPlan,
-    TimingTestOptions, VideoTestOptions, WindowInfo, MIC_FILE, SCREEN_FILE, SYSTEM_FILE, WEBCAM_FILE,
+    describe_devices, install_crash_report, interactions_explanation, output_may_have_changed, plan_sound,
+    run_audio_test, run_cue_test, run_find_output, run_pick_region, run_screen_test, run_setup_check, run_timing_test,
+    run_video_test, summarize, system_audio_platform, system_camera_platform, system_cue_player,
+    system_interaction_platform, system_platform, system_video_platform, AudioChoice, AudioTestOptions, Check,
+    CueTestOptions, DeviceKind, FindOutputOptions, InteractionLevel, Mix, PickRegionOptions, Region, ScreenMedia,
+    ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo, MIC_FILE, SCREEN_FILE,
+    SYSTEM_FILE, WEBCAM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -564,6 +565,8 @@ fn path_text(path: &Path) -> String {
 }
 
 fn main() -> ExitCode {
+    // If Windows stops the program suddenly, say so in the log instead of vanishing without a word.
+    install_crash_report();
     match Cli::parse().command {
         Cmd::Probe => {
             hello();

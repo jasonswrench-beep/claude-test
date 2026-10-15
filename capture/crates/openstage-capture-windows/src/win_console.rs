@@ -33,6 +33,61 @@ pub fn install() {
 #[cfg(not(windows))]
 pub fn install() {}
 
+/// From now on, if Windows stops the program suddenly (it used memory it must not, for example), one line saying
+/// so, with Windows' error code and the file the fault was in, is written to standard error before the program ends.
+/// Without this such a stop is silent: the program just vanishes, and a log shows nothing.
+#[cfg(windows)]
+pub fn install_crash_report() {
+    use crate::crash_words::crash_message;
+    use std::io::Write;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::System::Diagnostics::Debug::{SetUnhandledExceptionFilter, EXCEPTION_POINTERS};
+    use windows::Win32::System::LibraryLoader::{
+        GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    };
+
+    unsafe extern "system" fn report(info: *const EXCEPTION_POINTERS) -> i32 {
+        let (mut code, mut address) = (0u32, 0usize);
+        if !info.is_null() {
+            let record = unsafe { (*info).ExceptionRecord };
+            if !record.is_null() {
+                code = unsafe { (*record).ExceptionCode.0 } as u32;
+                address = unsafe { (*record).ExceptionAddress } as usize;
+            }
+        }
+        let mut module_name = None;
+        let mut module = HMODULE::default();
+        let found = unsafe {
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                PCWSTR(address as *const u16),
+                &mut module,
+            )
+        };
+        if found.is_ok() {
+            let mut name = [0u16; 260];
+            let length = unsafe { GetModuleFileNameW(Some(module), &mut name) } as usize;
+            if length > 0 {
+                let path = String::from_utf16_lossy(&name[..length.min(name.len())]);
+                module_name = Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string());
+            }
+        }
+        let mut err = std::io::stderr();
+        let _ = writeln!(err, "{}", crash_message(code, address, module_name.as_deref()));
+        let _ = err.flush();
+        // Let Windows end the program now.
+        1
+    }
+    unsafe {
+        let _ = SetUnhandledExceptionFilter(Some(report));
+    }
+}
+
+#[cfg(not(windows))]
+pub fn install_crash_report() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

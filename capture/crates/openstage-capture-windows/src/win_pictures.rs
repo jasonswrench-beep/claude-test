@@ -104,7 +104,7 @@ impl VideoFile {
                 .SetCurrentMediaType(stream, None, &plain)
                 .map_err(|e| failed("Windows could not turn the recording's pictures into plain pixels", e))?;
             let layout = layout_of(&reader).map_err(|e| e.to_string())?;
-            let _ = (width, height);
+            eprintln!("export: opened the recording {}: {width} by {height}", path.display());
             Ok(VideoFile { path: path.to_path_buf(), reader, layout, current: None, ahead: None, ended: false })
         }
     }

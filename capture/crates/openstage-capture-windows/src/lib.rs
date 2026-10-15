@@ -13,6 +13,7 @@ mod audio;
 mod balance;
 mod bmp;
 mod crash;
+mod crash_words;
 mod cue_player;
 mod echo;
 mod export;
@@ -121,7 +122,7 @@ pub use webcam::{
     choose_camera, describe_cameras, number_cameras, pick_mode, system_camera_platform, CameraInfo, CameraMode,
     CameraPlatform, ModeOption, PictureForm, StartedCamera, WebcamReport, WebcamTake, WEBCAM_FILE,
 };
-pub use win_console::{cancel_requested, install as install_cancel_handler};
+pub use win_console::{cancel_requested, install as install_cancel_handler, install_crash_report};
 #[cfg(windows)]
 pub use win_pictures::WindowsPictures;
 #[cfg(windows)]

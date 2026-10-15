@@ -6,8 +6,8 @@
 //! of time and hands that over too. The pieces that need Windows (reading frames out of the recorded videos, drawing
 //! text, writing the MP4) are passed in, so the flow, and every message a person will read, is tested here with fakes.
 //!
-//! * **Atomic.** The video is written to `name.mp4.part` and renamed to `name.mp4` only when it is whole. A
-//!   cancelled or failed export deletes the `.part` file and leaves any earlier `name.mp4` exactly as it was. There
+//! * **Atomic.** The video is written to `name.part.mp4` and renamed to `name.mp4` only when it is whole. A
+//!   cancelled or failed export deletes the `.part.mp4` file and leaves any earlier `name.mp4` exactly as it was. There
 //!   is never a half-finished file under the real name.
 //! * **Cancellable.** The caller is asked before every frame whether to stop.
 //! * **The same every time.** Frames are drawn with arithmetic that is the same everywhere, and the sound is mixed
@@ -97,10 +97,15 @@ pub fn bitrate_for(width: u32, height: u32) -> u32 {
     ((8000u64 * width as u64 * height as u64) / (1920 * 1080)).clamp(1500, 16_000) as u32
 }
 
+/// Where the video is written until it is whole: `name.part.mp4` beside `name.mp4`.
+///
+/// The name must END in `.mp4`. Windows' video writer chooses the kind of file from the end of the name, and it does
+/// not know `.part`: the first run on Windows, with `name.mp4.part`, failed at once with error 0xC00D36D5 ("The
+/// specified object or value does not exist"). The `part` in the name still says it is not finished.
 fn part_path(out: &Path) -> PathBuf {
-    let mut name = out.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(".part");
-    out.with_file_name(name)
+    let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = if name.to_ascii_lowercase().ends_with(".mp4") { &name[..name.len() - 4] } else { name.as_str() };
+    out.with_file_name(format!("{stem}.part.mp4"))
 }
 
 fn failed(what: impl fmt::Display) -> ExportError {
@@ -397,6 +402,14 @@ mod tests {
                 w.fps = spec.fps;
                 w.part = spec.path.clone();
             }
+            // Windows' writer chooses the kind of file from the end of its name and fails on one it does not know.
+            let ends_in_mp4 = spec.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
+            if !ends_in_mp4 {
+                return Err(ScreenError::Failed(
+                    "Could not create the video file (Windows error code 0xC00D36D5: The specified object or value does not exist.)"
+                        .into(),
+                ));
+            }
             // The real writer makes the file as soon as it is asked to.
             fs::write(&spec.path, b"half a video").map_err(|e| ScreenError::Failed(e.to_string()))?;
             Ok(Box::new(FakeSink(Rc::clone(&self.0))))
@@ -465,6 +478,21 @@ mod tests {
     }
 
     // ---- tests ----
+
+    #[test]
+    fn the_unfinished_video_is_named_so_that_windows_still_knows_it_is_an_mp4() {
+        let name = |p: &str| part_path(Path::new(p)).to_string_lossy().replace('\\', "/");
+        assert_eq!(name("out/lesson.mp4"), "out/lesson.part.mp4");
+        assert_eq!(name("out/Lesson.MP4"), "out/Lesson.part.mp4");
+        assert_eq!(name("lesson.mp4"), "lesson.part.mp4");
+        assert_eq!(name("out/lesson"), "out/lesson.part.mp4", "a name with no .mp4 still gets one");
+        assert_eq!(name("out/lesson.mov"), "out/lesson.mov.part.mp4");
+        for p in ["a.mp4", "a.MP4", "a", "a.mov", "a.mp4.mp4"] {
+            let part = part_path(Path::new(p));
+            assert!(part.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4")), "{part:?}");
+            assert_ne!(part, Path::new(p), "never the real name");
+        }
+    }
 
     #[test]
     fn a_whole_edit_is_drawn_frame_by_frame_with_its_sound_and_put_in_place_only_when_whole() {

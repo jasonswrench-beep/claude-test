@@ -101,16 +101,29 @@ pub fn describe_summary(take: u32, s: &LogSummary) -> String {
         }
     );
     if !s.windows_seen.is_empty() {
+        // By program, each with the first title it had. A program that keeps changing its title (Notepad shows the
+        // first words of what you type) would otherwise fill the list, and print what was typed.
+        let mut programs: Vec<(&str, Vec<&str>)> = Vec::new();
+        for (title, process) in &s.windows_seen {
+            match programs.iter_mut().find(|(p, _)| p == process) {
+                Some((_, titles)) => titles.push(title),
+                None => programs.push((process, vec![title])),
+            }
+        }
         text.push_str(" Windows that were in front: ");
-        let shown: Vec<String> = s
-            .windows_seen
+        let shown: Vec<String> = programs
             .iter()
             .take(NAMED_AT_MOST)
-            .map(|(title, process)| format!("\"{title}\" ({process})"))
+            .map(|(process, titles)| match titles.len() {
+                1 => format!("\"{}\" ({process})", titles[0]),
+                n => {
+                    format!("\"{}\" and {} other title{} ({process})", titles[0], n - 1, if n == 2 { "" } else { "s" })
+                }
+            })
             .collect();
         text.push_str(&shown.join("; "));
-        if s.windows_seen.len() > NAMED_AT_MOST {
-            text.push_str(&format!("; and {} more", s.windows_seen.len() - NAMED_AT_MOST));
+        if programs.len() > NAMED_AT_MOST {
+            text.push_str(&format!("; and {} more programs", programs.len() - NAMED_AT_MOST));
         }
         text.push('.');
     }
@@ -136,6 +149,11 @@ pub fn describe_summary(take: u32, s: &LogSummary) -> String {
     }
     if s.keys > 0 {
         text.push_str(" The keys are not printed here; use --list to read every line, including the keys.");
+    }
+    if !s.windows_seen.is_empty() {
+        text.push_str(
+            " Only the first title of each program is shown, because some programs put what you type, or the page you are on, in their title; --list shows every title.",
+        );
     }
     text
 }
@@ -291,6 +309,7 @@ mod tests {
         );
         assert!(text.contains("2 key presses") && text.contains("and 1 marker of your own"), "{text}");
         assert!(text.contains("\"Untitled - Notepad\" (notepad.exe); \"Browser\" (browser.exe)"), "{text}");
+        assert!(text.contains("Only the first title of each program is shown"), "{text}");
         assert!(text.contains("the button \"Save\" (2 times)"), "{text}");
         assert!(text.contains("The keys are not printed here; use --list"), "{text}");
         assert!(!text.contains("enter") && !text.contains("Ctrl"), "the typed keys are not in the summary: {text}");
@@ -312,16 +331,38 @@ mod tests {
     }
 
     #[test]
-    fn a_long_list_of_windows_is_cut_short_and_says_how_many_more() {
+    fn a_long_list_of_programs_is_cut_short_and_says_how_many_more() {
         let lines: Vec<LogLine> = (0..20)
             .map(|i| LogLine {
                 t: i,
-                event: LogEvent::Window { title: format!("w{i}"), process: "p.exe".into(), bounds: None },
+                event: LogEvent::Window { title: format!("w{i}"), process: format!("p{i}.exe"), bounds: None },
             })
             .collect();
         let text = describe_summary(1, &summarize(&lines));
-        assert!(text.contains("\"w11\" (p.exe); and 8 more."), "{text}");
+        assert!(text.contains("\"w11\" (p11.exe); and 8 more programs."), "{text}");
         assert!(!text.contains("w12"), "{text}");
+    }
+
+    #[test]
+    fn a_program_whose_title_keeps_changing_is_shown_once_so_what_was_typed_is_not_printed() {
+        // Notepad shows the first words of what is typed in its title.
+        let lines: Vec<LogLine> =
+            ["Untitled - Notepad", "*He - Notepad", "*Hello - Notepad", "*Hello secret - Notepad"]
+                .iter()
+                .enumerate()
+                .map(|(i, title)| LogLine {
+                    t: i as u64,
+                    event: LogEvent::Window { title: title.to_string(), process: "notepad.exe".into(), bounds: None },
+                })
+                .collect();
+        let text = describe_summary(1, &summarize(&lines));
+        assert!(text.contains("\"Untitled - Notepad\" and 3 other titles (notepad.exe)"), "{text}");
+        assert!(!text.contains("secret") && !text.contains("Hello"), "{text}");
+        // One other title is "1 other title".
+        let two = &lines[..2];
+        assert!(describe_summary(1, &summarize(two)).contains("and 1 other title (notepad.exe)"));
+        // The full list still shows everything, for the person who asks.
+        assert!(describe_lines(&lines, false).iter().any(|l| l.contains("secret")));
     }
 
     #[test]

@@ -30,6 +30,12 @@ pub trait TakeMedia {
     /// Recording is about to carry on after a pause. Anything heard during the pause must be thrown
     /// away, so that the sound and the picture carry on from the same moment.
     fn resumed(&mut self) {}
+    /// Things the author should be told about now, as (code, message), such as a webcam that has stopped while the
+    /// screen and the sound carry on. Asked for after every pump; each is said once. There is no sound for these: a
+    /// sound played while recording time runs would be recorded (see `cues.rs`).
+    fn notices(&mut self) -> Vec<(String, String)> {
+        Vec::new()
+    }
     /// Make every file complete. Returns how many media files the take holds.
     fn finish(self: Box<Self>, media_ms: u64) -> Result<u32, SessionError>;
 }

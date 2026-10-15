@@ -21,13 +21,14 @@ use openstage_capture::{
 use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 use openstage_capture_windows::{
-    check_balance_in_files, check_echo_in_files, check_sound_files, choose_window, compare_audio_readback,
-    compare_readback, compare_size_readback, describe_devices, output_may_have_changed, plan_sound, run_audio_test,
-    run_cue_test, run_find_output, run_pick_region, run_screen_test, run_setup_check, run_timing_test, run_video_test,
-    summarize, system_audio_platform, system_cue_player, system_platform, system_video_platform, AudioChoice,
-    AudioTestOptions, Check, CueTestOptions, DeviceKind, FindOutputOptions, Mix, PickRegionOptions, Region,
-    ScreenMedia, ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo, MIC_FILE,
-    SCREEN_FILE, SYSTEM_FILE,
+    check_balance_in_files, check_echo_in_files, check_sound_files, choose_camera, choose_window,
+    compare_audio_readback, compare_readback, compare_size_readback, compare_webcam_readback, describe_cameras,
+    describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_cue_test, run_find_output,
+    run_pick_region, run_screen_test, run_setup_check, run_timing_test, run_video_test, summarize,
+    system_audio_platform, system_camera_platform, system_cue_player, system_platform, system_video_platform,
+    AudioChoice, AudioTestOptions, Check, CueTestOptions, DeviceKind, FindOutputOptions, Mix, PickRegionOptions,
+    Region, ScreenMedia, ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo,
+    MIC_FILE, SCREEN_FILE, SYSTEM_FILE, WEBCAM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -87,6 +88,13 @@ enum Cmd {
         /// the sound moves to another output (headphones plugged in); a number or name is kept to.
         #[arg(long, default_value = "default")]
         output: String,
+        /// With `--source screen`: a webcam to record too, into `webcam.mp4` beside the screen video: its number
+        /// from the `cameras` command, part of its name, `default` for the first, or `none` (the default) to
+        /// record no webcam. A camera is private, so it is off unless asked for. Each picture is placed where
+        /// the camera says it was taken, so it lines up with your voice. A camera that stops does not stop the
+        /// recording.
+        #[arg(long, default_value = "none")]
+        camera: String,
         /// With `--source screen`: make the microphone louder (positive) or quieter (negative) by this
         /// many decibels in the mix inside the video. 0 leaves it as heard; 6 is about double the volume.
         /// The separate `mic.wav` is never changed.
@@ -219,6 +227,12 @@ enum Cmd {
     /// List the open windows that can be recorded, numbered, so one can be chosen with `record --window`.
     /// Windows that are minimized or hidden, and windows without a title, are not listed. Windows only.
     Windows {
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// List the cameras this computer has, numbered, to choose one with `record --camera`. Windows only.
+    Cameras {
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
         plain: bool,
@@ -503,11 +517,19 @@ fn main() -> ExitCode {
                     });
                 }
             }
-            sources.push(SourceInfo {
-                id: "windows".into(),
-                available: false,
-                note: "Recording a single window or a region, and the webcam, is not built yet.".into(),
-            });
+            // Real cameras, found on Windows only.
+            if let Ok(cameras) = system_camera_platform().list_cameras() {
+                for c in cameras {
+                    sources.push(SourceInfo {
+                        id: format!("camera:{}", c.number),
+                        available: true,
+                        note: format!(
+                            "Camera {}: {}. Record it with: record --source screen --camera {}. It goes into webcam.mp4, beside the screen video.",
+                            c.number, c.name, c.number
+                        ),
+                    });
+                }
+            }
             say(Event::Probe { platform: std::env::consts::OS.to_string(), sources });
             ExitCode::SUCCESS
         }
@@ -529,6 +551,7 @@ fn main() -> ExitCode {
             bitrate_kbps,
             microphone,
             output,
+            camera,
             mic_gain_db,
             system_gain_db,
             cues,
@@ -559,7 +582,21 @@ fn main() -> ExitCode {
             let mut sound_plan = SoundPlan::default();
             let mut chosen_region: Option<Region> = None;
             let mut chosen_window: Option<WindowInfo> = None;
+            let mut chosen_camera: Option<(
+                Box<dyn openstage_capture_windows::CameraPlatform>,
+                openstage_capture_windows::CameraInfo,
+            )> = None;
+            let mut recorded_camera = false;
             let mut report_handle = None;
+            // The test source has no camera. Saying nothing would let the author think a webcam was being recorded.
+            if source == "synthetic" && !camera.trim().eq_ignore_ascii_case("none") {
+                sink.emit(Event::Error {
+                    code: "bad-option".into(),
+                    message: "--camera only works with --source screen. The built-in test source has no camera, so no webcam would be recorded.".into(),
+                    fatal: true,
+                });
+                return ExitCode::from(2);
+            }
             let factory: Box<dyn MediaFactory> = match source.as_str() {
                 "synthetic" => Box::new(|| -> Box<dyn Source> { Box::new(SyntheticSource::new()) }),
                 "screen" if cfg!(windows) => {
@@ -644,8 +681,37 @@ fn main() -> ExitCode {
                             }
                         }
                     }
+                    // A camera is chosen now too, so a wrong choice is explained before the countdown.
+                    if !camera.trim().eq_ignore_ascii_case("none") {
+                        let cameras = system_camera_platform();
+                        let found = cameras
+                            .list_cameras()
+                            .map_err(|e| format!("Could not list the cameras: {e}"))
+                            .and_then(|list| choose_camera(&list, &camera).cloned());
+                        match found {
+                            Ok(info) => {
+                                sink.emit(Event::Check {
+                                    check: "camera".into(),
+                                    ok: true,
+                                    message: format!(
+                                        "Recording the webcam {} into {WEBCAM_FILE}, beside the screen video. It is recorded as the camera sees it (not mirrored), at about 1280 by 720 and up to 30 pictures a second. Each picture is placed where the camera says it was taken, so it lines up with your voice. If the camera stops, the recording carries on without it and you are told. Leave out --camera to record no webcam.",
+                                        info.describe()
+                                    ),
+                                });
+                                chosen_camera = Some((cameras, info));
+                            }
+                            Err(message) => {
+                                sink.emit(Event::Error { code: "bad-option".into(), message, fatal: true });
+                                return ExitCode::from(2);
+                            }
+                        }
+                    }
                     let mut media = ScreenMedia::for_this_computer(display, fps, bitrate_kbps)
                         .with_sound(platform, sound_plan.clone());
+                    if let Some((cameras, info)) = chosen_camera.take() {
+                        media = media.with_camera(cameras, info);
+                        recorded_camera = true;
+                    }
                     if let Some(r) = chosen_region {
                         media = media.with_region(r).with_outline(outline_on);
                     }
@@ -735,6 +801,19 @@ fn main() -> ExitCode {
                             findings.push(compare_audio_readback(&inspection, outcome.duration_ms));
                         }
                         findings.insert(0, compare_readback(inspection, outcome.duration_ms));
+                        if recorded_camera {
+                            // What the camera did, as far as the recorder noticed, says how long its video should be.
+                            let stopped = report_handle
+                                .as_ref()
+                                .and_then(|h| h.borrow().clone())
+                                .and_then(|r| r.webcam)
+                                .and_then(|w| w.stopped.map(|(at, _)| at));
+                            findings.push(compare_webcam_readback(
+                                system_video_platform().inspect_video(&dir.join(WEBCAM_FILE)),
+                                outcome.duration_ms,
+                                stopped,
+                            ));
+                        }
                         // The separate sound files are looked at too: what was really saved.
                         let files = check_sound_files(&dir, &sound_plan, outcome.duration_ms);
                         findings.extend(files.checks);
@@ -911,6 +990,23 @@ fn main() -> ExitCode {
                 }
             }
             finish_checks(plain, all_fine)
+        }
+        Cmd::Cameras { plain } => {
+            if !plain {
+                hello();
+            }
+            let check = match system_camera_platform().list_cameras() {
+                Ok(list) if !list.is_empty() => {
+                    Check { check: "cameras".into(), ok: true, message: describe_cameras(&list) }
+                }
+                Ok(_) => Check { check: "cameras".into(), ok: false, message: describe_cameras(&[]) },
+                Err(e) => {
+                    Check { check: "cameras".into(), ok: false, message: format!("Could not list the cameras: {e}") }
+                }
+            };
+            let ok = check.ok;
+            emit_check(plain, check);
+            finish_checks(plain, ok)
         }
         Cmd::AudioDevices { plain } => {
             if !plain {

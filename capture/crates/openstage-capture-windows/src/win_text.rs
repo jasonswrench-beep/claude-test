@@ -15,6 +15,7 @@ use openstage_capture_render::{
     line_start, padding, wrap_lines, Canvas, TextFit, TextRenderer, TextRequest, LINE_SPACING,
 };
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, SIZE};
 use windows::Win32::Graphics::Gdi::{
@@ -23,6 +24,9 @@ use windows::Win32::Graphics::Gdi::{
     CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, HDC, HFONT, OUT_DEFAULT_PRECIS,
     TRANSPARENT,
 };
+
+/// Whether the first piece of text has been announced on standard error yet (a diagnosis for the test logs).
+static ANNOUNCED: AtomicBool = AtomicBool::new(false);
 
 /// Draws text with Windows' fonts.
 pub struct WindowsText;
@@ -35,7 +39,15 @@ impl TextRenderer for WindowsText {
         if request.area.is_empty() || request.text.trim().is_empty() {
             return Ok(TextFit { complete: true });
         }
-        unsafe { draw_text(canvas, request) }
+        let first = !ANNOUNCED.swap(true, Ordering::Relaxed);
+        if first {
+            eprintln!("export: drawing the first piece of text with Windows' fonts");
+        }
+        let drawn = unsafe { draw_text(canvas, request) };
+        if first {
+            eprintln!("export: the first piece of text was drawn");
+        }
+        drawn
     }
 }
 

@@ -45,6 +45,10 @@ openstage-capture video-crash-test [options]                     (Windows only; 
 openstage-capture render --project <folder> --out <file> [options]  (Windows only; turns a recording or an edit into a finished MP4)
 ```
 
+### Diagnostics on standard error
+
+Standard error is for diagnostics, never for OpenStage to parse: timing lines while recording and exporting (`preparing:`, `start-up:`, `resources at ...`, `export: ...`), and, on Windows, one line beginning `THE PROGRAM STOPPED SUDDENLY` if Windows itself ends the program (for example because it used memory it must not), giving Windows' error code, the address and the file the fault was in. That last line is the only sign of such an end: the program cannot send a protocol event at that moment, so a reader that sees standard output close without a `result` should look at standard error. The test scripts keep standard error in their logs.
+
 ### Exit codes
 
 | Code | Meaning |

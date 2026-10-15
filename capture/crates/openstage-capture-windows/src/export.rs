@@ -108,6 +108,12 @@ fn part_path(out: &Path) -> PathBuf {
     out.with_file_name(format!("{stem}.part.mp4"))
 }
 
+/// A line of diagnosis on standard error (which the test scripts keep in their logs), so that when an export stops
+/// suddenly the last line says how far it got and how long each step took.
+fn trace(what: impl fmt::Display) {
+    eprintln!("export: {what}");
+}
+
 fn failed(what: impl fmt::Display) -> ExportError {
     ExportError::Failed(what.to_string())
 }
@@ -166,6 +172,14 @@ pub fn export(
     }
     video.start_media().map_err(|e| failed(format!("Windows' video tools would not start: {e}")))?;
     let mut sink = video.create_sink(&spec).map_err(|e| failed(format!("Could not start the video file: {e}")))?;
+    trace(format!(
+        "the video file {} was started: {width} by {height}, {} a second, {} frames, {}",
+        spec.path.display(),
+        settings.fps,
+        plan.frame_count,
+        if has_sound { "with sound" } else { "with no sound" }
+    ));
+    let started = std::time::Instant::now();
 
     let outcome = (|| -> Result<Vec<String>, ExportError> {
         let mut canvas = Canvas::new(width, height);
@@ -185,6 +199,9 @@ pub fn export(
                     notes.push(note);
                 }
             }
+            if index < 3 {
+                trace(format!("frame {index} drawn after {} ms in all", started.elapsed().as_millis()));
+            }
             frame.t_ms = recipe.time_us / 1000;
             frame.bgra.clear();
             frame.bgra.extend_from_slice(&canvas.bgra);
@@ -193,6 +210,12 @@ pub fn export(
             let duration = ((index + 1) * 10_000_000 / fps) as i64 - start;
             sink.write(&frame, start, duration)
                 .map_err(|e| failed(format!("Writing the video stopped with a problem: {e}")))?;
+            if index < 3 {
+                trace(format!(
+                    "frame {index} handed to the video writer after {} ms in all",
+                    started.elapsed().as_millis()
+                ));
+            }
 
             if has_sound {
                 let first = index * rate / fps;
@@ -217,6 +240,20 @@ pub fn export(
                 let at = (first * 10_000_000 / rate) as i64;
                 sink.write_audio(&mixed, at)
                     .map_err(|e| failed(format!("Writing the sound into the video stopped with a problem: {e}")))?;
+                if index < 3 {
+                    trace(format!(
+                        "the sound of frame {index} handed over after {} ms in all",
+                        started.elapsed().as_millis()
+                    ));
+                }
+            }
+            if index >= 3 && index % 30 == 0 {
+                let seconds = started.elapsed().as_secs_f64();
+                trace(format!(
+                    "frame {index} of {} done, {:.0} ms a frame so far",
+                    plan.frame_count,
+                    seconds * 1000.0 / (index + 1) as f64
+                ));
             }
             progress(Progress { frames_done: index + 1, frame_count: plan.frame_count });
         }
@@ -231,6 +268,11 @@ pub fn export(
             Err(e)
         }
         Ok(notes) => {
+            trace(format!(
+                "all {} frames written after {:.1} seconds; completing the video file",
+                plan.frame_count,
+                started.elapsed().as_secs_f64()
+            ));
             if let Err(e) = sink.finish() {
                 let _ = fs::remove_file(&spec.path);
                 return Err(failed(format!("The video file could not be completed: {e}")));

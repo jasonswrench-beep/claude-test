@@ -20,11 +20,12 @@ echo next to this file. Nothing is sent anywhere. You do not need to
 echo send them to anyone, and you can delete the folder when you are done.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > screen-test-log.txt 2>&1
+if exist "screen-test-log.txt" del "screen-test-log.txt"
+call "%~dp0cargo-run.bat" "screen-test-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

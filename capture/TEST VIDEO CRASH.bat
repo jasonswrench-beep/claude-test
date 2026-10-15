@@ -25,11 +25,12 @@ echo on this computer, in the folder video-crash-output next to this file.
 echo Nothing is sent anywhere. You can delete the folder when you are done.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > video-crash-log.txt 2>&1
+if exist "video-crash-log.txt" del "video-crash-log.txt"
+call "%~dp0cargo-run.bat" "video-crash-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

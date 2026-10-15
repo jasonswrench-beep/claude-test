@@ -30,11 +30,12 @@ echo sound. It is saved only on this computer, in the folder
 echo switch-test-output next to this file. Nothing is sent anywhere.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > switch-test-log.txt 2>&1
+if exist "switch-test-log.txt" del "switch-test-log.txt"
+call "%~dp0cargo-run.bat" "switch-test-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

@@ -15,14 +15,15 @@ echo You do not need to do anything while it works. A full log is saved
 echo in this folder as build-log.txt.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Found Rust:
 cargo --version
 echo.
 echo Building. Please wait...
-cargo build --release --workspace > build-log.txt 2>&1
+if exist "build-log.txt" del "build-log.txt"
+call "%~dp0cargo-run.bat" "build-log.txt" build --release --workspace
 if errorlevel 1 goto failed
 
 echo.

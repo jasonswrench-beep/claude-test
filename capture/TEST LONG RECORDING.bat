@@ -32,11 +32,12 @@ echo saved only on this computer, in the folder long-test-output next to
 echo this file. Nothing is sent anywhere. Delete the folder afterwards.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > long-test-log.txt 2>&1
+if exist "long-test-log.txt" del "long-test-log.txt"
+call "%~dp0cargo-run.bat" "long-test-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

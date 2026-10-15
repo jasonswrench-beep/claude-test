@@ -23,11 +23,12 @@ echo in the folder window-test-output next to this file. Nothing is sent
 echo anywhere. No sound is recorded in this test.
 echo.
 
-where cargo >nul 2>nul
+call "%~dp0rust-setup.bat"
 if errorlevel 1 goto no_rust
 
 echo Getting the program ready. The first time this can take a few minutes.
-cargo build --release -p openstage-capture-cli > window-test-log.txt 2>&1
+if exist "window-test-log.txt" del "window-test-log.txt"
+call "%~dp0cargo-run.bat" "window-test-log.txt" build --release -p openstage-capture-cli
 if errorlevel 1 goto build_failed
 
 echo.

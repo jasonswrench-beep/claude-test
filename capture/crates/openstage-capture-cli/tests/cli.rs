@@ -535,12 +535,34 @@ fn video_info_says_it_needs_windows_and_exits_with_2() {
     assert!(text.starts_with("PROBLEM: nothing.mp4 could not be read as a video"), "{text}");
 }
 
+#[cfg(not(windows))]
 #[test]
-fn render_says_it_is_not_built_yet_and_exits_with_2() {
-    let dir = tempfile::tempdir().unwrap();
-    let (status, events) = run_once(&["render", "--project", dir.path().to_str().unwrap(), "--out", "x.mp4"]);
-    assert_eq!(status.code(), Some(2));
-    assert!(events.iter().any(|e| matches!(e, Event::Error { code, fatal: true, .. } if code == "not-implemented")));
+fn render_says_it_needs_windows_and_exits_with_2() {
+    let out = Command::new(BIN)
+        .args(["render", "--plain", "--project", "nowhere.capture", "--out", "nothing.mp4", "--take", "1"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("PROBLEM: Exporting a video only works on Windows"), "{text}");
+    assert!(!std::path::Path::new("nothing.mp4").exists());
+}
+
+#[test]
+fn render_refuses_a_size_that_cannot_be_used_before_anything_else() {
+    for (size, fragment) in [
+        ("big", "is not written like 1280x720"),
+        ("1281x720", "needs an even width and height"),
+        ("32x32", "each at least 64"),
+    ] {
+        let out = Command::new(BIN)
+            .args(["render", "--plain", "--project", "nowhere.capture", "--out", "nothing.mp4", "--size", size])
+            .output()
+            .unwrap();
+        assert_ne!(out.status.code(), Some(0), "{size}");
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.starts_with("PROBLEM: ") && text.contains(fragment), "{size}: {text}");
+    }
 }
 
 #[test]

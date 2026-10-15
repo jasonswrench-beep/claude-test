@@ -268,6 +268,92 @@ fn read_layout(file: &mut File) -> io::Result<Layout> {
     Ok(Layout { sample_rate, channels, data_start: HEADER_LEN })
 }
 
+/// A sound file open for reading any stretch of it, in order or not (the exporter mixes sound this way). It reads
+/// a second at a time and keeps what it read, so asking for the next few hundredths of a second again and again is
+/// not a read of the disk each time. Two channels are read as they are; one channel is made into two.
+pub struct WavFile {
+    file: File,
+    sample_rate: u32,
+    channels: u16,
+    data_start: u64,
+    frames: u64,
+    /// The frames kept: the first one's number, and the frames themselves (always two channels).
+    kept_from: u64,
+    kept: Vec<i16>,
+}
+
+impl WavFile {
+    /// How many frames are read from the disk at a time.
+    const CHUNK: u64 = 48_000;
+
+    pub fn open(path: &Path) -> io::Result<WavFile> {
+        let mut file = File::open(path)?;
+        let layout = read_layout(&mut file)?;
+        if layout.channels > 2 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("The sound file has {} channels; this program reads one or two.", layout.channels),
+            ));
+        }
+        let len = file.metadata()?.len();
+        let block = layout.channels as u64 * 2;
+        let frames = len.saturating_sub(layout.data_start) / block;
+        Ok(WavFile {
+            file,
+            sample_rate: layout.sample_rate,
+            channels: layout.channels,
+            data_start: layout.data_start,
+            frames,
+            kept_from: 0,
+            kept: Vec::new(),
+        })
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Whole frames really in the file.
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    /// Up to `count` frames from frame `first`, two channels interleaved. Fewer, or none, at the end of the file.
+    pub fn read(&mut self, first: u64, count: usize) -> io::Result<Vec<i16>> {
+        let end = (first + count as u64).min(self.frames);
+        let mut out = Vec::with_capacity(count.min(self.frames.saturating_sub(first) as usize) * 2);
+        let mut at = first;
+        while at < end {
+            let kept_frames = self.kept.len() as u64 / 2;
+            if at < self.kept_from || at >= self.kept_from + kept_frames {
+                self.fill(at)?;
+            }
+            let from = (at - self.kept_from) as usize;
+            let take = ((end - at) as usize).min(self.kept.len() / 2 - from);
+            out.extend_from_slice(&self.kept[from * 2..(from + take) * 2]);
+            at += take as u64;
+        }
+        Ok(out)
+    }
+
+    fn fill(&mut self, from: u64) -> io::Result<()> {
+        let count = Self::CHUNK.min(self.frames - from);
+        let block = self.channels as u64 * 2;
+        self.file.seek(SeekFrom::Start(self.data_start + from * block))?;
+        let mut bytes = vec![0u8; (count * block) as usize];
+        self.file.read_exact(&mut bytes)?;
+        self.kept.clear();
+        for frame in bytes.chunks_exact(block as usize) {
+            let left = i16::from_le_bytes([frame[0], frame[1]]);
+            let right = if self.channels == 2 { i16::from_le_bytes([frame[2], frame[3]]) } else { left };
+            self.kept.push(left);
+            self.kept.push(right);
+        }
+        self.kept_from = from;
+        Ok(())
+    }
+}
+
 /// Read what a sound file holds. The number of frames is what is really in the file, so a header
 /// left behind by a crash does not matter.
 pub fn wav_info(path: &Path) -> io::Result<WavInfo> {
@@ -403,6 +489,49 @@ mod tests {
         assert_eq!(info.duration_ms(), 20);
         assert!((info.peak - 0.5).abs() < 0.001, "peak {}", info.peak);
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 44 + 960 * 4);
+    }
+
+    #[test]
+    fn any_stretch_of_a_sound_file_can_be_read_in_any_order_across_the_pieces_it_is_read_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mic.wav");
+        let mut w = WavWriter::create(&path, 48_000, 2).unwrap();
+        // 3 seconds in which frame n holds the values (n, -n) as far as they fit.
+        let samples: Vec<i16> = (0..144_000i32).flat_map(|n| [(n % 30_000) as i16, -((n % 30_000) as i16)]).collect();
+        w.append(&samples).unwrap();
+        w.finish().unwrap();
+
+        let mut f = WavFile::open(&path).unwrap();
+        assert_eq!((f.sample_rate(), f.frames()), (48_000, 144_000));
+        // A stretch inside one piece, one across the edge of a piece, one back before the first, and one at the end.
+        for (first, count) in [(100u64, 50usize), (47_990, 40), (5, 3), (143_990, 100)] {
+            let got = f.read(first, count).unwrap();
+            let want_frames = count.min((144_000 - first) as usize);
+            assert_eq!(got.len(), want_frames * 2, "{first}+{count}");
+            for (i, pair) in got.chunks(2).enumerate() {
+                let n = (first as i32 + i as i32) % 30_000;
+                assert_eq!((pair[0] as i32, pair[1] as i32), (n, -n), "frame {} of the read at {first}", i);
+            }
+        }
+        assert!(f.read(144_000, 10).unwrap().is_empty(), "nothing past the end");
+        assert!(f.read(999_999, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_single_channel_file_is_read_as_two_and_more_than_two_channels_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mono.wav");
+        let mut w = WavWriter::create(&path, 44_100, 1).unwrap();
+        w.append(&[7, 8, 9]).unwrap();
+        w.finish().unwrap();
+        let mut f = WavFile::open(&path).unwrap();
+        assert_eq!((f.sample_rate(), f.read(0, 3).unwrap()), (44_100, vec![7, 7, 8, 8, 9, 9]));
+
+        let path = dir.path().join("surround.wav");
+        let mut w = WavWriter::create(&path, 48_000, 6).unwrap();
+        w.append(&[0; 12]).unwrap();
+        w.finish().unwrap();
+        assert!(WavFile::open(&path).err().unwrap().to_string().contains("6 channels"));
     }
 
     #[test]

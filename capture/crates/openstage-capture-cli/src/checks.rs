@@ -17,10 +17,31 @@ use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+/// Findings that tell the author something about their work, not a fault of the program: said as `Note:`, not `PROBLEM:`.
+const NOTES: [&str; 1] = ["export-note"];
+
+/// Print how far a long job has got: as a sentence for a person (`plain`), or as a protocol event.
+#[cfg_attr(not(windows), allow(dead_code))] // only the Windows build exports
+pub fn emit_progress(plain: bool, task: &str, percent: u32, message: String) {
+    if plain {
+        println!("{message}");
+    } else {
+        println!("{}", encode_event(&Event::Progress { task: task.to_string(), percent, message }));
+    }
+    let _ = io::stdout().flush();
+}
+
 /// Print one finding: as a sentence for a person (`plain`), or as a protocol event.
 pub fn emit_check(plain: bool, c: Check) {
     if plain {
-        println!("{}: {}", if c.ok { "OK" } else { "PROBLEM" }, c.message);
+        let word = if c.ok {
+            "OK"
+        } else if NOTES.contains(&c.check.as_str()) {
+            "Note"
+        } else {
+            "PROBLEM"
+        };
+        println!("{word}: {}", c.message);
     } else {
         println!("{}", encode_event(&Event::Check { check: c.check, ok: c.ok, message: c.message }));
     }

@@ -80,7 +80,7 @@ impl TrackKind {
 }
 
 /// Where a clip's picture or sound comes from.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SourceRef {
     /// A file of a recording: take number and file name.

@@ -15,12 +15,15 @@ mod bmp;
 mod crash;
 mod cue_player;
 mod echo;
+mod export;
+mod make_edit;
 mod pick;
 mod queue;
 mod record;
 mod region;
 mod region_editor;
 mod region_paint;
+mod render_cmd;
 mod report;
 mod setup;
 mod sound;
@@ -34,6 +37,7 @@ mod win;
 mod win_audio;
 #[cfg(windows)]
 mod win_camera;
+mod win_console;
 #[cfg(windows)]
 mod win_cues;
 #[cfg(windows)]
@@ -41,9 +45,13 @@ mod win_layered;
 #[cfg(windows)]
 mod win_outline;
 #[cfg(windows)]
+mod win_pictures;
+#[cfg(windows)]
 mod win_region;
 #[cfg(windows)]
 mod win_setup;
+#[cfg(windows)]
+mod win_text;
 #[cfg(windows)]
 mod win_video;
 #[cfg(windows)]
@@ -64,6 +72,11 @@ pub use bmp::write_bmp;
 pub use crash::{run_recorder_crash_report, MAX_LOSS_MS as RECORDER_CRASH_MAX_LOSS_MS};
 pub use cue_player::{run_cue_test, run_cue_test_with, system_cue_player, CueTestOptions};
 pub use echo::{check_echo_in_files, describe_echo, detect_echo, envelope_of, EchoFinding, EchoVerdict, Envelope};
+pub use export::{
+    bitrate_for, export, source_path, ExportError, ExportJob, ExportReport, ExportTools, FileSounds, Progress,
+    SoundReader,
+};
+pub use make_edit::{edit_from_take, EditOptions};
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use pick::{region_numbers, run_pick_region, run_pick_region_with, PickRegionOptions};
 pub use queue::{FramePool, FrameQueue};
@@ -71,12 +84,18 @@ pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
 pub use region::{crop, crop_into, CroppedSource, Region, MIN_SIDE as REGION_MIN_SIDE};
 pub use region_editor::{Handle as RegionHandle, PickOutcome, RegionEditor};
 pub use region_paint::{picker_overlay, recording_frame, Canvas};
+pub use render_cmd::{run_render_with, RenderOptions};
 pub use webcam::{
     choose_camera, describe_cameras, number_cameras, pick_mode, system_camera_platform, CameraInfo, CameraMode,
     CameraPlatform, ModeOption, PictureForm, StartedCamera, WebcamReport, WebcamTake, WEBCAM_FILE,
 };
+pub use win_console::{cancel_requested, install as install_cancel_handler};
+#[cfg(windows)]
+pub use win_pictures::WindowsPictures;
 #[cfg(windows)]
 pub use win_region::pick_region;
+#[cfg(windows)]
+pub use win_text::WindowsText;
 pub use window::{choose_window, fit_into, number_windows, recording_size, FittedSource, WindowInfo};
 
 /// Let the author choose a rectangle of a display by dragging it, and by typing four numbers. Only works

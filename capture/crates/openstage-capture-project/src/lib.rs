@@ -51,4 +51,4 @@ pub use take::{
     create_take, create_take_with, finish_take, list_takes, next_take_id, read_take, set_aside_take, take_dir,
     write_take, CameraInfo, MediaFile, MixInfo, RegionInfo, Take, TakeEntry, TakeState,
 };
-pub use wav::{read_wav_in_pieces, repair_wav, wav_info, WavInfo, WavRepair, WavThread, WavWriter};
+pub use wav::{read_wav_in_pieces, repair_wav, wav_info, WavFile, WavInfo, WavRepair, WavThread, WavWriter};

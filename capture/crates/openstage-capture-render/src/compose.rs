@@ -311,7 +311,7 @@ mod tests {
                 bgra.extend_from_slice(&[(x * 255 / width.max(1)) as u8, (y * 255 / height.max(1)) as u8, mark, 255]);
             }
         }
-        Rc::new(Picture { width, height, bgra })
+        Rc::new(Picture::new(width, height, bgra))
     }
 
     fn pictures() -> Pictures {
@@ -619,5 +619,46 @@ mod tests {
         let (a, _) = draw_frame(&r, &mut p, (200, 112));
         let (b, _) = draw_frame(&r, &mut p, (200, 112));
         assert_eq!(a, b);
+    }
+
+    /// Not run with the others: says how long frames take to draw at 1080p. Run it with
+    /// `cargo test -p openstage-capture-render --release -- --ignored --nocapture how_long`.
+    #[test]
+    #[ignore]
+    fn how_long_a_1080p_frame_takes_to_draw() {
+        use std::time::Instant;
+        let mut p = pictures();
+        p.by_media.insert("screen.mp4".into(), positional(1920, 1080, 7));
+        p.by_media.insert("webcam.mp4".into(), positional(1280, 720, 9));
+        let overlays = vec![
+            EditItem::Blur {
+                id: "b".into(),
+                name: "Blur".into(),
+                start_ms: 0.0,
+                duration_ms: 1.0,
+                rect: rect(6500.0, 1500.0, 3000.0, 1500.0),
+            },
+            EditItem::Redact {
+                id: "r".into(),
+                name: "Secret".into(),
+                start_ms: 0.0,
+                duration_ms: 1.0,
+                rect: rect(6500.0, 3500.0, 3000.0, 1000.0),
+                color: "#000000".into(),
+            },
+        ];
+        let mut time = |label: &str, r: FrameRecipe| {
+            let mut canvas = Canvas::new(1920, 1080);
+            let started = Instant::now();
+            let frames = 20;
+            for _ in 0..frames {
+                compose_frame(&r, &mut p, &BlockText, &mut canvas, &mut Vec::new()).unwrap();
+            }
+            println!("{label}: {:.1} ms a frame", started.elapsed().as_secs_f64() * 1000.0 / frames as f64);
+        };
+        time("screen only", recipe(vec![screen()], vec![], whole_view()));
+        time("screen, webcam, blur and blackout", recipe(vec![screen(), webcam(None)], overlays.clone(), whole_view()));
+        let zoom = ZoomView { rect: rect(1000.0, 1000.0, 6000.0, 6000.0), moving: true };
+        time("the same, in the middle of a zoom", recipe(vec![screen(), webcam(None)], overlays, zoom));
     }
 }

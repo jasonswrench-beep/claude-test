@@ -26,7 +26,7 @@ pub struct PlainSink {
 
 /// Findings that are advice for the author, not faults of the recorder. They never change the verdict of
 /// a recording, so they are not called a PROBLEM; a line saying PROBLEM above a verdict of PASS only confuses.
-const ADVICE_CHECKS: [&str; 2] = ["balance", "echo"];
+const ADVICE_CHECKS: [&str; 3] = ["balance", "echo", "export-note"];
 
 /// The least recording time between two spoken levels of the same sound, in milliseconds.
 const LEVEL_EVERY_MS: u64 = 5000;
@@ -110,6 +110,7 @@ impl PlainSink {
                 }
                 Some(format!("{}: {message}", if *ok { "OK" } else { "PROBLEM" }))
             }
+            Event::Progress { message, .. } => Some(message.clone()),
             Event::Result { ok, project, take, state, duration_ms, segments } => Some(if *take == 0 {
                 format!("Finished. No take was recorded. Project folder: {project}")
             } else {

@@ -61,6 +61,7 @@ mod win_video;
 #[cfg(windows)]
 mod win_windows;
 mod window;
+mod yuv;
 
 pub use audio::{
     choose_device, describe_devices, mix, peak, run_audio_test, run_audio_test_with, run_find_output,
@@ -130,6 +131,7 @@ pub use win_region::pick_region;
 #[cfg(windows)]
 pub use win_text::WindowsText;
 pub use window::{choose_window, fit_into, number_windows, recording_size, FittedSource, WindowInfo};
+pub use yuv::{crop_top_left, nv12_to_bgra, Matrix, PictureReader};
 
 /// Let the author choose a rectangle of a display by dragging it, and by typing four numbers. Only works
 /// on Windows.

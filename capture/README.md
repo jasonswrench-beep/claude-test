@@ -83,7 +83,7 @@ This was written without that computer and has never been run on it. If the firs
 
 **Tip when updating:** extract each new ZIP into a **new, empty folder** rather than over an old one. Extracting over an old folder can skip some files and leave a mix of old and new code, which shows up as a build error that says something was "not found" or a "variant" is missing. (The old folder's build files are not needed; the first build in the new folder just takes a few minutes.)
 
-If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, `screen-test-log.txt`, `video-test-log.txt`, `video-crash-log.txt`, `record-test-log.txt`, `find-output-log.txt`, `audio-test-log.txt`, `timing-test-log.txt`, `recorder-crash-log.txt`, `choose-region-log.txt`, `window-test-log.txt`, `webcam-test-log.txt`, `export-test-log.txt`, `export-log.txt`, `hands-free-log.txt`, `interactions-test-log.txt`, `interactions-test-list.txt`, or `long-test-log.txt`, saved in this folder).
+If any of them fails, send the log file it names (`build-log.txt`, `test-log.txt`, `screen-test-log.txt`, `video-test-log.txt`, `video-crash-log.txt`, `record-test-log.txt`, `find-output-log.txt`, `audio-test-log.txt`, `timing-test-log.txt`, `recorder-crash-log.txt`, `choose-region-log.txt`, `window-test-log.txt`, `webcam-test-log.txt`, `export-test-log.txt`, `export-log.txt`, `export-log-2.txt`, `hands-free-log.txt`, `interactions-test-log.txt`, `interactions-test-list.txt`, or `long-test-log.txt`, saved in this folder).
 
 ## How the pieces fit
 

@@ -11,10 +11,11 @@
 //! so the picture shown is always the one that was current at the moment asked for. Past the end of a video its
 //! last picture is held.
 
-use crate::export::source_path;
+use crate::export::{source_path, trace};
 use crate::video::VideoPlatform;
-use crate::win_camera::{copy_picture, layout_of, Layout};
+use crate::win_camera::{copy_picture, Layout};
 use crate::win_video::WindowsVideo;
+use crate::yuv::{crop_top_left, nv12_to_bgra, Matrix, PictureReader};
 use openstage_capture_project::{EditSourceKind, EditSourceRef};
 use openstage_capture_render::{Layer, Picture, PictureSource};
 use std::collections::HashMap;
@@ -28,11 +29,11 @@ use windows::Win32::Graphics::Imaging::{
     WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFMediaType, IMFSourceReader, MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL,
-    MFMediaType_Video, MFVideoFormat_RGB32, MFVideoInterlace_Progressive, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE,
-    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+    IMFAttributes, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes, MFCreateMediaType,
+    MFCreateSourceReaderFromURL, MFMediaType_Video, MFVideoFormat_NV12, MFVideoFormat_RGB32, MF_MT_DEFAULT_STRIDE,
+    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_YUV_MATRIX,
+    MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
+    MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
 };
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
@@ -52,30 +53,82 @@ struct Held {
     picture: Rc<Picture>,
 }
 
+/// What the reader is giving now: the size of the decoded pictures (which can be padded, 1088 lines for a 1080 line
+/// video), how a row sits in memory, and how colours are meant (only for [`PictureReader::Nv12`]).
+#[derive(Clone, Copy)]
+struct Decoded {
+    width: u32,
+    height: u32,
+    stride: usize,
+    bottom_up: bool,
+    matrix: Matrix,
+    full_range: bool,
+}
+
 /// One recorded video, open for reading its pictures in any order (mostly in order).
 struct VideoFile {
     path: PathBuf,
+    mode: PictureReader,
     reader: IMFSourceReader,
-    layout: Layout,
+    /// The size the video is meant to be shown at (the size it was recorded at).
+    display: (u32, u32),
+    decoded: Decoded,
     /// The newest picture shown at or before the moment last asked for.
     current: Option<Held>,
     /// The first picture after it, already read.
     ahead: Option<Held>,
     ended: bool,
+    /// How many pictures have been read from the reader, for the log.
+    reads: u64,
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+}
+
+/// Ask the reader what it is giving now.
+unsafe fn decoded_now(reader: &IMFSourceReader, mode: PictureReader, display: (u32, u32)) -> Result<Decoded, String> {
+    let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+    let current = reader
+        .GetCurrentMediaType(stream)
+        .map_err(|e| failed("Windows would not say what the recording's pictures look like", e))?;
+    let packed = current
+        .GetUINT64(&MF_MT_FRAME_SIZE)
+        .map_err(|e| failed("Windows would not say how big the recording's pictures are", e))?;
+    let (width, height) = ((packed >> 32) as u32, (packed & 0xFFFF_FFFF) as u32);
+    // The stride is a signed number kept in an unsigned attribute: negative means the rows run from the bottom up.
+    let raw = current.GetUINT32(&MF_MT_DEFAULT_STRIDE).map(|v| v as i32).unwrap_or(0);
+    let bytes_per_pixel = if mode == PictureReader::Rgb32 { 4 } else { 1 };
+    let stride = if raw == 0 { width as usize * bytes_per_pixel } else { raw.unsigned_abs() as usize };
+    let matrix = current
+        .GetUINT32(&MF_MT_YUV_MATRIX)
+        .ok()
+        .and_then(Matrix::from_windows)
+        .unwrap_or_else(|| Matrix::assumed_for(display.1));
+    // Windows' number 1 is the full range of brightness, 0 to 255; anything else is taken as the usual 16 to 235.
+    let full_range = current.GetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE).map(|v| v == 1).unwrap_or(false);
+    Ok(Decoded { width, height, stride, bottom_up: raw < 0, matrix, full_range })
 }
 
 impl VideoFile {
-    fn open(path: &Path) -> Result<VideoFile, String> {
+    fn open(path: &Path, mode: PictureReader) -> Result<VideoFile, String> {
         unsafe {
-            let mut attributes: Option<IMFAttributes> = None;
-            MFCreateAttributes(&mut attributes, 1).map_err(|e| failed("Could not prepare to read a recording", e))?;
-            let attributes = attributes.ok_or("Could not prepare to read a recording.")?;
-            attributes
-                .SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)
-                .map_err(|e| failed("Could not ask Windows to convert the recording's pictures", e))?;
-            let reader = MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), &attributes).map_err(|e| {
-                failed(&format!("The recording {} could not be opened. Is it still there?", path.display()), e)
-            })?;
+            // Windows' own colour conversion is only asked for when this program does not do the colours itself.
+            let attributes: Option<IMFAttributes> = if mode == PictureReader::Rgb32 {
+                let mut attributes: Option<IMFAttributes> = None;
+                MFCreateAttributes(&mut attributes, 1)
+                    .map_err(|e| failed("Could not prepare to read a recording", e))?;
+                let made = attributes.ok_or("Could not prepare to read a recording.")?;
+                made.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)
+                    .map_err(|e| failed("Could not ask Windows to convert the recording's pictures", e))?;
+                Some(made)
+            } else {
+                None
+            };
+            let reader =
+                MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), attributes.as_ref()).map_err(|e| {
+                    failed(&format!("The recording {} could not be opened. Is it still there?", path.display()), e)
+                })?;
             let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
             // Only the pictures: the sound inside the video is not used (the edit mixes the separate sound files).
             reader
@@ -90,22 +143,40 @@ impl VideoFile {
             let packed = native
                 .GetUINT64(&MF_MT_FRAME_SIZE)
                 .map_err(|e| failed("Windows would not say how big the recording's pictures are", e))?;
-            let (width, height) = ((packed >> 32) as u32, (packed & 0xFFFF_FFFF) as u32);
-            let plain: IMFMediaType =
+            let display = ((packed >> 32) as u32, (packed & 0xFFFF_FFFF) as u32);
+            // Ask only for the kind of picture, as Microsoft's own examples do, and let Windows fill in the rest.
+            let wanted: IMFMediaType =
                 MFCreateMediaType().map_err(|e| failed("Could not describe the pictures wanted", e))?;
             let describe = |e| failed("Could not describe the pictures wanted", e);
-            plain.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(describe)?;
-            plain.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32).map_err(describe)?;
-            plain.SetUINT64(&MF_MT_FRAME_SIZE, packed).map_err(describe)?;
-            plain.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).map_err(describe)?;
-            // Rows from the top down.
-            plain.SetUINT32(&MF_MT_DEFAULT_STRIDE, width * 4).map_err(describe)?;
+            wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(describe)?;
+            let subtype = if mode == PictureReader::Rgb32 { MFVideoFormat_RGB32 } else { MFVideoFormat_NV12 };
+            wanted.SetGUID(&MF_MT_SUBTYPE, &subtype).map_err(describe)?;
             reader
-                .SetCurrentMediaType(stream, None, &plain)
-                .map_err(|e| failed("Windows could not turn the recording's pictures into plain pixels", e))?;
-            let layout = layout_of(&reader).map_err(|e| e.to_string())?;
-            eprintln!("export: opened the recording {}: {width} by {height}", path.display());
-            Ok(VideoFile { path: path.to_path_buf(), reader, layout, current: None, ahead: None, ended: false })
+                .SetCurrentMediaType(stream, None, &wanted)
+                .map_err(|e| failed("Windows could not decode the recording's pictures", e))?;
+            let decoded = decoded_now(&reader, mode, display)?;
+            trace(format!(
+                "opened the recording {}: shown at {} by {}, decoded as {} by {} ({}, rows {} bytes apart{})",
+                path.display(),
+                display.0,
+                display.1,
+                decoded.width,
+                decoded.height,
+                if mode == PictureReader::Rgb32 { "plain pixels" } else { "NV12" },
+                decoded.stride,
+                if decoded.bottom_up { ", from the bottom up" } else { "" }
+            ));
+            Ok(VideoFile {
+                path: path.to_path_buf(),
+                mode,
+                reader,
+                display,
+                decoded,
+                current: None,
+                ahead: None,
+                ended: false,
+                reads: 0,
+            })
         }
     }
 
@@ -125,28 +196,65 @@ impl VideoFile {
         Ok(())
     }
 
+    /// Turn a sample from the reader into a picture of the size the video is shown at. `None` if it was unusable.
+    unsafe fn picture_of(&self, sample: &IMFSample) -> Option<Picture> {
+        let d = self.decoded;
+        match self.mode {
+            PictureReader::Rgb32 => {
+                let mut bgra = vec![0u8; d.width as usize * d.height as usize * 4];
+                let layout = Layout { width: d.width, height: d.height, stride: d.stride, bottom_up: d.bottom_up };
+                if !copy_picture(sample, layout, &mut bgra) {
+                    return None;
+                }
+                let (bgra, w, h) = crop_top_left(bgra, d.width, d.height, self.display.0, self.display.1);
+                Some(Picture::solid_pixels(w, h, bgra))
+            }
+            PictureReader::Nv12 => {
+                let buffer = sample.ConvertToContiguousBuffer().ok()?;
+                let mut data: *mut u8 = std::ptr::null_mut();
+                let mut used = 0u32;
+                buffer.Lock(&mut data, None, Some(&mut used)).ok()?;
+                let picture = if data.is_null() {
+                    None
+                } else {
+                    let memory = std::slice::from_raw_parts(data, used as usize);
+                    let (w, h) = (self.display.0.min(d.width), self.display.1.min(d.height));
+                    let mut bgra = vec![0u8; w as usize * h as usize * 4];
+                    nv12_to_bgra(memory, d.stride, d.width, d.height, w, h, d.matrix, d.full_range, &mut bgra)
+                        .then(|| Picture::solid_pixels(w, h, bgra))
+                };
+                let _ = buffer.Unlock();
+                picture
+            }
+        }
+    }
+
     /// The next picture of the video, or `None` at its end.
     fn read_next(&mut self) -> Result<Option<Held>, String> {
         let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
         loop {
+            let first = self.reads < 2;
+            if first {
+                trace(format!("reading picture {} of {}", self.reads + 1, file_name(&self.path)));
+            }
             let (mut flags, mut at, mut sample) = (0u32, 0i64, None);
             unsafe { self.reader.ReadSample(stream, 0, None, Some(&mut flags), Some(&mut at), Some(&mut sample)) }
                 .map_err(|e| {
                     failed(&format!("The recording {} could not be read any further", self.path.display()), e)
                 })?;
+            self.reads += 1;
             if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
-                self.layout = unsafe { layout_of(&self.reader) }.map_err(|e| e.to_string())?;
+                self.decoded = unsafe { decoded_now(&self.reader, self.mode, self.display) }?;
             }
             if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
                 self.ended = true;
                 return Ok(None);
             }
             let Some(sample) = sample else { continue };
-            let mut bgra = vec![0u8; self.layout.width as usize * self.layout.height as usize * 4];
-            if !unsafe { copy_picture(&sample, self.layout, &mut bgra) } {
-                continue;
+            let Some(picture) = (unsafe { self.picture_of(&sample) }) else { continue };
+            if first {
+                trace(format!("read: {} by {} at {} ms", picture.width, picture.height, at / 10_000));
             }
-            let picture = Picture::solid_pixels(self.layout.width, self.layout.height, bgra);
             return Ok(Some(Held { at, picture: Rc::new(picture) }));
         }
     }
@@ -241,16 +349,18 @@ fn load_image(path: &Path) -> Result<Picture, String> {
 pub struct WindowsPictures {
     project: PathBuf,
     assets: Option<PathBuf>,
+    mode: PictureReader,
     videos: HashMap<EditSourceRef, VideoFile>,
     images: HashMap<EditSourceRef, Rc<Picture>>,
 }
 
 impl WindowsPictures {
-    pub fn new(project: &Path, assets: Option<&Path>) -> Result<Self, String> {
+    pub fn new(project: &Path, assets: Option<&Path>, mode: PictureReader) -> Result<Self, String> {
         WindowsVideo.start_media().map_err(|e| format!("Windows' video tools would not start: {e}"))?;
         Ok(Self {
             project: project.to_path_buf(),
             assets: assets.map(Path::to_path_buf),
+            mode,
             videos: HashMap::new(),
             images: HashMap::new(),
         })
@@ -270,7 +380,7 @@ impl PictureSource for WindowsPictures {
         }
         if !self.videos.contains_key(&layer.source) {
             let path = source_path(&self.project, self.assets.as_deref(), &layer.source)?;
-            self.videos.insert(layer.source.clone(), VideoFile::open(&path)?);
+            self.videos.insert(layer.source.clone(), VideoFile::open(&path, self.mode)?);
         }
         self.videos.get_mut(&layer.source).expect("just opened").at(layer.source_time_ms)
     }

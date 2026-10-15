@@ -38,8 +38,9 @@ echo Quick check that it starts and can say what it can record:
 echo.
 "%~dp0target\release\openstage-capture.exe" probe
 echo.
-echo Right now only a built-in test source exists. Recording your real
-echo screen and microphone is the next phase, and is not built yet.
+echo The list above is what this computer can record. Next, double-click
+echo CHECK MY COMPUTER.bat to see whether it is ready to record, and
+echo then try the TEST scripts one at a time.
 goto done
 
 :no_rust

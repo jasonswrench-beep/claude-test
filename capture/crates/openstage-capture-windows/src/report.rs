@@ -5,6 +5,7 @@
 //! limit, and did sound and picture stay together? The recorder keeps a few counters while it works
 //! ([`RecordingReport`]) and [`summarize`] turns them into findings in plain words.
 
+use crate::interactions::InteractionsReport;
 use crate::timing::MAX_OFFSET_MS;
 use crate::webcam::WebcamReport;
 use crate::{CaptureWork, SinkWork};
@@ -95,6 +96,8 @@ pub struct RecordingReport {
     pub work: PictureWork,
     /// What the webcam did, when one was recorded.
     pub webcam: Option<WebcamReport>,
+    /// What was noted of the author's mouse and keyboard, when that was turned on.
+    pub interactions: Option<InteractionsReport>,
 }
 
 /// One moment when the program went a long time without looking at the screen and the sound.
@@ -182,6 +185,37 @@ fn where_the_time_went(r: &RecordingReport, cpu_seconds: f64) -> String {
         ". The program used {total_ms:.0} ms of processor time a second in all, so at least {rest:.0} ms of it is outside these steps: Windows' own video threads, the graphics driver and the sound."
     );
     text
+}
+
+/// The finding about the noting of what the author did, in plain words. It says how many of each kind were noted, so a
+/// person who moved the mouse and clicked can see that it was heard, and it fails only when nothing at all was noted.
+fn interactions_finding(i: &InteractionsReport) -> Check {
+    let c = &i.counts;
+    let total = c.moves + c.clicks + c.keys + c.windows + c.elements;
+    let ok = total > 0;
+    let mut text = format!(
+        "Noted what you did for {}: {} cursor positions, {} clicks, {} clicked item names, {} window changes and {}.",
+        clock(i.recorded_ms),
+        c.moves,
+        c.clicks,
+        c.elements,
+        c.windows,
+        if i.keys { format!("{} keys", c.keys) } else { "no keys (you chose to leave them out)".to_string() }
+    );
+    if !ok {
+        text += " Nothing was noted at all, so Windows did not tell the recorder what the mouse and keyboard did. Please tell me.";
+    }
+    if i.keys && c.keys == 0 && c.clicks + c.moves > 0 {
+        text += " No keys were noted. If you typed, the recorder could not be sure the keyboard was in an ordinary text field (it writes no letters, digits or symbols when it cannot tell), or the program you typed in does not describe its fields to Windows.";
+    }
+    if c.clicks > 0 && c.elements == 0 {
+        text +=
+            " No clicked item had a name that Windows would give, so the log says where you clicked but not on what.";
+    }
+    if i.dropped > 0 {
+        text += &format!(" {} happenings were not noted because Windows was too slow to answer.", i.dropped);
+    }
+    check("run-interactions", ok, text)
 }
 
 /// The finding about the webcam, in plain words.
@@ -373,6 +407,11 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
         out.push(webcam_finding(w));
     }
 
+    // Was what the author did noted?
+    if let Some(i) = &r.interactions {
+        out.push(interactions_finding(i));
+    }
+
     // Did sound and picture stay together?
     for t in &r.tracks {
         let name = if t.microphone { "microphone" } else { "computer's sound" };
@@ -517,6 +556,7 @@ mod tests {
             },
             work: PictureWork::default(),
             webcam: None,
+            interactions: None,
         }
     }
 

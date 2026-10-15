@@ -44,10 +44,13 @@ pub enum Cue {
     Stop,
     /// Something went wrong and the recording ended.
     Error,
+    /// The recorder is about to note what you do (the cursor, the clicks, the keys): sounded once as the countdown
+    /// begins, and only when interaction recording is on (story A6).
+    Watching,
 }
 
 impl Cue {
-    pub const ALL: [Cue; 6] = [Cue::Tick, Cue::Start, Cue::Pause, Cue::Resume, Cue::Stop, Cue::Error];
+    pub const ALL: [Cue; 7] = [Cue::Tick, Cue::Start, Cue::Pause, Cue::Resume, Cue::Stop, Cue::Error, Cue::Watching];
 
     /// What the cue is for, in a few words.
     pub fn name(self) -> &'static str {
@@ -58,6 +61,7 @@ impl Cue {
             Cue::Resume => "resume",
             Cue::Stop => "stop",
             Cue::Error => "error",
+            Cue::Watching => "interactions",
         }
     }
 
@@ -70,6 +74,7 @@ impl Cue {
             Cue::Resume => "two rising notes",
             Cue::Stop => "three falling notes, the last one low and long",
             Cue::Error => "two low, rough buzzes",
+            Cue::Watching => "four soft notes that go up, stay, and come back down: what you do is being noted",
         }
     }
 
@@ -87,6 +92,7 @@ impl Cue {
             Cue::Resume => &RESUME,
             Cue::Stop => &STOP,
             Cue::Error => &ERROR,
+            Cue::Watching => &WATCHING,
         }
     }
 }
@@ -111,6 +117,8 @@ const RESUME: [Step; 2] = [soft(440.0, 100), soft(659.25, 140)];
 /// G5, D5, G4
 const STOP: [Step; 3] = [soft(783.99, 90), soft(587.33, 90), soft(392.0, 160)];
 const ERROR: [Step; 3] = [buzz(196.0, 140), rest(60), buzz(196.0, 140)];
+/// A4, E5, E5, A4: a hill, which is neither "on" (rising) nor "off" (falling).
+const WATCHING: [Step; 4] = [soft(440.0, 70), soft(659.25, 70), soft(659.25, 70), soft(440.0, 110)];
 
 /// How a note sounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,6 +328,14 @@ mod tests {
         assert_eq!(shape(Cue::Pause).1, -1);
         assert_eq!(shape(Cue::Start).0, 3);
         assert_eq!(shape(Cue::Pause).0, 2);
+    }
+
+    #[test]
+    fn the_sound_that_says_what_you_do_is_noted_is_a_hill_and_is_neither_on_nor_off() {
+        // Four notes, the first and last the same: not rising like on, not falling like off.
+        assert_eq!(shape(Cue::Watching), (4, 0, false));
+        let notes: Vec<f64> = Cue::Watching.steps().iter().map(|s| s.hz).collect();
+        assert!(notes[0] < notes[1] && notes[1] == notes[2] && notes[2] > notes[3]);
     }
 
     #[test]

@@ -58,7 +58,7 @@ goto done
 
 :passed
 echo ------------------------------------------------------------
-echo   Windows played all six sounds.
+echo   Windows played all seven sounds.
 echo ------------------------------------------------------------
 echo.
 echo Please tell me:

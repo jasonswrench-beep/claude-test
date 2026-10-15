@@ -290,6 +290,7 @@ mod tests {
             mix: None,
             region: None,
             camera: None,
+            interactions: None,
         }];
         create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media).unwrap();
         let mut good = boxed("ftyp", 16);
@@ -370,6 +371,7 @@ mod tests {
                 mix: None,
                 region: None,
                 camera: None,
+                interactions: None,
             },
             MediaFile {
                 file: "mic.wav".into(),
@@ -378,6 +380,7 @@ mod tests {
                 mix: None,
                 region: None,
                 camera: None,
+                interactions: None,
             },
             MediaFile {
                 file: "system.wav".into(),
@@ -386,6 +389,7 @@ mod tests {
                 mix: None,
                 region: None,
                 camera: None,
+                interactions: None,
             },
         ];
         create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media).unwrap();

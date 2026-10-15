@@ -2,7 +2,7 @@
 
 **Status:** v0.3 (matches the code in `capture/crates/openstage-capture-project`)
 **Format name:** `openstage-capture-project`
-**Schema version:** `0.2.4` (projects at `0.1.x`, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` still open unchanged: see section 7)
+**Schema version:** `0.2.5` (projects at `0.1.x`, `0.2.0`, `0.2.1`, `0.2.2`, `0.2.3` and `0.2.4` still open unchanged: see section 7)
 
 A recording lives in its own folder, named `something.capture`, **beside** the course (the `.osproj`), never inside it. This matters: OpenStage's publisher zips the project into `source/`, and raw footage and the interaction log (which can contain private information) must never ship to learners. Only the exported, edited video becomes part of the course.
 
@@ -15,7 +15,7 @@ lesson.capture/
   takes/
     take-001/                   a real screen recording
       take.json                 the only record of this take's state; lists its media files
-      events.jsonl              what the author did while recording (append-only)
+      events.jsonl              markers, and (only when the author turned it on) what they did with the mouse and keyboard (append-only)
       screen.mp4                the picture and the mixed sound, as one crash-safe fragmented MP4
       mic.wav                   the microphone alone (when a microphone was recorded)
       system.wav                the computer's own sound alone (when it was recorded)
@@ -84,7 +84,9 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
     { "file": "mic.wav", "kind": "microphone", "container": "wav" },
     { "file": "system.wav", "kind": "system-audio", "container": "wav" },
     { "file": "webcam.mp4", "kind": "webcam", "container": "fragmented-mp4",
-      "camera": { "name": "NexiGo Iris 4K Webcam" } }
+      "camera": { "name": "NexiGo Iris 4K Webcam" } },
+    { "file": "events.jsonl", "kind": "interactions", "container": "jsonl",
+      "interactions": { "display": 1, "keys": true } }
   ]
 }
 ```
@@ -102,7 +104,7 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
 | `flushMs` | The most recording a crash can cost with this kind of media. Segment takes force data to disk this often (1000 by default). For `fragmented-mp4` takes it is 2000: Windows closes a fragment about every second, and a measured crash on Windows 11 lost 1.1 seconds. |
 | `durationMs` | How long the recording ran, not counting time spent paused. For a recovered file take it is an **estimate** (about one second per whole fragment); the exact length is read when the video is opened. |
 | `segments` | How many media files the take holds (segment files, or video files). |
-| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`; its optional `mix` says how the sound inside it was mixed, see section 4, and its optional `region` says which part of the display it shows, see below: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4) and `webcam` (a `fragmented-mp4` of its own, new in 0.2.4, with an optional `camera` that names the camera: see "The webcam" in section 4). Absent in older projects. A reader ignores kinds it does not know. |
+| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`; its optional `mix` says how the sound inside it was mixed, see section 4, and its optional `region` says which part of the display it shows, see below: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4) `webcam` (a `fragmented-mp4` of its own, new in 0.2.4, with an optional `camera` that names the camera: see "The webcam" in section 4) and `interactions` (the take's `events.jsonl` as `jsonl`, new in 0.2.5, listed **only when the author turned interaction recording on**, with an `interactions` object: see section 6). Absent in older projects. A reader ignores kinds it does not know. |
 
 **`region`** (new in 0.2.3) is present on the video's entry only when less than the whole display was recorded. `display` is the display's number (1 is the main display, as in `sources`); `x` and `y` are how many pixels the picture's top left corner is from the display's top left corner; `width` and `height` are the size of the video in pixels, which is the size actually recorded (an odd size entered by the author is made one pixel smaller, because H.264 needs an even size, and this field holds the smaller size). Anything recorded in display coordinates, such as the cursor and clicks, is placed on the video by subtracting `x` and `y`. A reader that does not know `region` shows the video as it is. The program also refuses a region that reaches past the display or is smaller than 64 by 64 pixels before anything is recorded.
 
@@ -195,28 +197,37 @@ It is safe to run again: takes that are already fine are left alone. A take fold
 
 ## 6. The interaction log: `events.jsonl`
 
-One JSON object per line, only ever appended to. `t` is milliseconds of recording time.
+One JSON object per line, only ever appended to. `t` is milliseconds of recording time, never goes backwards from one line to the next, and does not advance while paused.
 
 ```json
+{"t":0,"type":"window","title":"Untitled - Notepad","process":"notepad.exe","bounds":{"x":80,"y":40,"width":800,"height":600}}
+{"t":40,"type":"cursorMove","x":640,"y":470}
 {"t":1200,"type":"click","x":640,"y":480,"button":"left"}
-{"t":1210,"type":"element","name":"Save","role":"button"}
-{"t":3400,"type":"window","title":"Untitled - Notepad","process":"notepad.exe"}
+{"t":1200,"type":"element","name":"Save","role":"button"}
+{"t":2100,"type":"key","key":"s","modifiers":["ctrl"]}
+{"t":3400,"type":"marker","label":"look here"}
 ```
 
 | `type` | Fields |
 |---|---|
-| `cursorMove` | `x`, `y` |
-| `click` | `x`, `y`, `button` |
-| `key` | `key`, `modifiers`. **Never written for password fields.** |
-| `window` | `title`, `process` |
-| `element` | `name`, `role` of the clicked item, from Windows' accessibility information |
-| `marker` | `label` |
+| `cursorMove` | `x`, `y`. Written when the cursor has moved, no more often than every 33 ms; the last place it reached is always written. |
+| `click` | `x`, `y`, `button` (`left`, `right`, `middle`, `back`, `forward`). Button presses only. |
+| `element` | `name`, `role` of the item that was clicked, from Windows' accessibility information, written right after the `click` it belongs to with the same `t`. `role` is in English whatever the language of Windows (`button`, `edit`, `menu item`, `link`, ...). Written only when the item has a name. Only the name is read, never the contents of a field. |
+| `key` | `key`, `modifiers`. One line per press (a key held down is one press). `key` names the key, not the character: letters are lower case, digits are `0` to `9`, the symbols are named as on a US keyboard (`semicolon`, `comma`, `minus`, `slash`, `backtick`, `left-bracket`, `quote`, ...), others are `enter`, `tab`, `escape`, `space`, `backspace`, `delete`, `left`, `up`, `f1` to `f24`, `numpad-0` to `numpad-9` and so on. `modifiers` lists any of `ctrl`, `alt`, `shift`, `win`, in that order. The modifier keys on their own are never lines. **Never written for a password field. A letter, digit, symbol or space typed on its own is written only when the recorder is sure the keyboard is aimed at an ordinary text field; when it cannot tell, those are not written at all.** Keys that cannot spell a secret (`enter`, the arrows, `f5`) and shortcuts (`ctrl+s`) are written unless the keyboard is known to be in a password field. Ctrl and Alt held together count as typing, not as a shortcut, because that is how many keyboards make their third symbol on a key. |
+| `window` | `title`, `process` (the program's file name), and optionally `bounds` (`x`, `y`, `width`, `height`: where the window sits, in the same pixels as the cursor; absent when Windows would not say). Written when the window in front, its title or its place changes, no more often than every 250 ms; the last change is always written. The first line of a take says which window was in front when recording began. |
+| `marker` | `label`. The author's own note. |
 
-Interaction capture is **off unless the author turns it on** (this is a requirement for the real Windows capture, Phase 2; in version 0.1 the only thing written is `marker`). A line that cannot be read, such as one cut short by a crash, is skipped when reading and trimmed by `recover`. The recorder writes the log from a thread of its own and forces it to the disk about every `flushMs`, so that a drive that is slow to confirm a save (the owner's drive took up to 0.8 seconds, several times a minute) cannot hold up the picture or the sound. The price is that on such a drive a crash can lose more of the log than `flushMs`; the video and sound files are not affected, because they are written elsewhere. The log is the raw material for step lists, alt text, and interactive steps; it is not published.
+**Positions** are pixels of the display named in the `interactions` entry of `take.json`, counted from that display's top left corner. They can be negative or past the display's size when the cursor is on another display. When the whole display is recorded they are pixels of the video; with a `region` subtract the region's `x` and `y`; for a recorded window subtract the `x` and `y` of the `bounds` of the latest `window` line for that window.
+
+**The `interactions` entry** in `take.json`'s media list (`kind` `interactions`, file `events.jsonl`, container `jsonl`) has `display` (the number the positions are measured on) and `keys` (false when the author chose to leave the keys out, so a reader can tell an empty log from one that was never asked to hold keys). It is absent when the author did not turn interaction recording on; the file may still exist and hold markers.
+
+**It is off unless the author turns it on** (`record --interactions no-keys` or `on`). With `no-keys` the recorder installs no keyboard hook at all. The author is told in words, with a sound and in every state report while it is on; nothing is noted while recording is paused. What is noted can be read back in words and deleted (`openstage-capture interactions`): deleting removes every line except `marker` and any line that cannot be read, and removes the take's `interactions` entry; the video and the sound are not touched. Deleting a take that is still being recorded is refused.
+
+A line that cannot be read, such as one cut short by a crash, is skipped when reading and trimmed by `recover`. The recorder writes the log from a thread of its own and forces it to the disk about every `flushMs`, so that a drive that is slow to confirm a save (the owner's drive took up to 0.8 seconds, several times a minute) cannot hold up the picture or the sound. The price is that on such a drive a crash can lose more of the log than `flushMs`; the video and sound files are not affected, because they are written elsewhere. The log can contain private information (the title of every window in front, the names of what was clicked, the keys pressed), so it lives in the capture project and is never published. It is the raw material for step lists, alt text, suggested zooms and cursor effects.
 
 ## 7. Versions
 
-`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. `0.2.2` adds the optional `mix` on the video's entry in that list. `0.2.3` adds the optional `region` on the video's entry. `0.2.4` adds the `webcam` kind of media and the optional `camera` on its entry. Projects at `0.1.x`, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
+`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. `0.2.2` adds the optional `mix` on the video's entry in that list. `0.2.3` adds the optional `region` on the video's entry. `0.2.4` adds the `webcam` kind of media and the optional `camera` on its entry. `0.2.5` adds the `interactions` kind of media (the take's `events.jsonl`), the optional `interactions` object on its entry, and the optional `bounds` on a `window` line of the log. Projects at `0.1.x`, `0.2.0`, `0.2.1`, `0.2.2`, `0.2.3` and `0.2.4` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
 
 ## 8. Rules this format keeps
 

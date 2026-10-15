@@ -40,19 +40,20 @@ impl PlainSink {
     pub fn describe(&mut self, event: &Event) -> Option<String> {
         match event {
             Event::Hello { .. } | Event::Probe { .. } | Event::Recovered { .. } => None,
-            Event::State { state, elapsed_ms, take } => {
+            Event::State { state, elapsed_ms, take, watching } => {
                 if self.last_state == Some((*state, *take)) {
                     return None;
                 }
+                let noting = if *watching { " Interaction recording is on." } else { "" };
                 let was_paused = self.last_state == Some((State::Paused, *take));
                 self.last_state = Some((*state, *take));
                 match state {
                     State::Idle => None,
                     State::Countdown => Some("Get ready: the countdown has started.".to_string()),
                     State::Recording if was_paused => {
-                        Some("Resumed. Recording take ".to_string() + &take.to_string() + " again.")
+                        Some("Resumed. Recording take ".to_string() + &take.to_string() + " again." + noting)
                     }
-                    State::Recording => Some(format!("Recording take {take}.")),
+                    State::Recording => Some(format!("Recording take {take}.{noting}")),
                     State::Paused => {
                         Some(format!("Paused at {}. Time spent paused is not recorded.", secs(*elapsed_ms)))
                     }
@@ -141,7 +142,7 @@ mod tests {
     use super::*;
 
     fn state(state: State, elapsed_ms: u64, take: u32) -> Event {
-        Event::State { state, elapsed_ms, take }
+        Event::State { state, elapsed_ms, take, watching: false }
     }
 
     #[test]
@@ -156,6 +157,25 @@ mod tests {
         );
         assert_eq!(p.describe(&state(State::Recording, 2500, 1)).as_deref(), Some("Resumed. Recording take 1 again."));
         // A new take with the same state is news again.
+        assert_eq!(p.describe(&state(State::Recording, 0, 2)).as_deref(), Some("Recording take 2."));
+    }
+
+    #[test]
+    fn while_what_you_do_is_being_noted_every_recording_is_said_to_be_so() {
+        let mut p = PlainSink::new();
+        let watching = |state, ms, take| Event::State { state, elapsed_ms: ms, take, watching: true };
+        assert_eq!(
+            p.describe(&watching(State::Recording, 0, 1)).as_deref(),
+            Some("Recording take 1. Interaction recording is on.")
+        );
+        assert_eq!(p.describe(&watching(State::Recording, 1000, 1)), None, "not repeated every second");
+        // Paused is not noted, and says nothing about it; resumed says it again.
+        assert!(!p.describe(&watching(State::Paused, 2000, 1)).unwrap().contains("Interaction"));
+        assert_eq!(
+            p.describe(&watching(State::Recording, 2000, 1)).as_deref(),
+            Some("Resumed. Recording take 1 again. Interaction recording is on.")
+        );
+        // Not being noted, nothing is said.
         assert_eq!(p.describe(&state(State::Recording, 0, 2)).as_deref(), Some("Recording take 2."));
     }
 

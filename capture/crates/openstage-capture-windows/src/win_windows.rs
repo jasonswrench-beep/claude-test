@@ -97,7 +97,7 @@ unsafe fn describe(hwnd: HWND) -> Option<WindowInfo> {
 }
 
 /// The name of the program a process runs, such as `notepad.exe`.
-unsafe fn program_name(process_id: u32) -> String {
+pub(crate) unsafe fn program_name(process_id: u32) -> String {
     unsafe {
         let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) else {
             return "an unknown program".to_string();

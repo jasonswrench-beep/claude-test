@@ -10,17 +10,19 @@
 
 mod checks;
 mod demo;
+mod interactions_cmd;
 mod plain;
 
 #[cfg(windows)]
 use checks::emit_progress;
 use checks::{emit_check, finish_checks, finish_checks_with, run_recorder_crash_test, run_video_crash_test};
 use clap::{Parser, Subcommand};
+use interactions_cmd::{run_interactions, InteractionsOptions};
 use openstage_capture::{
     run_session_with_cues, CuePlayer, EventSink, Input, InputSource, MediaFactory, NoCues, ScriptedInput,
     SessionConfig, Source, SyntheticSource, SystemClock,
 };
-use openstage_capture_project::{recover_project, take_dir};
+use openstage_capture_project::{describe_summary, read_take_log, recover_project, summarize_log, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
 #[cfg(windows)]
 use openstage_capture_windows::{
@@ -30,12 +32,12 @@ use openstage_capture_windows::{
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, choose_camera, choose_window,
     compare_audio_readback, compare_readback, compare_size_readback, compare_webcam_readback, describe_cameras,
-    describe_devices, output_may_have_changed, plan_sound, run_audio_test, run_cue_test, run_find_output,
-    run_pick_region, run_screen_test, run_setup_check, run_timing_test, run_video_test, summarize,
-    system_audio_platform, system_camera_platform, system_cue_player, system_platform, system_video_platform,
-    AudioChoice, AudioTestOptions, Check, CueTestOptions, DeviceKind, FindOutputOptions, Mix, PickRegionOptions,
-    Region, ScreenMedia, ScreenTestOptions, SetupOptions, SoundPlan, TimingTestOptions, VideoTestOptions, WindowInfo,
-    MIC_FILE, SCREEN_FILE, SYSTEM_FILE, WEBCAM_FILE,
+    describe_devices, interactions_explanation, output_may_have_changed, plan_sound, run_audio_test, run_cue_test,
+    run_find_output, run_pick_region, run_screen_test, run_setup_check, run_timing_test, run_video_test, summarize,
+    system_audio_platform, system_camera_platform, system_cue_player, system_interaction_platform, system_platform,
+    system_video_platform, AudioChoice, AudioTestOptions, Check, CueTestOptions, DeviceKind, FindOutputOptions,
+    InteractionLevel, Mix, PickRegionOptions, Region, ScreenMedia, ScreenTestOptions, SetupOptions, SoundPlan,
+    TimingTestOptions, VideoTestOptions, WindowInfo, MIC_FILE, SCREEN_FILE, SYSTEM_FILE, WEBCAM_FILE,
 };
 use plain::PlainSink;
 use std::io::{self, BufRead, Read, Write};
@@ -102,6 +104,14 @@ enum Cmd {
         /// recording.
         #[arg(long, default_value = "none")]
         camera: String,
+        /// With `--source screen`: whether to keep a private log of what you do while recording (where the cursor
+        /// goes, your clicks, the window in front, the name of what you click, and your keys), so that Capture can
+        /// later suggest zooms and write step lists. `off` (the default) keeps nothing. `no-keys` keeps everything
+        /// except the keys. `on` keeps the keys too, never from a password field. You are told in words and with a
+        /// sound each time it starts, and it is never kept while paused. The log stays in the take's folder,
+        /// is never published, and can be read or deleted with the `interactions` command.
+        #[arg(long, default_value = "off")]
+        interactions: String,
         /// With `--source screen`: make the microphone louder (positive) or quieter (negative) by this
         /// many decibels in the mix inside the video. 0 leaves it as heard; 6 is about double the volume.
         /// The separate `mic.wav` is never changed.
@@ -193,6 +203,32 @@ enum Cmd {
         /// The folder to also save each sound in, as a file (created if needed).
         #[arg(long, default_value = "cue-test-output")]
         out: PathBuf,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// Read back, in words, what was noted of your mouse and keyboard while recording (where the cursor went, clicks,
+    /// windows, the names of clicked items, keys), and delete it if you want. Records nothing.
+    Interactions {
+        /// The recording folder.
+        #[arg(long)]
+        project: PathBuf,
+        /// Only this take (its number). The default is every take.
+        #[arg(long)]
+        take: Option<u32>,
+        /// Print every line of the log as a sentence, including the keys. Without this, only counts and names.
+        #[arg(long)]
+        list: bool,
+        /// With `--list`: also the cursor's positions, which are many.
+        #[arg(long)]
+        with_moves: bool,
+        /// Delete what was noted of your mouse and keyboard from the chosen takes. Your own markers are kept. The
+        /// video and sound are not touched. Without `--yes` this only says what it would delete.
+        #[arg(long)]
+        delete: bool,
+        /// Really delete.
+        #[arg(long)]
+        yes: bool,
         /// Print sentences for a person to read instead of one-line JSON events.
         #[arg(long)]
         plain: bool,
@@ -607,6 +643,7 @@ fn main() -> ExitCode {
             microphone,
             output,
             camera,
+            interactions,
             mic_gain_db,
             system_gain_db,
             cues,
@@ -634,6 +671,22 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
+            let interaction_level = match InteractionLevel::parse(&interactions) {
+                Ok(level) => level,
+                Err(message) => {
+                    sink.emit(Event::Error { code: "bad-option".into(), message, fatal: true });
+                    return ExitCode::from(2);
+                }
+            };
+            // The test source has nothing to watch. Saying nothing would let the author think it was being noted.
+            if source == "synthetic" && interaction_level.is_on() {
+                sink.emit(Event::Error {
+                    code: "bad-option".into(),
+                    message: "--interactions only works with --source screen. The built-in test source has no mouse or keyboard to note, so nothing would be recorded.".into(),
+                    fatal: true,
+                });
+                return ExitCode::from(2);
+            }
             let mut sound_plan = SoundPlan::default();
             let mut chosen_region: Option<Region> = None;
             let mut chosen_window: Option<WindowInfo> = None;
@@ -772,6 +825,15 @@ fn main() -> ExitCode {
                     }
                     if let Some(found) = chosen_window {
                         media = media.with_window(found);
+                    }
+                    // Said in words now, before the countdown, and again in words and with a sound as each countdown begins.
+                    if interaction_level.is_on() {
+                        media = media.with_interactions(system_interaction_platform(), interaction_level);
+                        sink.emit(Event::Check {
+                            check: "interactions".into(),
+                            ok: true,
+                            message: interactions_explanation(interaction_level),
+                        });
                     }
                     report_handle = Some(media.report_handle());
                     Box::new(media)
@@ -929,6 +991,15 @@ fn main() -> ExitCode {
                         for (code, message) in warnings {
                             sink.emit(Event::Warning { code, message });
                         }
+                        // What was noted of the author's mouse and keyboard, in words, so it can be seen at once.
+                        if interaction_level.is_on() {
+                            let lines = read_take_log(&project, outcome.take).unwrap_or_default();
+                            sink.emit(Event::Check {
+                                check: "interactions-log".into(),
+                                ok: true,
+                                message: describe_summary(outcome.take, &summarize_log(&lines)),
+                            });
+                        }
                         // What the recording did: did the program keep up, did it grow, did sound stay with picture.
                         if let Some(report) = report_handle.as_ref().and_then(|h| h.borrow().clone()) {
                             for check in summarize(&report) {
@@ -958,6 +1029,14 @@ fn main() -> ExitCode {
                     ExitCode::FAILURE
                 }
             }
+        }
+        Cmd::Interactions { project, take, list, with_moves, delete, yes, plain } => {
+            if !plain {
+                hello();
+            }
+            let opts = InteractionsOptions { project, take, list, with_moves, delete, yes };
+            let all_fine = run_interactions(&opts, &mut |c| emit_check(plain, c));
+            finish_checks_with(plain, all_fine, "Done.", "That did not work, or needs your answer: see above.")
         }
         Cmd::Recover { project } => {
             hello();

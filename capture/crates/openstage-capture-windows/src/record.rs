@@ -12,6 +12,7 @@
 //! steady frame rate (see [`Pacer`]).
 
 use crate::audio::{AudioPlatform, CHANNELS, SAMPLE_RATE};
+use crate::interactions::{announcement, InteractionPlatform, InteractionSetup, InteractionTake, Level};
 use crate::region::{CroppedSource, Region};
 use crate::report::{LookStats, PictureWork, RecordingReport, SlowMoment};
 use crate::sound::{Sound, SoundPlan, SoundTake, MIXED_BITRATE_KBPS};
@@ -20,7 +21,7 @@ use crate::webcam::{CameraInfo, CameraMode, CameraPlatform, StartedCamera, Webca
 use crate::window::{fit_into, recording_size, FittedSource, WindowInfo};
 use crate::{CaptureWork, Frame, FrameSource, Outline, Platform, SinkSpec, VideoPlatform, VideoSink};
 use openstage_capture::{MediaFactory, SessionConfig, SessionError, TakeMedia};
-use openstage_capture_project::{CameraInfo as CameraRecord, MediaFile, RegionInfo};
+use openstage_capture_project::{CameraInfo as CameraRecord, InteractionInfo, LogEvent, MediaFile, RegionInfo};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
@@ -53,6 +54,8 @@ pub struct ScreenMedia {
     sound: Option<Sound>,
     /// Record this webcam too, into a file of its own, if set.
     camera: Option<(Box<dyn CameraPlatform>, CameraInfo)>,
+    /// Note what the author does (the cursor, clicks, keys), if set. Off unless asked for.
+    interactions: Option<(Box<dyn InteractionPlatform>, Level)>,
     /// The clock the webcam's picture times are measured on (Windows' own, except in tests), and how long to wait
     /// at a pause or the end for the pictures taken in the last moments to arrive.
     camera_clock: Rc<dyn Fn() -> i64>,
@@ -84,6 +87,7 @@ impl ScreenMedia {
             window: None,
             sound: None,
             camera: None,
+            interactions: None,
             camera_clock: Rc::new(crate::now_100ns),
             camera_settle: Duration::from_millis(400),
             report: Rc::new(RefCell::new(None)),
@@ -134,6 +138,14 @@ impl ScreenMedia {
         self
     }
 
+    /// Note what the author does while recording (the cursor, clicks, windows, clicked items and, at [`Level::All`],
+    /// keys) into the take's `events.jsonl`. [`Level::Off`] notes nothing. The session says so in words and with a
+    /// sound as each countdown begins, and marks every state report while recording.
+    pub fn with_interactions(mut self, platform: Box<dyn InteractionPlatform>, level: Level) -> Self {
+        self.interactions = level.is_on().then_some((platform, level));
+        self
+    }
+
     /// Recording this computer's real screen.
     pub fn for_this_computer(display: u32, fps: u32, bitrate_kbps: u32) -> Self {
         let screen = crate::system_platform();
@@ -164,9 +176,21 @@ impl MediaFactory for ScreenMedia {
                 height: r.height - r.height % 2,
             }),
             camera: None,
+            interactions: None,
         }];
         if let Some(sound) = &self.sound {
             files.extend(sound.plan().media_files());
+        }
+        if let Some((_, level)) = &self.interactions {
+            files.push(MediaFile {
+                file: "events.jsonl".into(),
+                kind: "interactions".into(),
+                container: "jsonl".into(),
+                mix: None,
+                region: None,
+                camera: None,
+                interactions: Some(InteractionInfo { display: self.display, keys: level.keys() }),
+            });
         }
         if let Some((_, camera)) = &self.camera {
             files.push(MediaFile {
@@ -176,6 +200,7 @@ impl MediaFactory for ScreenMedia {
                 mix: None,
                 region: None,
                 camera: Some(CameraRecord { name: camera.name.clone() }),
+                interactions: None,
             });
         }
         files
@@ -183,6 +208,10 @@ impl MediaFactory for ScreenMedia {
 
     fn declared_flush_ms(&self, _cfg: &SessionConfig) -> u64 {
         DECLARED_LOSS_MS
+    }
+
+    fn watching(&self) -> Option<String> {
+        self.interactions.as_ref().map(|(_, level)| announcement(*level))
     }
 
     fn warm_up(&self, _cfg: &SessionConfig) -> Result<(), SessionError> {
@@ -206,11 +235,24 @@ impl MediaFactory for ScreenMedia {
             None => (self.prepare()?, false),
         };
         let prepared_at = started.elapsed();
-        let Prepared { source, first, listening, outline, camera } = prepared;
+        let Prepared { source, first, listening, outline, camera, origin } = prepared;
         let dropped_at_start = source.dropped();
         let received_at_start = source.received();
         let capture_work_at_start = source.work();
 
+        // Noting what the author does starts before any file is made, so that a computer that will not allow it
+        // leaves nothing half made behind. Recording time 0 is set again at the end of this function.
+        let mut interactions = match &self.interactions {
+            Some((platform, level)) => {
+                let setup = InteractionSetup { keys: level.keys(), origin };
+                Some(InteractionTake::start(platform.as_ref(), &setup).map_err(|e| {
+                    media_error(format!(
+                        "Could not start noting what you do with the mouse and keyboard: {e} To record without it, leave out --interactions."
+                    ))
+                })?)
+            }
+            None => None,
+        };
         let spec = SinkSpec {
             path: take_dir.join(SCREEN_FILE),
             width: first.width,
@@ -239,6 +281,10 @@ impl MediaFactory for ScreenMedia {
         if let Some(sound) = sound.as_mut() {
             sound.discard_backlog();
         }
+        // Recording time starts now, not when the hooks went in a moment ago.
+        if let Some(interactions) = interactions.as_mut() {
+            interactions.pump(0);
+        }
         // Where the start-up time goes, for diagnosis. Standard error is for diagnostics only.
         eprintln!(
             "start-up: {} {} ms, then the video file was ready after {} ms in all (this is the pause after the countdown)",
@@ -255,6 +301,7 @@ impl MediaFactory for ScreenMedia {
             written: 0,
             sound,
             webcam,
+            interactions,
             video: Rc::clone(&self.video),
             report: Rc::clone(&self.report),
             started: Instant::now(),
@@ -285,6 +332,8 @@ struct Started {
     outline: Option<Outline>,
     capture_started: Duration,
     first: Frame,
+    /// Where the display the positions of the cursor and clicks are measured on has its top left corner, on the whole desktop.
+    origin: (i32, i32),
 }
 
 /// Everything that can be started before the take's folder is known.
@@ -296,6 +345,8 @@ struct Prepared {
     outline: Option<Outline>,
     /// The webcam, started and with its first picture, if one is to be recorded.
     camera: Option<ReadyCamera>,
+    /// Where the recorded display has its top left corner on the desktop.
+    origin: (i32, i32),
 }
 
 /// A webcam that has been started and has sent its first picture.
@@ -311,7 +362,7 @@ impl ScreenMedia {
         let started = Instant::now();
         self.video.start_media().map_err(|e| media_error(format!("Windows' video tools would not start: {e}")))?;
         let tools_ready = started.elapsed();
-        let Started { source, outline, capture_started, first } = match &self.window {
+        let Started { source, outline, capture_started, first, origin } = match &self.window {
             Some(window) => self.prepare_window(window, started)?,
             None => self.prepare_display(started)?,
         };
@@ -341,7 +392,7 @@ impl ScreenMedia {
             if camera.is_some() { format!("webcam's first picture {} ms, ", camera_ready.as_millis()) } else { String::new() },
             started.elapsed().as_millis()
         );
-        Ok(Prepared { source, first, listening, outline, camera })
+        Ok(Prepared { source, first, listening, outline, camera, origin })
     }
 
     /// Start the webcam and wait for its first picture. Says in words what to do if it will not start.
@@ -430,7 +481,7 @@ impl ScreenMedia {
                 "No picture arrived from the screen within 3 seconds. Windows only sends a picture when something changes: try again while moving a window.",
             )
         })?;
-        Ok(Started { source, outline, capture_started, first })
+        Ok(Started { source, outline, capture_started, first, origin: (display.x, display.y) })
     }
 
     /// Start capturing the chosen window and wait for its first picture. The video gets that picture's size
@@ -461,7 +512,18 @@ impl ScreenMedia {
             outline: None,
             capture_started,
             first,
+            origin: self.display_origin(),
         })
+    }
+
+    /// Where the display whose number was asked for has its top left corner. A recorded window is placed on that
+    /// display's pixels too; if the display cannot be found, the main display's corner.
+    fn display_origin(&self) -> (i32, i32) {
+        self.screen
+            .list_displays()
+            .ok()
+            .and_then(|displays| displays.into_iter().find(|d| d.number == self.display))
+            .map_or((0, 0), |d| (d.x, d.y))
     }
 
     /// Make and throw away a small video file, so the encoder is awake when the real one is made. Any
@@ -511,6 +573,8 @@ struct ScreenTake {
     sound: Option<SoundTake>,
     /// The webcam, when one is being recorded.
     webcam: Option<WebcamTake>,
+    /// What the author does, when that is being noted.
+    interactions: Option<InteractionTake>,
     // What the report needs.
     video: Rc<dyn VideoPlatform>,
     report: Rc<RefCell<Option<RecordingReport>>>,
@@ -685,6 +749,9 @@ impl TakeMedia for ScreenTake {
         if let Some(webcam) = self.webcam.as_mut() {
             webcam.pump(media_ms)?;
         }
+        if let Some(interactions) = self.interactions.as_mut() {
+            interactions.pump(media_ms);
+        }
         self.looks.last_picture = picture_started.elapsed();
         let sound_started = Instant::now();
         if let (Some(sound), Some(sink)) = (self.sound.as_mut(), self.sink.as_mut()) {
@@ -725,6 +792,10 @@ impl TakeMedia for ScreenTake {
         if let Some(webcam) = self.webcam.as_mut() {
             webcam.paused();
         }
+        // Nothing the author does while paused is noted: that time is not in the recording.
+        if let Some(interactions) = self.interactions.as_mut() {
+            interactions.paused();
+        }
     }
 
     fn resumed(&mut self) {
@@ -736,10 +807,21 @@ impl TakeMedia for ScreenTake {
         if let Some(webcam) = self.webcam.as_mut() {
             webcam.resumed();
         }
+        if let Some(interactions) = self.interactions.as_mut() {
+            interactions.resumed();
+        }
     }
 
     fn notices(&mut self) -> Vec<(String, String)> {
-        self.webcam.as_mut().map(|w| w.notices()).unwrap_or_default()
+        let mut notices = self.webcam.as_mut().map(|w| w.notices()).unwrap_or_default();
+        if let Some(interactions) = self.interactions.as_mut() {
+            notices.extend(interactions.take_notices());
+        }
+        notices
+    }
+
+    fn log_lines(&mut self) -> Vec<(u64, LogEvent)> {
+        self.interactions.as_mut().map(|i| i.take_lines()).unwrap_or_default()
     }
 
     fn finish(mut self: Box<Self>, media_ms: u64) -> Result<u32, SessionError> {
@@ -778,6 +860,11 @@ impl TakeMedia for ScreenTake {
         if webcam.is_some() {
             files += 1;
         }
+        // The session took the last of the log lines before asking for this to finish.
+        let interactions = self.interactions.take().map(|i| i.finish(media_ms));
+        if interactions.is_some() {
+            files += 1;
+        }
         *self.report.borrow_mut() = Some(RecordingReport {
             recorded_ms: media_ms,
             pictures_written: self.written,
@@ -801,6 +888,7 @@ impl TakeMedia for ScreenTake {
                 loop_cpu: self.thread_cpu_start.zip(self.video.thread_cpu_time()).map(|(a, b)| b.saturating_sub(a)),
             },
             webcam: webcam.as_ref().and_then(|w| w.as_ref().ok().cloned()),
+            interactions,
         });
         sink.finish().map_err(|e| media_error(format!("The video file could not be completed: {e}")))?;
         if let Some(Err(e)) = webcam {
@@ -840,6 +928,8 @@ mod tests {
         gives_picture: bool,
         /// Make every pixel say where it is (blue is the column, green the row), instead of all the same.
         positional: bool,
+        /// Where the display's top left corner is on the desktop.
+        origin: (i32, i32),
         /// How many times a capture of the screen was started.
         captures: Rc<std::cell::Cell<u32>>,
         /// The regions a frame was shown around, and how many such frames are on the screen right now.
@@ -864,8 +954,8 @@ mod tests {
         fn list_displays(&self) -> Result<Vec<DisplayInfo>, ScreenError> {
             Ok(vec![DisplayInfo {
                 number: 1,
-                x: 0,
-                y: 0,
+                x: self.origin.0,
+                y: self.origin.1,
                 width: self.width,
                 height: self.height,
                 main: true,
@@ -1005,6 +1095,7 @@ mod tests {
             height: 4,
             gives_picture: true,
             positional: false,
+            origin: (0, 0),
             captures: Rc::new(std::cell::Cell::new(0)),
             outlines: Rc::new(RefCell::new(Vec::new())),
             outlines_showing: Rc::new(std::cell::Cell::new(0)),
@@ -2365,5 +2456,246 @@ mod tests {
         // 2 seconds of recording: about 200 thrown away and 400 delivered. The pause's 200 and 400 are left out.
         assert!((180..=220).contains(&r.pictures_replaced), "thrown away: {}", r.pictures_replaced);
         assert!((360..=440).contains(&r.pictures_received), "delivered: {}", r.pictures_received);
+    }
+
+    // ---- noting what the author does ----
+
+    use crate::interactions::fakes::FakePlatform as FakeInteractions;
+    use crate::interactions::Level as InteractionLevel;
+    use openstage_capture_project::{read_log, LogLine};
+    use openstage_capture_protocol::State;
+
+    fn noting(media: ScreenMedia, level: InteractionLevel) -> (ScreenMedia, crate::interactions::fakes::FakeFeed) {
+        let platform = FakeInteractions::new();
+        let feed = platform.feed.clone();
+        (media.with_interactions(Box::new(platform), level), feed)
+    }
+
+    fn click(x: i32) -> LogEvent {
+        LogEvent::Click { x, y: 1, button: "left".into() }
+    }
+
+    #[test]
+    fn what_the_author_does_is_not_noted_unless_it_was_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(500);
+        let (media, files) = factory(good_screen());
+        let media = media.with_interactions(Box::new(FakeInteractions::new()), InteractionLevel::Off);
+        assert_eq!(media.watching(), None, "off says nothing, because nothing is noted");
+        let mut sink = VecSink::default();
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        assert_eq!(files.0.borrow().len(), 1);
+        assert!(read_take(&cfg.project, 1).unwrap().media.iter().all(|m| m.kind != "interactions"));
+        assert!(!sink.events.iter().any(|e| matches!(e, Event::Check { check, .. } if check == "interactions-on")));
+        assert!(!sink.events.iter().any(|e| matches!(e, Event::State { watching: true, .. })));
+    }
+
+    #[test]
+    fn what_was_noted_is_written_to_the_takes_log_in_order_and_the_take_says_how_to_read_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(2000);
+        let (media, files) = factory(good_screen());
+        let (media, feed) = noting(media, InteractionLevel::All);
+        feed.push(100, LogEvent::Window { title: "Notepad".into(), process: "notepad.exe".into(), bounds: None });
+        feed.push(300, click(5));
+        feed.push(300, LogEvent::Element { name: "Save".into(), role: "button".into() });
+        feed.push(900, LogEvent::Key { key: "a".into(), modifiers: vec![] });
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new())
+            .unwrap();
+        assert!(out.ok);
+        assert_eq!(out.segments, 2, "the video and the log");
+        assert_eq!(files.0.borrow().len(), 1, "the log is not a video file");
+
+        let log = read_log(&take_dir(&cfg.project, 1).join("events.jsonl")).unwrap();
+        assert_eq!(log.iter().map(|l| l.t).collect::<Vec<_>>(), [100, 300, 300, 900], "{log:?}");
+        assert!(matches!(&log[2].event, LogEvent::Element { name, .. } if name == "Save"));
+
+        let take = read_take(&cfg.project, 1).unwrap();
+        let entry = take.media.iter().find(|m| m.kind == "interactions").expect("the log is listed");
+        assert_eq!((entry.file.as_str(), entry.container.as_str()), ("events.jsonl", "jsonl"));
+        assert_eq!(entry.interactions, Some(InteractionInfo { display: 1, keys: true }));
+        assert!(feed.was_stopped(), "the hooks are taken out when the take ends");
+    }
+
+    #[test]
+    fn what_is_noted_at_the_very_end_is_still_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, feed) = noting(factory(good_screen()).0, InteractionLevel::NoKeys);
+        // The session stops by itself at 1 second, with a line noted for its last moment.
+        feed.push(990, click(9));
+        let mut input = ScriptedInput::new(vec![(1000, Input::Command(Command::Stop))]);
+        run_session(&cfg, &media, &mut input, &mut VecSink::default(), clock.as_ref()).unwrap();
+        let log = read_log(&take_dir(&cfg.project, 1).join("events.jsonl")).unwrap();
+        assert_eq!(log, vec![LogLine { t: 990, event: click(9) }]);
+    }
+
+    #[test]
+    fn the_choice_to_leave_keys_out_is_written_down_and_given_to_the_platform_with_the_displays_corner() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(500);
+        let screen = FakeScreen { origin: (1920, -40), ..good_screen() };
+        let (media, feed) = noting(factory(screen).0, InteractionLevel::NoKeys);
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(*feed.started_with.lock().unwrap(), Some((false, (1920, -40))));
+        let take = read_take(&cfg.project, 1).unwrap();
+        let entry = take.media.iter().find(|m| m.kind == "interactions").unwrap();
+        assert_eq!(entry.interactions, Some(InteractionInfo { display: 1, keys: false }));
+    }
+
+    #[test]
+    fn a_recorded_window_is_noted_too_on_the_numbered_display() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(500);
+        let (media, _) = window_media(WindowScreen { sizes: vec![(200, 120)], close_after: None });
+        let (media, feed) = noting(media, InteractionLevel::All);
+        feed.push(10, click(3));
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(
+            *feed.started_with.lock().unwrap(),
+            Some((true, (0, 0))),
+            "no display listed: the main one's corner"
+        );
+        assert_eq!(read_log(&take_dir(&cfg.project, 1).join("events.jsonl")).unwrap().len(), 1);
+    }
+
+    /// Remembers, for each state report, whether the platform's clock was running at that moment.
+    struct ClockWatcher {
+        feed: crate::interactions::fakes::FakeFeed,
+        seen: Vec<(Event, Option<bool>)>,
+    }
+    impl EventSink for ClockWatcher {
+        fn emit(&mut self, event: Event) -> bool {
+            let started = self.feed.timeline.lock().unwrap().is_some();
+            let running = started.then(|| self.feed.media_ms_at(Instant::now()).is_some());
+            self.seen.push((event, running));
+            true
+        }
+    }
+
+    #[test]
+    fn nothing_is_noted_while_paused_and_noting_carries_on_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, feed) = noting(factory(good_screen()).0, InteractionLevel::All);
+        let mut input = ScriptedInput::new(vec![
+            (1000, Input::Command(Command::Pause)),
+            (2000, Input::Command(Command::Resume)),
+            (3000, Input::Command(Command::Stop)),
+        ]);
+        let mut sink = ClockWatcher { feed: feed.clone(), seen: Vec::new() };
+        run_session(&cfg, &media, &mut input, &mut sink, clock.as_ref()).unwrap();
+        let states: Vec<(State, Option<bool>)> = sink
+            .seen
+            .iter()
+            .filter_map(|(e, running)| match e {
+                Event::State { state, .. } => Some((*state, *running)),
+                _ => None,
+            })
+            .collect();
+        let at = |wanted: State| states.iter().find(|(s, _)| *s == wanted).copied().unwrap();
+        assert_eq!(at(State::Paused).1, Some(false), "paused: the platform keeps nothing");
+        let resumed =
+            states.iter().skip_while(|(s, _)| *s != State::Paused).find(|(s, _)| *s == State::Recording).unwrap();
+        assert_eq!(resumed.1, Some(true), "resumed: it keeps things again");
+    }
+
+    #[test]
+    fn the_author_is_told_in_words_before_recording_and_every_state_report_while_recording_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.countdown_ms = 3000;
+        let clock = Rc::new(ManualClock::new());
+        let (media, _feed) = noting(factory(good_screen()).0, InteractionLevel::All);
+        let mut input = ScriptedInput::new(vec![
+            (5000, Input::Command(Command::Pause)),
+            (6000, Input::Command(Command::Resume)),
+            (7000, Input::Command(Command::Stop)),
+        ]);
+        let mut sink = VecSink::default();
+        run_session(&cfg, &media, &mut input, &mut sink, clock.as_ref()).unwrap();
+        let said = sink
+            .events
+            .iter()
+            .position(|e| matches!(e, Event::Check { check, ok: true, message } if check == "interactions-on" && message.contains("Interaction recording is ON")))
+            .expect("said in words");
+        let recording_from = sink
+            .events
+            .iter()
+            .position(|e| matches!(e, Event::State { state: State::Recording, .. }))
+            .expect("recording began");
+        assert!(said < recording_from, "said before recording begins");
+        for event in &sink.events {
+            if let Event::State { state, watching, .. } = event {
+                assert_eq!(*watching, *state == State::Recording, "{state:?}: only while recording time runs");
+            }
+        }
+    }
+
+    #[test]
+    fn a_computer_that_will_not_allow_it_ends_the_session_in_words_and_makes_no_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let mut platform = FakeInteractions::new();
+        platform.fail = Some("Windows would not allow the hooks.".into());
+        let (media, files) = factory(good_screen());
+        let media = media.with_interactions(Box::new(platform), InteractionLevel::All);
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        assert!(!out.ok);
+        let message = errors_of(&sink).remove(0);
+        assert!(
+            message.contains(
+                "Could not start noting what you do with the mouse and keyboard: Windows would not allow the hooks."
+            ) && message.contains("leave out --interactions"),
+            "{message}"
+        );
+        assert!(files.0.borrow().is_empty(), "nothing half made is left behind");
+    }
+
+    #[test]
+    fn a_notice_from_the_platform_reaches_the_author_as_a_warning_and_the_summary_counts_what_was_noted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(1000);
+        let (media, feed) = noting(factory(good_screen()).0, InteractionLevel::All);
+        let handle = media.report_handle();
+        feed.say("interactions-no-accessibility", "Windows would not describe the items.");
+        feed.push(10, LogEvent::CursorMove { x: 1, y: 1 });
+        feed.push(20, click(1));
+        feed.push(30, LogEvent::Key { key: "a".into(), modifiers: vec![] });
+        feed.set_dropped(2);
+        let mut sink = VecSink::default();
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
+        assert!(sink
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::Warning { code, .. } if code == "interactions-no-accessibility")));
+        assert!(sink.events.iter().any(|e| matches!(e, Event::Warning { code, .. } if code == "interactions-dropped")));
+        let report = handle.borrow().clone().unwrap().interactions.expect("in the report");
+        assert_eq!((report.counts.moves, report.counts.clicks, report.counts.keys, report.dropped), (1, 1, 1, 2));
+        let findings = crate::report::summarize(&handle.borrow().clone().unwrap());
+        let finding = findings.iter().find(|c| c.check == "run-interactions").expect("a finding");
+        assert!(finding.ok && finding.message.contains("1 cursor positions, 1 clicks"), "{}", finding.message);
+        assert!(finding.message.contains("2 happenings were not noted"), "{}", finding.message);
+    }
+
+    #[test]
+    fn a_take_in_which_nothing_at_all_was_noted_is_a_problem_in_the_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(500);
+        let (media, _feed) = noting(factory(good_screen()).0, InteractionLevel::All);
+        let handle = media.report_handle();
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new()).unwrap();
+        let findings = crate::report::summarize(&handle.borrow().clone().unwrap());
+        let finding = findings.iter().find(|c| c.check == "run-interactions").unwrap();
+        assert!(!finding.ok && finding.message.contains("Nothing was noted at all"), "{}", finding.message);
     }
 }

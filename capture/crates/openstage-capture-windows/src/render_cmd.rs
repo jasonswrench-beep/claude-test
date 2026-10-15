@@ -261,6 +261,7 @@ mod tests {
             mix: None,
             region: None,
             camera: None,
+            interactions: None,
         }
     }
 

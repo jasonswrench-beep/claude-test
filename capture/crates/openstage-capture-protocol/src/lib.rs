@@ -55,7 +55,16 @@ pub enum Event {
     /// The answer to `probe`.
     Probe { platform: String, sources: Vec<SourceInfo> },
     /// The recorder changed state, or is reporting it again (about once a second).
-    State { state: State, elapsed_ms: u64, take: u32 },
+    State {
+        state: State,
+        elapsed_ms: u64,
+        take: u32,
+        /// True while recording time runs and the recorder is also noting what the author does (the cursor,
+        /// clicks and keys; story A6). Left out when false. Say it wherever the state is shown or spoken, so
+        /// the indicator is not only something seen.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        watching: bool,
+    },
     /// A sound level, with a plain-language description for people who cannot see a meter.
     Level { source: String, peak: f32, text: String, elapsed_ms: u64 },
     /// Something worth knowing that did not stop the recording.
@@ -161,7 +170,8 @@ mod tests {
                 platform: "linux".into(),
                 sources: vec![SourceInfo { id: "synthetic".into(), available: true, note: "test source".into() }],
             },
-            Event::State { state: State::Recording, elapsed_ms: 1500, take: 2 },
+            Event::State { state: State::Recording, elapsed_ms: 1500, take: 2, watching: false },
+            Event::State { state: State::Recording, elapsed_ms: 1600, take: 2, watching: true },
             Event::Level { source: "mic".into(), peak: 0.5, text: "good".into(), elapsed_ms: 10 },
             Event::Warning { code: "bad-command".into(), message: "nope".into() },
             Event::Error { code: "write-failed".into(), message: "disk full".into(), fatal: true },
@@ -192,8 +202,10 @@ mod tests {
 
     #[test]
     fn events_use_camel_case_names() {
-        let line = encode_event(&Event::State { state: State::Paused, elapsed_ms: 5, take: 1 });
+        let line = encode_event(&Event::State { state: State::Paused, elapsed_ms: 5, take: 1, watching: false });
         assert_eq!(line, r#"{"event":"state","state":"paused","elapsedMs":5,"take":1}"#);
+        let line = encode_event(&Event::State { state: State::Recording, elapsed_ms: 5, take: 1, watching: true });
+        assert_eq!(line, r#"{"event":"state","state":"recording","elapsedMs":5,"take":1,"watching":true}"#);
         let line = encode_event(&Event::TakeSetAside { take: 1, next_take: 2 });
         assert_eq!(line, r#"{"event":"takeSetAside","take":1,"nextTake":2}"#);
     }

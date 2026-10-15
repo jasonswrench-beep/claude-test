@@ -136,12 +136,21 @@ mod tests {
         let names: Vec<&str> = checks.iter().map(|c| c.check.as_str()).collect();
         assert_eq!(
             names,
-            ["cue-volume", "cue-countdown", "cue-start", "cue-pause", "cue-resume", "cue-stop", "cue-error"]
+            [
+                "cue-volume",
+                "cue-countdown",
+                "cue-start",
+                "cue-pause",
+                "cue-resume",
+                "cue-stop",
+                "cue-error",
+                "cue-interactions"
+            ]
         );
         assert!(
             checks[2].message.contains("three rising notes") && checks[2].message.contains("lasts 340 milliseconds")
         );
-        assert!(took > 6 * 900, "a pause after each sound so they are not run together: {took}");
+        assert!(took > 7 * 900, "a pause after each sound so they are not run together: {took}");
     }
 
     #[test]

@@ -143,6 +143,7 @@ impl SoundPlan {
                 mix: None,
                 region: None,
                 camera: None,
+                interactions: None,
             });
         }
         if self.system.is_some() {
@@ -153,6 +154,7 @@ impl SoundPlan {
                 mix: None,
                 region: None,
                 camera: None,
+                interactions: None,
             });
         }
         files

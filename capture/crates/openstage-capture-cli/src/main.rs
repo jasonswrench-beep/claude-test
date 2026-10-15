@@ -580,7 +580,7 @@ fn main() -> ExitCode {
                         id: format!("display:{}", d.number),
                         available: true,
                         note: format!(
-                            "{}. Record it with: record --source screen --display {}. Picture only: no sound yet.",
+                            "{}. Record it with: record --source screen --display {}. Sound is chosen separately, with --microphone and --output.",
                             d.describe(),
                             d.number
                         ),

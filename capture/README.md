@@ -12,7 +12,8 @@ The program is called `openstage-capture`. It has **no window of its own**. Open
 |---|---|---|
 | The conversation with OpenStage (the protocol) | Repairing the sound files after a crash (tested here with made-up files) | Click-to-choose window picker, hiding chosen windows from the recording |
 | The capture project folder and its crash-safe files | | Cursor and click effects, suggested zooms (they will read the interaction log) |
-| Countdown, record, pause, resume, stop, markers, start again | Turning a recording or an edit into a finished MP4 (`render`) | The editor panels inside OpenStage |
+| Countdown, record, pause, resume, stop, markers, start again | | The editor panels inside OpenStage |
+| Exporting an edit as a finished MP4 (`render`): a demo with a title, shapes, blur, blackout, zoom and the webcam was made at 1920 by 1080 with sound, Windows read it back at the right length, and cancelling with Ctrl+C left nothing behind (2026-10-15, a work PC); how the finished video looks is not confirmed yet | | |
 | The webcam recorded into its own file beside the screen and the voice (`--camera`): the recorder's own checks passed on a Windows work PC on 2026-10-15; how the picture looks, and whether it lines up with a voice, are not confirmed yet | | |
 | Killing the program mid-recording and repairing it | Noting the cursor, clicks, windows, clicked item names and keys (`--interactions`, off unless asked), and reading back and deleting that log (`interactions`) | Captions, audio description, step-by-step output |
 | Capturing a real screen, and encoding it as H.264 video | Warning when the microphone hears the speakers (an echo); tested only on made-up sound | |

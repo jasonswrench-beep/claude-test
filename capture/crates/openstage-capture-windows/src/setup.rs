@@ -7,6 +7,7 @@
 //! output) never fail the check: they are reported so the author knows what a recording will lack.
 
 use crate::audio::{AudioPlatform, DeviceKind};
+use crate::webcam::{describe_cameras, CameraPlatform};
 use crate::{check, Check, Platform, VideoPlatform};
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,10 @@ pub enum Access {
 pub trait SystemFacts {
     /// Whether desktop programs may use the microphone.
     fn microphone_access(&self) -> Access;
+    /// Whether desktop programs may use the camera.
+    fn camera_access(&self) -> Access {
+        Access::Unknown
+    }
     /// Free space on the drive that holds `dir`, in bytes, if it can be told.
     fn free_disk_bytes(&self, dir: &Path) -> Option<u64>;
 }
@@ -75,6 +80,7 @@ pub fn run_setup_check(opts: &SetupOptions, report: &mut dyn FnMut(Check)) -> bo
         crate::system_platform().as_ref(),
         crate::system_video_platform().as_ref(),
         crate::system_audio_platform().as_ref(),
+        crate::system_camera_platform().as_ref(),
         system_facts().as_ref(),
         opts,
         report,
@@ -86,6 +92,7 @@ pub fn run_setup_check_with(
     screen: &dyn Platform,
     video: &dyn VideoPlatform,
     audio: &dyn AudioPlatform,
+    cameras: &dyn CameraPlatform,
     facts: &dyn SystemFacts,
     opts: &SetupOptions,
     report: &mut dyn FnMut(Check),
@@ -211,6 +218,39 @@ pub fn run_setup_check_with(
         )),
     }
 
+    // A camera is optional too, and is recorded only when the author asks for it.
+    match cameras.list_cameras() {
+        Ok(list) if !list.is_empty() => {
+            say(check(
+                "camera",
+                true,
+                format!(
+                    "{} A webcam is recorded only when you ask for it, with record --camera and its number.",
+                    describe_cameras(&list)
+                ),
+            ));
+            match facts.camera_access() {
+                Access::Allowed => say(check("camera-access", true, "Windows lets desktop programs use the camera.")),
+                Access::Blocked(how) => say(check(
+                    "camera-access",
+                    true,
+                    format!("Windows is blocking cameras. {how} A recording that asks for the webcam will stop at the start; a recording without a webcam is not affected."),
+                )),
+                Access::Unknown => say(check(
+                    "camera-access",
+                    true,
+                    "Windows did not say whether desktop programs may use the camera. If recording the webcam fails, open Settings, Privacy and security, Camera, and allow desktop apps to use it.",
+                )),
+            }
+        }
+        Ok(_) => say(check("camera", true, "No camera was found. A recording can still be made, without a webcam.")),
+        Err(e) => say(check(
+            "camera",
+            true,
+            format!("The cameras could not be listed: {e} A recording can still be made, without a webcam."),
+        )),
+    }
+
     // Room for the recordings.
     match facts.free_disk_bytes(&opts.dir) {
         Some(bytes) => {
@@ -313,10 +353,35 @@ mod tests {
         }
     }
 
+    struct Cameras(Result<Vec<&'static str>, &'static str>);
+    impl CameraPlatform for Cameras {
+        fn list_cameras(&self) -> Result<Vec<crate::webcam::CameraInfo>, ScreenError> {
+            match &self.0 {
+                Ok(names) => Ok(crate::webcam::number_cameras(
+                    names
+                        .iter()
+                        .map(|n| crate::webcam::CameraInfo { number: 0, name: (*n).into(), id: (*n).into() })
+                        .collect(),
+                )),
+                Err(e) => Err(ScreenError::Failed((*e).into())),
+            }
+        }
+        fn start_camera(&self, _: &crate::webcam::CameraInfo) -> Result<crate::webcam::StartedCamera, ScreenError> {
+            Err(ScreenError::Failed("not used".into()))
+        }
+    }
+
+    /// The camera privacy setting is separate from the microphone's.
     struct Facts(Access, Option<u64>);
+    thread_local! {
+        static CAMERA_ACCESS: std::cell::RefCell<Access> = const { std::cell::RefCell::new(Access::Allowed) };
+    }
     impl SystemFacts for Facts {
         fn microphone_access(&self) -> Access {
             self.0.clone()
+        }
+        fn camera_access(&self) -> Access {
+            CAMERA_ACCESS.with(|a| a.borrow().clone())
         }
         fn free_disk_bytes(&self, _: &Path) -> Option<u64> {
             self.1
@@ -346,11 +411,22 @@ mod tests {
     }
 
     fn run(screen: Screen, video: Video, devices: Vec<AudioDevice>, facts: Facts) -> (bool, Vec<Check>) {
+        run_with_cameras(screen, video, devices, Cameras(Ok(vec!["NexiGo Iris 4K Webcam"])), facts)
+    }
+
+    fn run_with_cameras(
+        screen: Screen,
+        video: Video,
+        devices: Vec<AudioDevice>,
+        cameras: Cameras,
+        facts: Facts,
+    ) -> (bool, Vec<Check>) {
         let mut checks = Vec::new();
         let ok = run_setup_check_with(
             &screen,
             &video,
             &Audio(devices),
+            &cameras,
             &facts,
             &SetupOptions { dir: PathBuf::from("D:\\Recordings") },
             &mut |c| checks.push(c),
@@ -385,13 +461,54 @@ mod tests {
                 "microphone",
                 "sound-output",
                 "microphone-access",
+                "camera",
+                "camera-access",
                 "disk-space"
             ]
         );
+        assert!(
+            find(&checks, "camera").message.contains("One camera was found: 1. NexiGo Iris 4K Webcam.")
+                && find(&checks, "camera").message.contains("only when you ask for it")
+        );
+        assert!(find(&checks, "camera-access").message.contains("lets desktop programs use the camera"));
         assert!(find(&checks, "windows-version").message.contains("Windows 11 or later (version 10.0, build 26200)"));
         assert!(find(&checks, "displays").message.contains("Found 1 display: Display 1, 1920 by 1080, main display."));
         assert!(find(&checks, "microphone").message.contains("the default is Shure MV7"));
         assert!(find(&checks, "disk-space").message.contains("500.0 gigabytes free, enough for about 100.0 hours"));
+    }
+
+    #[test]
+    fn a_missing_camera_a_blocked_camera_and_a_camera_list_that_failed_never_fail_the_check() {
+        let facts = || Facts(Access::Allowed, Some(500 * 1_073_741_824));
+        let (ok, checks) = run_with_cameras(good_screen(), good_video(), good_devices(), Cameras(Ok(vec![])), facts());
+        assert!(ok);
+        assert!(
+            find(&checks, "camera").message.contains("No camera was found")
+                && checks.iter().all(|c| c.check != "camera-access")
+        );
+
+        let (ok, checks) =
+            run_with_cameras(good_screen(), good_video(), good_devices(), Cameras(Err("Windows said no.")), facts());
+        assert!(ok);
+        assert!(find(&checks, "camera").message.contains("could not be listed: Windows said no."));
+
+        CAMERA_ACCESS
+            .with(|a| *a.borrow_mut() = Access::Blocked("Turn on Let desktop apps access your camera.".into()));
+        let (ok, checks) = run(good_screen(), good_video(), good_devices(), facts());
+        assert!(ok, "the camera is optional");
+        let c = find(&checks, "camera-access");
+        assert!(
+            c.ok && c.message.contains("Windows is blocking cameras. Turn on Let desktop apps access your camera.")
+                && c.message.contains("a recording without a webcam is not affected"),
+            "{}",
+            c.message
+        );
+        CAMERA_ACCESS.with(|a| *a.borrow_mut() = Access::Unknown);
+        let (_, checks) = run(good_screen(), good_video(), good_devices(), facts());
+        assert!(find(&checks, "camera-access")
+            .message
+            .contains("did not say whether desktop programs may use the camera"));
+        CAMERA_ACCESS.with(|a| *a.borrow_mut() = Access::Allowed);
     }
 
     #[test]

@@ -293,7 +293,7 @@ fn killing_the_program_mid_recording_loses_almost_nothing_and_recover_repairs_it
 }
 
 #[test]
-fn probe_lists_the_test_source_and_says_windows_capture_is_not_built() {
+fn probe_lists_the_test_source() {
     let (status, events) = run_once(&["probe"]);
     assert!(status.success());
     let sources = events
@@ -301,7 +301,47 @@ fn probe_lists_the_test_source_and_says_windows_capture_is_not_built() {
         .find_map(|e| if let Event::Probe { sources, .. } = e { Some(sources.clone()) } else { None })
         .unwrap();
     assert!(sources.iter().any(|s| s.id == "synthetic" && s.available));
-    assert!(sources.iter().any(|s| s.id == "windows" && !s.available));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn cameras_says_it_needs_windows() {
+    let out = Command::new(BIN).args(["cameras", "--plain"]).output().unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("PROBLEM: Could not list the cameras: Cameras can only be used on Windows."), "{text}");
+}
+
+#[test]
+fn a_camera_with_the_test_source_is_refused_rather_than_quietly_not_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, events) =
+        run_once(&["record", "--project", dir.path().join("p.capture").to_str().unwrap(), "--camera", "1"]);
+    assert_eq!(status.code(), Some(2));
+    assert!(events.iter().any(|e| matches!(e, Event::Error { code, message, fatal: true }
+        if code == "bad-option" && message.contains("--camera only works with --source screen"))));
+    assert!(
+        !dir.path().join("p.capture").exists() || !dir.path().join("p.capture/takes").exists(),
+        "nothing was recorded"
+    );
+}
+
+#[test]
+fn saying_no_camera_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, events) = run_once(&[
+        "record",
+        "--project",
+        dir.path().join("p.capture").to_str().unwrap(),
+        "--countdown-ms",
+        "0",
+        "--duration-ms",
+        "300",
+        "--camera",
+        "none",
+    ]);
+    assert_eq!(status.code(), Some(0));
+    assert!(events.iter().any(|e| matches!(e, Event::Result { ok: true, .. })));
 }
 
 #[cfg(not(windows))]

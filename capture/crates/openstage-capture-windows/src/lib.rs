@@ -27,10 +27,13 @@ mod sound;
 mod stats;
 mod timing;
 mod video;
+mod webcam;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
 mod win_audio;
+#[cfg(windows)]
+mod win_camera;
 #[cfg(windows)]
 mod win_cues;
 #[cfg(windows)]
@@ -68,6 +71,10 @@ pub use record::{ScreenMedia, DECLARED_LOSS_MS, SCREEN_FILE};
 pub use region::{crop, crop_into, CroppedSource, Region, MIN_SIDE as REGION_MIN_SIDE};
 pub use region_editor::{Handle as RegionHandle, PickOutcome, RegionEditor};
 pub use region_paint::{picker_overlay, recording_frame, Canvas};
+pub use webcam::{
+    choose_camera, describe_cameras, number_cameras, pick_mode, system_camera_platform, CameraInfo, CameraMode,
+    CameraPlatform, ModeOption, PictureForm, StartedCamera, WebcamReport, WebcamTake, WEBCAM_FILE,
+};
 #[cfg(windows)]
 pub use win_region::pick_region;
 pub use window::{choose_window, fit_into, number_windows, recording_size, FittedSource, WindowInfo};
@@ -87,9 +94,10 @@ pub use sound::{
 pub use stats::{FrameStats, FrameSummary};
 pub use timing::{now_100ns, run_timing_test, run_timing_test_with, Spread, TimingTestOptions, MAX_OFFSET_MS};
 pub use video::{
-    compare_audio_readback, compare_readback, compare_size_readback, plain_name, run_crash_report, run_video_test,
-    run_video_test_with, system_video_platform, AudioInspection, AudioSpec, EncoderInfo, Pacer, SinkSpec, SinkWork,
-    VideoInspection, VideoPlatform, VideoSink, VideoTestOptions, CPU_TARGET_PERCENT,
+    compare_audio_readback, compare_readback, compare_size_readback, compare_webcam_readback, plain_name,
+    run_crash_report, run_video_test, run_video_test_with, system_video_platform, AudioInspection, AudioSpec,
+    EncoderInfo, Pacer, SinkSpec, SinkWork, VideoInspection, VideoPlatform, VideoSink, VideoTestOptions,
+    CPU_TARGET_PERCENT,
 };
 
 use std::fs;

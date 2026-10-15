@@ -103,6 +103,11 @@ impl FrameQueue {
         self.pool.give(frame.bgra);
     }
 
+    /// Memory that was taken for a picture that was never made: keep it for the next one.
+    pub fn recycle_memory(&self, memory: Vec<u8>) {
+        self.pool.give(memory);
+    }
+
     /// How many pictures were put into memory that an earlier picture had used.
     pub fn reused(&self) -> u64 {
         self.pool.reused()

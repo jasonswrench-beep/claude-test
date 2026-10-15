@@ -272,6 +272,7 @@ mod tests {
             container: "fragmented-mp4".into(),
             mix: None,
             region: None,
+            camera: None,
         }];
         media.extend(plan().media_files());
         media

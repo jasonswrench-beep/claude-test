@@ -40,6 +40,17 @@ pub struct MediaFile {
     /// display. Absent when the whole display was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<RegionInfo>,
+    /// For the webcam video (`kind` is `webcam`): which camera it came from. Absent on other files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<CameraInfo>,
+}
+
+/// Which camera a webcam video came from. The size and rate of the picture are in the video itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraInfo {
+    /// The camera's name as Windows gives it, such as "NexiGo Iris 4K Webcam".
+    pub name: String,
 }
 
 /// The part of a display that a video shows. Pixels are measured from the display's top left
@@ -278,11 +289,50 @@ mod tests {
             container: "fragmented-mp4".into(),
             mix: None,
             region: None,
+            camera: None,
         }];
         let take = create_take_with(dir.path(), 2, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
         assert_eq!(take.media, media);
         assert!(!take_dir(dir.path(), 2).join("segments").exists());
         assert_eq!(read_take(dir.path(), 2).unwrap().media, media);
+    }
+
+    #[test]
+    fn which_camera_made_the_webcam_video_is_written_down_and_old_files_without_it_still_read() {
+        let dir = tempfile::tempdir().unwrap();
+        create_project(dir.path(), "t", "en-US").unwrap();
+        let media = vec![
+            MediaFile {
+                file: "screen.mp4".into(),
+                kind: "screen".into(),
+                container: "fragmented-mp4".into(),
+                mix: None,
+                region: None,
+                camera: None,
+            },
+            MediaFile {
+                file: "webcam.mp4".into(),
+                kind: "webcam".into(),
+                container: "fragmented-mp4".into(),
+                mix: None,
+                region: None,
+                camera: Some(CameraInfo { name: "NexiGo Iris 4K Webcam".into() }),
+            },
+        ];
+        create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
+        assert_eq!(read_take(dir.path(), 1).unwrap().media, media);
+        let text = std::fs::read_to_string(take_dir(dir.path(), 1).join("take.json")).unwrap();
+        assert!(
+            text.contains(r#""camera":{"name":"NexiGo Iris 4K Webcam"}"#) || text.contains("\"camera\": {"),
+            "{text}"
+        );
+        assert_eq!(text.matches("\"camera\"").count(), 1, "only the webcam's entry says which camera");
+        // An older file lists the same video without it.
+        let old = r#"{"take":1,"state":"complete","sources":["screen:1"],"startedAt":"2026-10-14T10:00:00Z","flushMs":2000,
+            "media":[{"file":"webcam.mp4","kind":"webcam","container":"fragmented-mp4"}]}"#;
+        let parsed: serde_json::Value = serde_json::from_str(old).unwrap();
+        let entry: MediaFile = serde_json::from_value(parsed["media"][0].clone()).unwrap();
+        assert_eq!(entry.camera, None);
     }
 
     #[test]
@@ -296,6 +346,7 @@ mod tests {
                 container: "fragmented-mp4".into(),
                 mix: Some(MixInfo { microphone_gain_db: 3, system_gain_db: -12 }),
                 region: None,
+                camera: None,
             },
             MediaFile {
                 file: "mic.wav".into(),
@@ -303,6 +354,7 @@ mod tests {
                 container: "wav".into(),
                 mix: None,
                 region: None,
+                camera: None,
             },
         ];
         create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
@@ -341,6 +393,7 @@ mod tests {
             container: "fragmented-mp4".into(),
             mix: None,
             region: Some(RegionInfo { display: 2, x: 100, y: 200, width: 1280, height: 720 }),
+            camera: None,
         }];
         create_take_with(dir.path(), 1, vec!["screen:2".into()], None, 2000, media.clone()).unwrap();
         let text = std::fs::read_to_string(take_dir(dir.path(), 1).join("take.json")).unwrap();
@@ -357,6 +410,7 @@ mod tests {
             container: "fragmented-mp4".into(),
             mix: None,
             region: None,
+            camera: None,
         }];
         create_take_with(dir.path(), 2, vec!["screen:1".into()], None, 2000, whole).unwrap();
         let text = std::fs::read_to_string(take_dir(dir.path(), 2).join("take.json")).unwrap();

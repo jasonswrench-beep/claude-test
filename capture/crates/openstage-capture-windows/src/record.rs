@@ -16,10 +16,11 @@ use crate::region::{CroppedSource, Region};
 use crate::report::{LookStats, PictureWork, RecordingReport, SlowMoment};
 use crate::sound::{Sound, SoundPlan, SoundTake, MIXED_BITRATE_KBPS};
 use crate::video::{AudioSpec, Pacer};
+use crate::webcam::{CameraInfo, CameraMode, CameraPlatform, StartedCamera, WebcamTake, WEBCAM_FILE};
 use crate::window::{fit_into, recording_size, FittedSource, WindowInfo};
 use crate::{CaptureWork, Frame, FrameSource, Outline, Platform, SinkSpec, VideoPlatform, VideoSink};
 use openstage_capture::{MediaFactory, SessionConfig, SessionError, TakeMedia};
-use openstage_capture_project::{MediaFile, RegionInfo};
+use openstage_capture_project::{CameraInfo as CameraRecord, MediaFile, RegionInfo};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
@@ -50,6 +51,12 @@ pub struct ScreenMedia {
     /// Record just this window instead of a display, if set.
     window: Option<WindowInfo>,
     sound: Option<Sound>,
+    /// Record this webcam too, into a file of its own, if set.
+    camera: Option<(Box<dyn CameraPlatform>, CameraInfo)>,
+    /// The clock the webcam's picture times are measured on (Windows' own, except in tests), and how long to wait
+    /// at a pause or the end for the pictures taken in the last moments to arrive.
+    camera_clock: Rc<dyn Fn() -> i64>,
+    camera_settle: Duration,
     /// What the most recent take did, filled in when it finishes.
     report: Rc<RefCell<Option<RecordingReport>>>,
     /// What was started during the countdown, waiting for the take to begin.
@@ -76,6 +83,9 @@ impl ScreenMedia {
             outline: false,
             window: None,
             sound: None,
+            camera: None,
+            camera_clock: Rc::new(crate::now_100ns),
+            camera_settle: Duration::from_millis(400),
             report: Rc::new(RefCell::new(None)),
             prepared: RefCell::new(None),
             encoder_warmed: std::cell::Cell::new(false),
@@ -117,6 +127,13 @@ impl ScreenMedia {
         self
     }
 
+    /// Record this webcam too, into `webcam.mp4` beside the screen video, with each picture placed where it was
+    /// taken so that it lines up with the voice. A camera that stops does not stop the recording.
+    pub fn with_camera(mut self, platform: Box<dyn CameraPlatform>, camera: CameraInfo) -> Self {
+        self.camera = Some((platform, camera));
+        self
+    }
+
     /// Recording this computer's real screen.
     pub fn for_this_computer(display: u32, fps: u32, bitrate_kbps: u32) -> Self {
         let screen = crate::system_platform();
@@ -146,9 +163,20 @@ impl MediaFactory for ScreenMedia {
                 width: r.width - r.width % 2,
                 height: r.height - r.height % 2,
             }),
+            camera: None,
         }];
         if let Some(sound) = &self.sound {
             files.extend(sound.plan().media_files());
+        }
+        if let Some((_, camera)) = &self.camera {
+            files.push(MediaFile {
+                file: WEBCAM_FILE.into(),
+                kind: "webcam".into(),
+                container: "fragmented-mp4".into(),
+                mix: None,
+                region: None,
+                camera: Some(CameraRecord { name: camera.name.clone() }),
+            });
         }
         files
     }
@@ -178,7 +206,7 @@ impl MediaFactory for ScreenMedia {
             None => (self.prepare()?, false),
         };
         let prepared_at = started.elapsed();
-        let Prepared { source, first, listening, outline } = prepared;
+        let Prepared { source, first, listening, outline, camera } = prepared;
         let dropped_at_start = source.dropped();
         let received_at_start = source.received();
         let capture_work_at_start = source.work();
@@ -198,6 +226,10 @@ impl MediaFactory for ScreenMedia {
         };
         let sink =
             self.video.create_sink(&spec).map_err(|e| media_error(format!("Could not start the video file: {e}")))?;
+        let webcam = match (camera, &self.camera) {
+            (Some(ready), Some((_, info))) => Some(self.begin_webcam(take_dir, ready, &info.name)?),
+            _ => None,
+        };
         let memory_now = self.video.process_memory_mb();
         let mut sound = match listening {
             Some(open) => Some(open.begin(take_dir)?),
@@ -222,6 +254,7 @@ impl MediaFactory for ScreenMedia {
             latest: first,
             written: 0,
             sound,
+            webcam,
             video: Rc::clone(&self.video),
             report: Rc::clone(&self.report),
             started: Instant::now(),
@@ -236,6 +269,9 @@ impl MediaFactory for ScreenMedia {
             thread_cpu_start: self.video.thread_cpu_time(),
             capture_work: CaptureWork::default(),
             pictures_received: 0,
+            pause_mark: None,
+            dropped_in_pauses: 0,
+            received_in_pauses: 0,
             most_waiting: 0,
             looks: LookTracker::default(),
         }))
@@ -258,6 +294,15 @@ struct Prepared {
     listening: Option<crate::sound::OpenSound>,
     /// The frame shown around the region, if any; it goes when this is dropped.
     outline: Option<Outline>,
+    /// The webcam, started and with its first picture, if one is to be recorded.
+    camera: Option<ReadyCamera>,
+}
+
+/// A webcam that has been started and has sent its first picture.
+struct ReadyCamera {
+    source: Box<dyn FrameSource>,
+    mode: CameraMode,
+    first: Frame,
 }
 
 impl ScreenMedia {
@@ -277,19 +322,84 @@ impl ScreenMedia {
                 first.width, first.height
             )));
         }
-        // Start listening before the video file exists, so a microphone that cannot be opened leaves nothing behind.
+        // The webcam takes the longest to wake up, so it is started early. Like the sound, it is started before
+        // any video file exists, so a camera that cannot be opened leaves nothing behind.
+        let camera = match &self.camera {
+            Some((platform, info)) => Some(self.prepare_camera(platform.as_ref(), info)?),
+            None => None,
+        };
+        let camera_ready = started.elapsed();
         let listening = match &self.sound {
             Some(sound) => Some(sound.open()?),
             None => None,
         };
         eprintln!(
-            "preparing: video tools {} ms, screen capture started {} ms, first picture {} ms, sound listening {} ms (counted from the start of preparing)",
+            "preparing: video tools {} ms, screen capture started {} ms, first picture {} ms, {}sound listening {} ms (counted from the start of preparing)",
             tools_ready.as_millis(),
             capture_started.as_millis(),
             first_picture.as_millis(),
+            if camera.is_some() { format!("webcam's first picture {} ms, ", camera_ready.as_millis()) } else { String::new() },
             started.elapsed().as_millis()
         );
-        Ok(Prepared { source, first, listening, outline })
+        Ok(Prepared { source, first, listening, outline, camera })
+    }
+
+    /// Start the webcam and wait for its first picture. Says in words what to do if it will not start.
+    fn prepare_camera(&self, platform: &dyn CameraPlatform, info: &CameraInfo) -> Result<ReadyCamera, SessionError> {
+        let StartedCamera { mut source, mode } = platform.start_camera(info).map_err(|e| {
+            media_error(format!(
+                "Could not start the webcam {}: {e} To record without the webcam, leave out --camera.",
+                info.describe()
+            ))
+        })?;
+        // Wait up to 5 seconds, in short steps so a camera that has already said it is gone is not waited for.
+        let mut first = None;
+        for _ in 0..50 {
+            first = source.next_frame(Duration::from_millis(100));
+            if first.is_some() || source.ended().is_some() {
+                break;
+            }
+        }
+        let first = first.ok_or_else(|| {
+            let why = source.ended().map(|why| format!(" Windows said: {why}")).unwrap_or_default();
+            media_error(format!(
+                "No picture arrived from the webcam {} within 5 seconds.{why} Another program may be using it, or Windows may be blocking cameras (Settings, Privacy & security, Camera). To record without the webcam, leave out --camera.",
+                info.describe()
+            ))
+        })?;
+        if first.width % 2 != 0 || first.height % 2 != 0 {
+            return Err(media_error(format!(
+                "The webcam {} sends pictures {} by {} pixels. H.264 video needs an even width and height. Another camera mode is needed; tell me which camera this is.",
+                info.describe(),
+                first.width,
+                first.height
+            )));
+        }
+        Ok(ReadyCamera { source, mode, first })
+    }
+
+    /// Make the webcam's video file and the take that fills it.
+    fn begin_webcam(&self, take_dir: &Path, ready: ReadyCamera, name: &str) -> Result<WebcamTake, SessionError> {
+        let ReadyCamera { source, mode, first } = ready;
+        // The file has the camera's own rate, between 10 and 30 a second.
+        let fps = (mode.fps.round() as u32).clamp(10, 30);
+        let spec = SinkSpec {
+            path: take_dir.join(WEBCAM_FILE),
+            width: first.width,
+            height: first.height,
+            fps,
+            bitrate_kbps: webcam_bitrate_kbps(first.width, first.height),
+            fragmented: true,
+            audio: None,
+        };
+        let sink = self
+            .video
+            .create_sink(&spec)
+            .map_err(|e| media_error(format!("Could not start the webcam video file: {e}")))?;
+        // At a pause and at the end, wait a little for the pictures taken in the last moments to arrive (they are a
+        // tenth of a second or more on their way), so the webcam video does not end on older pictures than the rest.
+        Ok(WebcamTake::new(name.to_string(), source, sink, first, fps, Rc::clone(&self.camera_clock))
+            .with_settle(self.camera_settle))
     }
 
     /// Start capturing the chosen display (or the part of it chosen as a region) and wait for its first picture.
@@ -399,6 +509,8 @@ struct ScreenTake {
     latest: Frame,
     written: u64,
     sound: Option<SoundTake>,
+    /// The webcam, when one is being recorded.
+    webcam: Option<WebcamTake>,
     // What the report needs.
     video: Rc<dyn VideoPlatform>,
     report: Rc<RefCell<Option<RecordingReport>>>,
@@ -419,9 +531,20 @@ struct ScreenTake {
     /// The recording thread's processor time when recording began.
     thread_cpu_start: Option<Duration>,
     pictures_received: u64,
+    /// Pictures Windows threw away and delivered while recording was paused, when nobody was taking them: not counted.
+    pause_mark: Option<(u64, u64)>,
+    dropped_in_pauses: u64,
+    received_in_pauses: u64,
     /// The most pictures taken at one look. The waiting line holds 8, but more can arrive while it is emptied.
     most_waiting: usize,
     looks: LookTracker,
+}
+
+/// The quality of the webcam video: 3 megabits a second at 1280 by 720, more or less in step with the number of
+/// pixels, never below 1 or above 8. A face in front of a plain background needs far less than a screen of text.
+fn webcam_bitrate_kbps(width: u32, height: u32) -> u32 {
+    let pixels = width as u64 * height as u64;
+    ((3000 * pixels / (1280 * 720)) as u32).clamp(1000, 8000)
 }
 
 /// Keeps track of how regularly the program looks at the screen and the sound, and what it was busy
@@ -501,6 +624,15 @@ const SAMPLE_EVERY_MS: u64 = 10_000;
 const LOG_EVERY_MS: u64 = 60_000;
 
 impl ScreenTake {
+    /// A pause has ended (or recording stopped while paused): what Windows delivered and threw away meanwhile
+    /// is not part of the recording's figures.
+    fn count_pause(&mut self) {
+        if let (Some((dropped, received)), Some(source)) = (self.pause_mark.take(), self.source.as_ref()) {
+            self.dropped_in_pauses += source.dropped().saturating_sub(dropped);
+            self.received_in_pauses += source.received().saturating_sub(received);
+        }
+    }
+
     /// Look at how much memory the program uses, and now and then say so in the log.
     fn sample_resources(&mut self, media_ms: u64) {
         if let Some(mb) = self.video.process_memory_mb() {
@@ -550,6 +682,9 @@ impl TakeMedia for ScreenTake {
         if let Some(beat) = self.pacer.due(Duration::from_millis(media_ms)) {
             self.write_beat(beat)?;
         }
+        if let Some(webcam) = self.webcam.as_mut() {
+            webcam.pump(media_ms)?;
+        }
         self.looks.last_picture = picture_started.elapsed();
         let sound_started = Instant::now();
         if let (Some(sound), Some(sink)) = (self.sound.as_mut(), self.sink.as_mut()) {
@@ -582,24 +717,46 @@ impl TakeMedia for ScreenTake {
 
     fn paused(&mut self) {
         self.looks.forget();
+        self.pause_mark = self.source.as_ref().map(|s| (s.dropped(), s.received()));
         // The microphone keeps running while recording time stands still; what it hears is not kept.
         if let Some(sound) = self.sound.as_mut() {
             sound.pause();
+        }
+        if let Some(webcam) = self.webcam.as_mut() {
+            webcam.paused();
         }
     }
 
     fn resumed(&mut self) {
         self.looks.forget();
+        self.count_pause();
         if let Some(sound) = self.sound.as_mut() {
             sound.resume();
         }
+        if let Some(webcam) = self.webcam.as_mut() {
+            webcam.resumed();
+        }
+    }
+
+    fn notices(&mut self) -> Vec<(String, String)> {
+        self.webcam.as_mut().map(|w| w.notices()).unwrap_or_default()
     }
 
     fn finish(mut self: Box<Self>, media_ms: u64) -> Result<u32, SessionError> {
         // Stop taking pictures first, so nothing arrives while the file is being completed.
-        self.pictures_replaced = self.source.as_ref().map_or(0, |s| s.dropped()).saturating_sub(self.dropped_at_start);
-        self.pictures_received =
-            self.source.as_ref().map_or(0, |s| s.received()).saturating_sub(self.received_at_start);
+        self.count_pause();
+        self.pictures_replaced = self
+            .source
+            .as_ref()
+            .map_or(0, |s| s.dropped())
+            .saturating_sub(self.dropped_at_start)
+            .saturating_sub(self.dropped_in_pauses);
+        self.pictures_received = self
+            .source
+            .as_ref()
+            .map_or(0, |s| s.received())
+            .saturating_sub(self.received_at_start)
+            .saturating_sub(self.received_in_pauses);
         self.capture_work =
             self.source.as_ref().map(|s| s.work().since(&self.capture_work_at_start)).unwrap_or_default();
         self.source = None;
@@ -615,6 +772,12 @@ impl TakeMedia for ScreenTake {
             tracks = sound.finish(media_ms, sink.as_mut())?;
         }
         self.sample_resources(media_ms);
+        // The webcam's last moments are written after the screen and the sound are done, so a camera that is slow to
+        // send its last pictures cannot hold them up; an error is told after the screen video is complete.
+        let webcam = self.webcam.take().map(|w| w.finish(media_ms));
+        if webcam.is_some() {
+            files += 1;
+        }
         *self.report.borrow_mut() = Some(RecordingReport {
             recorded_ms: media_ms,
             pictures_written: self.written,
@@ -637,8 +800,12 @@ impl TakeMedia for ScreenTake {
                 sink: sink.work(),
                 loop_cpu: self.thread_cpu_start.zip(self.video.thread_cpu_time()).map(|(a, b)| b.saturating_sub(a)),
             },
+            webcam: webcam.as_ref().and_then(|w| w.as_ref().ok().cloned()),
         });
         sink.finish().map_err(|e| media_error(format!("The video file could not be completed: {e}")))?;
+        if let Some(Err(e)) = webcam {
+            return Err(e);
+        }
         Ok(files)
     }
 }
@@ -744,6 +911,8 @@ mod tests {
         /// The size the file was made for, and the size and first pixel of every picture written to it.
         size: (u32, u32),
         pictures: Vec<(u32, u32, [u8; 4])>,
+        /// Make completing this file fail (for the webcam's file, in the test that checks the failure is told).
+        fail_finish: bool,
     }
 
     #[derive(Default)]
@@ -769,12 +938,17 @@ mod tests {
             Ok(())
         }
         fn finish(self: Box<Self>) -> Result<(), ScreenError> {
+            if self.0.borrow().fail_finish {
+                return Err(ScreenError::Failed("the drive was removed".into()));
+            }
             self.0.borrow_mut().finished = true;
             Ok(())
         }
     }
 
     struct FakeVideo {
+        /// Completing a file whose name starts with `webcam` fails.
+        webcam_finish_fails: bool,
         files: Rc<RefCell<Vec<Rc<RefCell<File>>>>>,
         /// Memory in use; grows by 10 megabytes every time it is looked at.
         memory: std::cell::Cell<f64>,
@@ -792,6 +966,8 @@ mod tests {
                 path: spec.path.clone(),
                 sound_track: spec.audio.is_some(),
                 size: (spec.width, spec.height),
+                fail_finish: self.webcam_finish_fails
+                    && spec.path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("webcam")),
                 ..File::default()
             }));
             self.files.borrow_mut().push(Rc::clone(&file));
@@ -814,8 +990,12 @@ mod tests {
     }
 
     fn factory(screen: FakeScreen) -> (ScreenMedia, Files) {
+        factory_with(screen, false)
+    }
+
+    fn factory_with(screen: FakeScreen, webcam_finish_fails: bool) -> (ScreenMedia, Files) {
         let files = Files::default();
-        let video = FakeVideo { files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
+        let video = FakeVideo { webcam_finish_fails, files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
         (ScreenMedia::new(Box::new(screen), Box::new(video), 1, 30, 8000), files)
     }
 
@@ -1040,7 +1220,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = config(&dir);
         let files = Files::default();
-        let video = FakeVideo { files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
+        let video =
+            FakeVideo { webcam_finish_fails: false, files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
         let media = ScreenMedia::new(Box::new(good_screen()), Box::new(video), 4, 30, 8000);
         let mut sink = VecSink::default();
         let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, &ManualClock::new()).unwrap();
@@ -1436,7 +1617,7 @@ mod tests {
         cfg.countdown_ms = 1000;
         let files = Files::default();
         let video = NoWarmFile(
-            FakeVideo { files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) },
+            FakeVideo { webcam_finish_fails: false, files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) },
             std::cell::Cell::new(0),
         );
         let media = ScreenMedia::new(Box::new(good_screen()), Box::new(video), 1, 30, 8000);
@@ -1572,7 +1753,7 @@ mod tests {
         cfg.max_duration_ms = Some(2000);
         let (given, recycled) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
         let files = Files::default();
-        let video = FakeVideo { files: Rc::clone(&files.0), memory: Cell::new(100.0) };
+        let video = FakeVideo { webcam_finish_fails: false, files: Rc::clone(&files.0), memory: Cell::new(100.0) };
         let media = ScreenMedia::new(
             Box::new(StreamScreen(Rc::clone(&given), Rc::clone(&recycled))),
             Box::new(video),
@@ -1736,7 +1917,8 @@ mod tests {
 
     fn window_media(screen: WindowScreen) -> (ScreenMedia, Files) {
         let files = Files::default();
-        let video = FakeVideo { files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
+        let video =
+            FakeVideo { webcam_finish_fails: false, files: Rc::clone(&files.0), memory: std::cell::Cell::new(100.0) };
         (ScreenMedia::new(Box::new(screen), Box::new(video), 1, 30, 8000).with_window(notepad()), files)
     }
 
@@ -1820,5 +2002,368 @@ mod tests {
             .expect("an error event");
         assert!(message.contains("at least 64 by 64") && message.contains("40 by 700"), "{message}");
         assert!(files.0.borrow().is_empty());
+    }
+
+    // ---- the webcam ----
+
+    use crate::report::summarize;
+    use crate::webcam::{CameraInfo, CameraMode, CameraPlatform, StartedCamera};
+    use openstage_capture::Clock;
+
+    /// The webcam's clock reads the session clock plus this, as a real camera's clock differs from the recorder's.
+    const CAMERA_OFFSET: i64 = 9_000_000_000;
+
+    /// A webcam taking pictures by the session's clock. Picture n is taken at n / fps seconds and reaches the program
+    /// `delay_ms` later, except picture 0, which is ready as soon as the camera starts. Its pixels are n.
+    struct FakeCamera {
+        clock: Rc<ManualClock>,
+        fps: u64,
+        delay_ms: u64,
+        next: u64,
+        /// The camera is unplugged at this time: no picture is taken after it.
+        stops_at_ms: Option<u64>,
+    }
+    impl FrameSource for FakeCamera {
+        fn next_frame(&mut self, _: Duration) -> Option<Frame> {
+            let now = self.clock.now_ms();
+            let n = self.next;
+            let taken = n * 1000 / self.fps;
+            let arrives = if n == 0 { 0 } else { taken + self.delay_ms };
+            if arrives > self.stops_at_ms.map_or(now, |s| now.min(s)) {
+                return None;
+            }
+            self.next += 1;
+            Some(Frame {
+                width: 4,
+                height: 2,
+                t_ms: 0,
+                captured_100ns: Some(CAMERA_OFFSET + taken as i64 * 10_000),
+                arrived_100ns: Some(CAMERA_OFFSET + arrives as i64 * 10_000),
+                bgra: vec![n as u8; 4 * 2 * 4],
+            })
+        }
+        fn dropped(&self) -> u64 {
+            0
+        }
+        fn ended(&self) -> Option<String> {
+            self.stops_at_ms.filter(|s| self.clock.now_ms() >= *s).map(|_| "The camera was unplugged.".to_string())
+        }
+    }
+
+    struct FakeCameras {
+        clock: Rc<ManualClock>,
+        delay_ms: u64,
+        stops_at_ms: Option<u64>,
+        refuses: Option<String>,
+        /// Starts fine but never sends a picture.
+        silent: bool,
+    }
+    impl CameraPlatform for FakeCameras {
+        fn list_cameras(&self) -> Result<Vec<CameraInfo>, ScreenError> {
+            Ok(vec![CameraInfo { number: 1, name: "Test Camera".into(), id: "x".into() }])
+        }
+        fn start_camera(&self, _: &CameraInfo) -> Result<StartedCamera, ScreenError> {
+            if let Some(why) = &self.refuses {
+                return Err(ScreenError::Failed(why.clone()));
+            }
+            let camera = FakeCamera {
+                clock: Rc::clone(&self.clock),
+                fps: 30,
+                delay_ms: self.delay_ms,
+                next: if self.silent { 1 } else { 0 },
+                stops_at_ms: if self.silent { Some(0) } else { self.stops_at_ms },
+            };
+            Ok(StartedCamera {
+                source: Box::new(camera),
+                mode: CameraMode { width: 4, height: 2, fps: 30.0, format: "MJPG".into() },
+            })
+        }
+    }
+
+    /// A screen with a webcam, both following the same fake clock.
+    fn with_webcam(clock: &Rc<ManualClock>, tune: impl FnOnce(&mut FakeCameras)) -> (ScreenMedia, Files) {
+        with_webcam_files(clock, tune, false)
+    }
+
+    fn with_webcam_files(
+        clock: &Rc<ManualClock>,
+        tune: impl FnOnce(&mut FakeCameras),
+        webcam_finish_fails: bool,
+    ) -> (ScreenMedia, Files) {
+        let mut cameras =
+            FakeCameras { clock: Rc::clone(clock), delay_ms: 100, stops_at_ms: None, refuses: None, silent: false };
+        tune(&mut cameras);
+        let info = cameras.list_cameras().unwrap().remove(0);
+        let (mut media, files) = factory_with(good_screen(), webcam_finish_fails);
+        let camera_clock = Rc::clone(clock);
+        media.camera_clock = Rc::new(move || CAMERA_OFFSET + camera_clock.now_ms() as i64 * 10_000);
+        media.camera_settle = Duration::ZERO;
+        (media.with_camera(Box::new(cameras), info), files)
+    }
+
+    fn errors_of(sink: &VecSink) -> Vec<String> {
+        sink.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Error { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_webcam_is_recorded_into_a_file_of_its_own_with_each_picture_where_it_was_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, files) = with_webcam(&clock, |c| c.delay_ms = 120);
+        let handle = media.report_handle();
+        let mut input = ScriptedInput::new(vec![(3000, Input::Command(Command::Stop))]);
+        let out = run_session(&cfg, &media, &mut input, &mut VecSink::default(), clock.as_ref()).unwrap();
+        assert!(out.ok);
+        assert_eq!(out.segments, 2, "the screen video and the webcam video");
+
+        let take = read_take(&cfg.project, 1).unwrap();
+        let listed: Vec<(&str, &str, &str)> =
+            take.media.iter().map(|m| (m.file.as_str(), m.kind.as_str(), m.container.as_str())).collect();
+        assert_eq!(
+            listed,
+            vec![("screen.mp4", "screen", "fragmented-mp4"), ("webcam.mp4", "webcam", "fragmented-mp4")]
+        );
+        assert_eq!(take.media[1].camera.as_ref().map(|c| c.name.as_str()), Some("Test Camera"));
+        assert!(take.media[0].camera.is_none(), "only the webcam's entry names a camera");
+
+        let files = files.0.borrow();
+        assert_eq!(files.len(), 2);
+        let screen = files[0].borrow();
+        let webcam = files[1].borrow();
+        assert!(screen.path.ends_with("screen.mp4") && webcam.path.ends_with("webcam.mp4"));
+        assert!(webcam.fragmented && webcam.finished && !webcam.sound_track, "a crash-safe video of its own, no sound");
+        assert_eq!(webcam.size, (4, 2), "the webcam video has the camera's own size, not the screen's");
+        assert_eq!(screen.size, (8, 4));
+        // 120 ms late pictures: moment k shows the picture taken at moment k, for every moment that could be known.
+        for (k, picture) in webcam.pictures.iter().enumerate().take(((3000 - 120) * 30 / 1000) as usize) {
+            assert_eq!(picture.2, [k as u8; 4], "moment {k}");
+        }
+        assert!(webcam.beats.len() >= 89, "{} moments", webcam.beats.len());
+
+        let report = handle.borrow().clone().unwrap();
+        let w = report.webcam.expect("the webcam is in the report");
+        assert_eq!((w.camera.as_str(), w.width, w.height, w.fps), ("Test Camera", 4, 2, 30));
+        assert_eq!((w.delay_average_ms, w.stopped), (120, None));
+    }
+
+    #[test]
+    fn a_take_without_a_webcam_makes_no_webcam_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(&dir);
+        cfg.max_duration_ms = Some(500);
+        let (media, files) = factory(good_screen());
+        run_session(&cfg, &media, &mut ScriptedInput::none(), &mut VecSink::default(), &ManualClock::new()).unwrap();
+        assert_eq!(files.0.borrow().len(), 1);
+        assert!(read_take(&cfg.project, 1).unwrap().media.iter().all(|m| m.kind != "webcam"));
+    }
+
+    #[test]
+    fn a_webcam_that_will_not_start_ends_the_session_in_words_before_anything_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, files) = with_webcam(&clock, |c| c.refuses = Some("The camera is in use.".into()));
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, clock.as_ref()).unwrap();
+        assert!(!out.ok);
+        let message = errors_of(&sink).remove(0);
+        assert!(
+            message.contains("Could not start the webcam 1. Test Camera: The camera is in use.")
+                && message.contains("leave out --camera"),
+            "{message}"
+        );
+        assert!(files.0.borrow().is_empty(), "no video file was made, so nothing is left behind");
+    }
+
+    #[test]
+    fn a_webcam_that_sends_no_picture_is_explained_with_the_likely_causes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, files) = with_webcam(&clock, |c| c.silent = true);
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &media, &mut ScriptedInput::none(), &mut sink, clock.as_ref()).unwrap();
+        assert!(!out.ok);
+        let message = errors_of(&sink).remove(0);
+        assert!(
+            message.contains("No picture arrived from the webcam 1. Test Camera within 5 seconds")
+                && message.contains("Another program may be using it")
+                && message.contains("Privacy & security, Camera"),
+            "{message}"
+        );
+        assert!(files.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_webcam_that_stops_does_not_stop_the_screen_and_the_author_is_told_at_once_and_again_in_the_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, files) = with_webcam(&clock, |c| c.stops_at_ms = Some(1500));
+        let handle = media.report_handle();
+        let mut input = ScriptedInput::new(vec![(4000, Input::Command(Command::Stop))]);
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &media, &mut input, &mut sink, clock.as_ref()).unwrap();
+        assert!(out.ok, "the recording carried on");
+        let said: Vec<String> = sink
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Warning { code, message } if code == "webcam-stopped" => Some(message.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(said.len(), 1, "told once: {said:?}");
+        assert!(
+            said[0].contains("The camera was unplugged.") && said[0].contains("still being recorded"),
+            "{}",
+            said[0]
+        );
+
+        let files = files.0.borrow();
+        let screen = files[0].borrow();
+        let webcam = files[1].borrow();
+        assert!(screen.beats.len() >= 118, "the screen went on to the end: {}", screen.beats.len());
+        assert!(webcam.finished && (40..=50).contains(&webcam.beats.len()), "{} webcam moments", webcam.beats.len());
+        let w = handle.borrow().clone().unwrap().webcam.unwrap();
+        assert!(w.stopped.is_some());
+        let finding =
+            summarize(&handle.borrow().clone().unwrap()).into_iter().find(|c| c.check == "run-webcam").unwrap();
+        assert!(!finding.ok && finding.message.contains("The camera stopped at"), "{}", finding.message);
+    }
+
+    #[test]
+    fn pausing_pauses_the_webcam_too_and_leaves_no_gap_in_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, files) = with_webcam(&clock, |_| {});
+        let mut input = ScriptedInput::new(vec![
+            (1000, Input::Command(Command::Pause)),
+            (3000, Input::Command(Command::Resume)),
+            (4000, Input::Command(Command::Stop)),
+        ]);
+        let out = run_session(&cfg, &media, &mut input, &mut VecSink::default(), clock.as_ref()).unwrap();
+        assert!(out.ok);
+        let files = files.0.borrow();
+        let screen = files[0].borrow();
+        let webcam = files[1].borrow();
+        // About 2 seconds of recording at 30 a second: one moment each, with no gap where the pause was.
+        assert!((59..=63).contains(&webcam.beats.len()), "{} moments", webcam.beats.len());
+        for (k, (pts, _)) in webcam.beats.iter().enumerate() {
+            assert_eq!(*pts, k as i64 * 10_000_000 / 30, "moment {k}");
+        }
+        assert!((webcam.beats.len() as i64 - screen.beats.len() as i64).abs() <= 3, "the two videos are as long");
+        // The last moments before the pause show pictures taken before it, not one from the end of the pause. (The
+        // pause came at 0.98 seconds of recording, the last look before it, so moment 29 is the last before it.)
+        for k in 0..=29usize {
+            let shown = webcam.pictures[k].2[0] as usize;
+            assert!(shown <= k && shown + 4 >= k, "moment {k} shows picture {shown}");
+        }
+        // The pictures after the resume are ones taken after it: picture numbers jump over the pause (2 s = 60 pictures).
+        let before = webcam.pictures[25].2[0];
+        let after = webcam.pictures[45].2[0];
+        assert!(
+            after as i32 - before as i32 >= 60,
+            "pictures taken during the pause are not in the video: {before} then {after}"
+        );
+    }
+
+    #[test]
+    fn a_webcam_video_that_cannot_be_completed_is_told_but_only_after_the_screen_video_is_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let (media, files) = with_webcam_files(&clock, |_| {}, true);
+        let mut input = ScriptedInput::new(vec![(1500, Input::Command(Command::Stop))]);
+        let mut sink = VecSink::default();
+        let _ = run_session(&cfg, &media, &mut input, &mut sink, clock.as_ref()).unwrap();
+        let message = errors_of(&sink).remove(0);
+        assert!(
+            message.contains("webcam video file could not be completed") && message.contains("the drive was removed"),
+            "{message}"
+        );
+        let files = files.0.borrow();
+        assert!(files[0].borrow().finished, "the screen video was completed first");
+        assert!(!files[1].borrow().finished);
+    }
+
+    #[test]
+    fn pictures_windows_threw_away_during_a_pause_are_not_counted_as_lost_while_recording() {
+        /// A screen whose counts grow with the clock, paused or not: one thrown away every 10 ms, one delivered every 5.
+        struct Losing {
+            clock: Rc<ManualClock>,
+            first: Option<Frame>,
+        }
+        impl FrameSource for Losing {
+            fn next_frame(&mut self, _: Duration) -> Option<Frame> {
+                self.first.take()
+            }
+            fn dropped(&self) -> u64 {
+                self.clock.now_ms() / 10
+            }
+            fn received(&self) -> u64 {
+                self.clock.now_ms() / 5
+            }
+        }
+        struct LosingScreen(Rc<ManualClock>);
+        impl Platform for LosingScreen {
+            fn windows_version(&self) -> Result<WindowsVersion, ScreenError> {
+                Ok(WindowsVersion { major: 10, minor: 0, build: 26200 })
+            }
+            fn capture_supported(&self) -> bool {
+                true
+            }
+            fn list_displays(&self) -> Result<Vec<DisplayInfo>, ScreenError> {
+                Ok(vec![DisplayInfo {
+                    number: 1,
+                    x: 0,
+                    y: 0,
+                    width: 8,
+                    height: 4,
+                    main: true,
+                    system_name: "D1".into(),
+                    handle: 1,
+                }])
+            }
+            fn start_display_capture(&self, _: &DisplayInfo, _: bool) -> Result<Box<dyn FrameSource>, ScreenError> {
+                let first = Frame {
+                    width: 8,
+                    height: 4,
+                    t_ms: 0,
+                    captured_100ns: None,
+                    arrived_100ns: None,
+                    bgra: vec![9; 8 * 4 * 4],
+                };
+                Ok(Box::new(Losing { clock: Rc::clone(&self.0), first: Some(first) }))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let clock = Rc::new(ManualClock::new());
+        let files = Files::default();
+        let video =
+            FakeVideo { webcam_finish_fails: false, files: Rc::clone(&files.0), memory: std::cell::Cell::new(1.0) };
+        let media = ScreenMedia::new(Box::new(LosingScreen(Rc::clone(&clock))), Box::new(video), 1, 30, 8000);
+        let handle = media.report_handle();
+        // One second recorded, 2 seconds paused, one second recorded.
+        let mut input = ScriptedInput::new(vec![
+            (1000, Input::Command(Command::Pause)),
+            (3000, Input::Command(Command::Resume)),
+            (4000, Input::Command(Command::Stop)),
+        ]);
+        let out = run_session(&cfg, &media, &mut input, &mut VecSink::default(), clock.as_ref()).unwrap();
+        assert!(out.ok);
+        let r = handle.borrow().clone().unwrap();
+        // 2 seconds of recording: about 200 thrown away and 400 delivered. The pause's 200 and 400 are left out.
+        assert!((180..=220).contains(&r.pictures_replaced), "thrown away: {}", r.pictures_replaced);
+        assert!((360..=440).contains(&r.pictures_received), "delivered: {}", r.pictures_received);
     }
 }

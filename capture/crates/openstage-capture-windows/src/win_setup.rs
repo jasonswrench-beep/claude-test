@@ -59,6 +59,26 @@ impl SystemFacts for WindowsFacts {
         }
     }
 
+    fn camera_access(&self) -> Access {
+        let overall = consent("webcam");
+        let desktop = consent("webcam\\NonPackaged");
+        if overall.as_deref() == Some("Deny") {
+            return Access::Blocked(
+                "Camera access is turned off for this account. Open Settings, Privacy and security, Camera, and turn on Camera access.".into(),
+            );
+        }
+        if desktop.as_deref() == Some("Deny") {
+            return Access::Blocked(
+                "Desktop programs are not allowed to use the camera. Open Settings, Privacy and security, Camera, and turn on Let desktop apps access your camera.".into(),
+            );
+        }
+        if overall.is_none() && desktop.is_none() {
+            Access::Unknown
+        } else {
+            Access::Allowed
+        }
+    }
+
     fn free_disk_bytes(&self, dir: &Path) -> Option<u64> {
         // Ask about the folder if it exists, otherwise the nearest folder above it that does.
         let mut folder = dir.to_path_buf();

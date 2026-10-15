@@ -2,7 +2,7 @@
 
 **Status:** v0.3 (matches the code in `capture/crates/openstage-capture-project`)
 **Format name:** `openstage-capture-project`
-**Schema version:** `0.2.3` (projects at `0.1.x`, `0.2.0`, `0.2.1` and `0.2.2` still open unchanged: see section 7)
+**Schema version:** `0.2.4` (projects at `0.1.x`, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` still open unchanged: see section 7)
 
 A recording lives in its own folder, named `something.capture`, **beside** the course (the `.osproj`), never inside it. This matters: OpenStage's publisher zips the project into `source/`, and raw footage and the interaction log (which can contain private information) must never ship to learners. Only the exported, edited video becomes part of the course.
 
@@ -82,7 +82,9 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
       "mix": { "microphoneGainDb": 0, "systemGainDb": -10 },
       "region": { "display": 1, "x": 100, "y": 200, "width": 1280, "height": 720 } },
     { "file": "mic.wav", "kind": "microphone", "container": "wav" },
-    { "file": "system.wav", "kind": "system-audio", "container": "wav" }
+    { "file": "system.wav", "kind": "system-audio", "container": "wav" },
+    { "file": "webcam.mp4", "kind": "webcam", "container": "fragmented-mp4",
+      "camera": { "name": "NexiGo Iris 4K Webcam" } }
   ]
 }
 ```
@@ -100,7 +102,7 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
 | `flushMs` | The most recording a crash can cost with this kind of media. Segment takes force data to disk this often (1000 by default). For `fragmented-mp4` takes it is 2000: Windows closes a fragment about every second, and a measured crash on Windows 11 lost 1.1 seconds. |
 | `durationMs` | How long the recording ran, not counting time spent paused. For a recovered file take it is an **estimate** (about one second per whole fragment); the exact length is read when the video is opened. |
 | `segments` | How many media files the take holds (segment files, or video files). |
-| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`; its optional `mix` says how the sound inside it was mixed, see section 4, and its optional `region` says which part of the display it shows, see below: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4). Absent in older projects. A reader ignores kinds it does not know. |
+| `media` | New in 0.2. The take's media files, named relative to the take's folder, each with a `kind` and a `container`. Kinds: `screen` (in a `fragmented-mp4`; its optional `mix` says how the sound inside it was mixed, see section 4, and its optional `region` says which part of the display it shows, see below: a setup box and then short, self-contained fragments, so a file cut off by a crash plays up to the last whole fragment), `microphone` and `system-audio` (each a `wav`, new in 0.2.1: see section 4) and `webcam` (a `fragmented-mp4` of its own, new in 0.2.4, with an optional `camera` that names the camera: see "The webcam" in section 4). Absent in older projects. A reader ignores kinds it does not know. |
 
 **`region`** (new in 0.2.3) is present on the video's entry only when less than the whole display was recorded. `display` is the display's number (1 is the main display, as in `sources`); `x` and `y` are how many pixels the picture's top left corner is from the display's top left corner; `width` and `height` are the size of the video in pixels, which is the size actually recorded (an odd size entered by the author is made one pixel smaller, because H.264 needs an even size, and this field holds the smaller size). Anything recorded in display coordinates, such as the cursor and clicks, is placed on the video by subtracting `x` and `y`. A reader that does not know `region` shows the video as it is. The program also refuses a region that reaches past the display or is smaller than 64 by 64 pixels before anything is recorded.
 
@@ -111,6 +113,16 @@ A take holds its media in **one of two ways**. A real screen recording is one `s
 A real screen recording is one file, `screen.mp4`, written by Windows' Media Foundation as a **fragmented MP4**: the setup box (`ftyp`, `moov`) is written first, then a short fragment (a `moof` box describing it and an `mdat` box holding the video) about once a second. Every fragment is complete on its own, so a file that stops in the middle of a fragment still plays up to the one before.
 
 The picture is H.264 at a steady 30 pictures per second (the newest picture of the screen repeats while the screen does not change). The video's clock is **recording time**: pausing stops it, so the video has no gap where a pause was.
+
+### The webcam
+
+When a webcam is recorded (it is off unless the author asks for it) it goes into a file of its own, `webcam.mp4`, beside `screen.mp4`, listed with `kind` `webcam` and a `camera` whose `name` is the camera's name as Windows gives it. It is never drawn into the screen video: where it appears (a small picture in a corner, full screen, or not at all) is decided when the video is edited. The edit format's `webcam` track plays it.
+
+It is a fragmented MP4 like the screen video, crash-safe in the same way and repaired by `recover` in the same way. It has no sound track: the voice is in `mic.wav` and in the mix inside `screen.mp4`. The size is the camera's own, chosen as the closest the camera offers to 1280 by 720 at 30 pictures a second (a camera that offers only slower modes gives a slower video, between 10 and 30 a second); it is not mirrored, which is a matter for a preview only.
+
+**The webcam is placed by the time its pictures were taken, not the time they arrived.** A webcam picture reaches the program a tenth of a second or more after it was taken. Each picture carries the time the camera says it was taken, on the clock Windows also uses for sound; the recorder places it on the recording clock by that time, and writes the video a little behind the clock to make room for the pictures still on their way, waiting up to 0.4 seconds at a pause and at the end for the last ones. A picture whose time stamp cannot be believed (one that seems to arrive before it was taken, or more than 3 seconds after) is placed when it arrived, and the recording summary says how many were. The video has a picture for every 1/30 second (or the camera's rate) of recording time from the start, and, like the screen video, no gap where a pause was. Pictures taken during a pause are thrown away.
+
+A camera that stops during a recording does not stop the recording. The webcam video ends where the camera stopped, so it is shorter than the recording; the screen and the sound carry on.
 
 ### Sound
 
@@ -204,7 +216,7 @@ Interaction capture is **off unless the author turns it on** (this is a requirem
 
 ## 7. Versions
 
-`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. `0.2.2` adds the optional `mix` on the video's entry in that list. `0.2.3` adds the optional `region` on the video's entry. Projects at `0.1.x`, `0.2.0`, `0.2.1` and `0.2.2` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
+`0.2.0` added one optional field (`media` in `take.json`). `0.2.1` adds two kinds of media to that list (`microphone` and `system-audio`, in `wav` files) and puts the mixed sound inside `screen.mp4`. `0.2.2` adds the optional `mix` on the video's entry in that list. `0.2.3` adds the optional `region` on the video's entry. `0.2.4` adds the `webcam` kind of media and the optional `camera` on its entry. Projects at `0.1.x`, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` open unchanged, so no migration is needed; the version is bumped so that a program can tell which projects can hold sound files. (A program that predates `0.2.1` opens such a project but does not know about its sound files; `recover` from that program would leave them as they are.) A project with any other version is refused with a plain message.
 
 ## 8. Rules this format keeps
 

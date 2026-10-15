@@ -582,6 +582,56 @@ pub fn compare_readback(read: Result<VideoInspection, ScreenError>, recorded_ms:
     }
 }
 
+/// Compare what Windows reads back from the saved webcam video with how long the recording ran. A webcam that
+/// stopped partway (`stopped_at_ms`) makes a shorter video, which is right: it must not be longer than the moment
+/// the camera stopped, and it must not be empty. Otherwise it must be as long as the recording, to within 0.7 seconds.
+pub fn compare_webcam_readback(
+    read: Result<VideoInspection, ScreenError>,
+    recorded_ms: u64,
+    stopped_at_ms: Option<u64>,
+) -> Check {
+    match read {
+        Ok(info) if info.frames > 0 && stopped_at_ms.is_some_and(|stopped| info.duration_ms <= stopped + 700) => check(
+            "webcam-readback",
+            true,
+            format!(
+                "Windows read the saved webcam video back: {} pictures, {:.1} seconds long{}. The camera stopped before the end of the recording, so it is shorter than the recording ({:.1} seconds), as it should be.",
+                info.frames,
+                info.duration_ms as f64 / 1000.0,
+                size_text(&info),
+                recorded_ms as f64 / 1000.0
+            ),
+        ),
+        Ok(info) if stopped_at_ms.is_none() && info.frames > 0 && info.duration_ms.abs_diff(recorded_ms) <= 700 => check(
+            "webcam-readback",
+            true,
+            format!(
+                "Windows read the saved webcam video back: {} pictures, {:.1} seconds long{}. The recording time was {:.1} seconds.",
+                info.frames,
+                info.duration_ms as f64 / 1000.0,
+                size_text(&info),
+                recorded_ms as f64 / 1000.0
+            ),
+        ),
+        Ok(info) => check(
+            "webcam-readback",
+            false,
+            format!(
+                "Windows read back {} pictures ({:.1} seconds) from the saved webcam video, but the recording time was {:.1} seconds.",
+                info.frames,
+                info.duration_ms as f64 / 1000.0,
+                recorded_ms as f64 / 1000.0
+            ),
+        ),
+        Err(e) => check("webcam-readback", false, format!("Windows could not read the saved webcam video back: {e}")),
+    }
+}
+
+/// ", 1280 by 720 pixels" when the file says its size, else nothing.
+fn size_text(info: &VideoInspection) -> String {
+    info.size.map(|(w, h)| format!(", {w} by {h} pixels")).unwrap_or_default()
+}
+
 /// Compare the size of the pictures Windows reads back from a saved recording with the size that was asked
 /// for (a region). A file that does not say its size is reported, not failed: the size is a convenience check.
 pub fn compare_size_readback(read: &Result<VideoInspection, ScreenError>, wanted: (u32, u32)) -> Check {
@@ -1214,6 +1264,34 @@ mod tests {
         assert!(!compare_readback(info(0, 7400), 7400).ok, "no pictures at all");
         let c = compare_readback(Err(ScreenError::Failed("not a video".into())), 1000);
         assert!(!c.ok && c.message.contains("could not read the saved video back"));
+    }
+
+    #[test]
+    fn a_saved_webcam_video_is_as_long_as_the_recording_unless_the_camera_stopped() {
+        let info = |frames, duration_ms, size| Ok(VideoInspection { frames, duration_ms, audio: None, size });
+        let c = compare_webcam_readback(info(222, 7400, Some((1280, 720))), 7480, None);
+        assert!(
+            c.check == "webcam-readback"
+                && c.ok
+                && c.message.contains("222 pictures, 7.4 seconds long, 1280 by 720 pixels")
+                && c.message.contains("recording time was 7.5"),
+            "{}",
+            c.message
+        );
+        assert!(
+            !compare_webcam_readback(info(222, 5000, None), 7400, None).ok,
+            "much shorter, and the camera did not stop"
+        );
+        assert!(!compare_webcam_readback(info(0, 7400, None), 7400, None).ok, "no pictures at all");
+        // A camera that stopped at 5 seconds makes a 5 second video, and that is right.
+        let c = compare_webcam_readback(info(150, 4900, None), 7400, Some(5000));
+        assert!(c.ok && c.message.contains("camera stopped before the end"), "{}", c.message);
+        assert!(
+            !compare_webcam_readback(info(220, 7400, None), 7400, Some(5000)).ok,
+            "longer than the camera was there"
+        );
+        let c = compare_webcam_readback(Err(ScreenError::Failed("not a video".into())), 1000, None);
+        assert!(!c.ok && c.message.contains("could not read the saved webcam video back"), "{}", c.message);
     }
 
     #[test]

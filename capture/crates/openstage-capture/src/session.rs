@@ -417,7 +417,12 @@ impl<'a> Runner<'a> {
         let media_ms = self.media_ms;
         let run = self.run.as_mut().expect("recording has a take");
         let media = run.media.as_mut().expect("recording has media");
-        media.pump(media_ms)
+        media.pump(media_ms)?;
+        // Something the media wants the author to know now (a webcam that stopped): said as a warning, once.
+        for (code, message) in media.notices() {
+            self.warn(&code, &message);
+        }
+        Ok(())
     }
 
     fn step(&mut self, input: &mut dyn InputSource) -> Result<bool, SessionError> {
@@ -800,6 +805,65 @@ mod tests {
             *calls.borrow(),
             vec!["pump", "paused", "resumed", "pump"],
             "it is told about the pause once, and about the resume once, in order"
+        );
+    }
+
+    #[test]
+    fn something_the_media_wants_said_while_recording_goes_on_is_passed_on_as_a_warning_and_does_not_end_it() {
+        use crate::media::{MediaFactory, TakeMedia};
+
+        struct Chatty(u32);
+        impl TakeMedia for Chatty {
+            fn pump(&mut self, media_ms: u64) -> Result<(), SessionError> {
+                self.0 = media_ms as u32;
+                Ok(())
+            }
+            fn flush(&mut self) -> Result<(), SessionError> {
+                Ok(())
+            }
+            fn levels(&self, _: u64) -> Vec<(&'static str, f32)> {
+                Vec::new()
+            }
+            fn notices(&mut self) -> Vec<(String, String)> {
+                // Only between 1.0 and 1.1 seconds, and then no more.
+                if self.0 >= 1000 && self.0 < 1100 {
+                    vec![("webcam-stopped".into(), "The webcam stopped.".into())]
+                } else {
+                    Vec::new()
+                }
+            }
+            fn finish(self: Box<Self>, _: u64) -> Result<u32, SessionError> {
+                Ok(1)
+            }
+        }
+        struct Factory;
+        impl MediaFactory for Factory {
+            fn source_id(&self) -> String {
+                "chatty".into()
+            }
+            fn begin(&self, _: &std::path::Path, _: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError> {
+                Ok(Box::new(Chatty(0)))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(&dir);
+        let mut input = ScriptedInput::new(vec![(3000, Input::Command(Command::Stop))]);
+        let mut sink = VecSink::default();
+        let out = run_session(&cfg, &Factory, &mut input, &mut sink, &ManualClock::new()).unwrap();
+        assert!(out.ok, "a notice does not end the recording");
+        let said: Vec<_> = sink
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Warning { code, message } if code == "webcam-stopped" => Some(message.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(!said.is_empty() && said.iter().all(|m| m == "The webcam stopped."), "{said:?}");
+        assert!(
+            said.len() <= 25,
+            "said only while the media offered it, not on every look of the whole take: {}",
+            said.len()
         );
     }
 

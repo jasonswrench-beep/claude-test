@@ -142,6 +142,7 @@ impl SoundPlan {
                 container: "wav".into(),
                 mix: None,
                 region: None,
+                camera: None,
             });
         }
         if self.system.is_some() {
@@ -151,6 +152,7 @@ impl SoundPlan {
                 container: "wav".into(),
                 mix: None,
                 region: None,
+                camera: None,
             });
         }
         files

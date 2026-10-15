@@ -6,6 +6,7 @@
 //! ([`RecordingReport`]) and [`summarize`] turns them into findings in plain words.
 
 use crate::timing::MAX_OFFSET_MS;
+use crate::webcam::WebcamReport;
 use crate::{CaptureWork, SinkWork};
 use std::time::Duration;
 
@@ -92,6 +93,8 @@ pub struct RecordingReport {
     pub looks: LookStats,
     /// Where the picture work's time went.
     pub work: PictureWork,
+    /// What the webcam did, when one was recorded.
+    pub webcam: Option<WebcamReport>,
 }
 
 /// One moment when the program went a long time without looking at the screen and the sound.
@@ -179,6 +182,76 @@ fn where_the_time_went(r: &RecordingReport, cpu_seconds: f64) -> String {
         ". The program used {total_ms:.0} ms of processor time a second in all, so at least {rest:.0} ms of it is outside these steps: Windows' own video threads, the graphics driver and the sound."
     );
     text
+}
+
+/// The finding about the webcam, in plain words.
+fn webcam_finding(w: &WebcamReport) -> Check {
+    let fps = w.fps.max(1) as u64;
+    // A moment of the video for every 1/fps of the recording, counting the one at the very start.
+    let expected = w.recorded_ms * fps / 1000 + 1;
+    let seconds = (w.recorded_ms as f64 / 1000.0).max(0.001);
+    let camera_rate = w.pictures_received as f64 / seconds;
+    let complete = w.stopped.is_some() || w.pictures_written * 100 >= expected * 98;
+    let steady = w.stopped.is_some() || w.longest_gap_ms <= 1000;
+    let ok = complete && steady && w.stopped.is_none();
+    let mut text = format!(
+        "The webcam ({}) was recorded at {} by {}, {} pictures a second: {} pictures for {} of recording. The camera sent {} pictures, about {:.0} a second{}; the longest wait between two was {} ms.",
+        w.camera,
+        w.width,
+        w.height,
+        w.fps,
+        w.pictures_written,
+        clock(w.recorded_ms),
+        w.pictures_received,
+        camera_rate,
+        if camera_rate < w.fps as f64 * 0.8 && w.stopped.is_none() {
+            format!(" (fewer than the {} asked for: cameras do this in dim light, and the video repeats pictures to fill the gaps)", w.fps)
+        } else {
+            String::new()
+        },
+        w.longest_gap_ms
+    );
+    if w.stamped > 0 {
+        text += &format!(
+            " Each picture was placed where its camera time stamp says it was taken, which is what keeps the webcam with your voice. It reached the program {} ms after it was taken on average ({} ms at most).",
+            w.delay_average_ms, w.delay_most_ms
+        );
+        if w.unstamped > 0 {
+            text += &format!(
+                " {} pictures had no time stamp that could be used and were placed when they arrived.",
+                w.unstamped
+            );
+        }
+    } else if w.pictures_received > 0 {
+        text += " This camera's time stamps could not be used, so each picture was placed when it arrived. A webcam picture is on its way for a tenth of a second or more, so it may appear that much later than your voice. Please tell me, and I will add a way to correct it.";
+    }
+    if w.pictures_repeated * 10 > w.pictures_written && w.stopped.is_none() {
+        text += &format!(
+            " {} of the {} pictures in the video repeat the one before, because the camera sent fewer than the video holds.",
+            w.pictures_repeated, w.pictures_written
+        );
+    }
+    if w.pictures_lost > 0 {
+        text += &format!(" The program was too slow to take {} camera pictures.", w.pictures_lost);
+    }
+    if w.pictures_wrong_size > 0 {
+        text += &format!(" {} pictures of another size were left out.", w.pictures_wrong_size);
+    }
+    if let Some((at, why)) = &w.stopped {
+        text += &format!(
+            " The camera stopped at {}: {why} The webcam video ends there; the screen and the sound carried on.",
+            clock(*at)
+        );
+    } else if !complete {
+        text += &format!(
+            " Only {} of the {} pictures a video of this length should hold were written, so the webcam video has gaps.",
+            w.pictures_written, expected
+        );
+    } else if !steady {
+        text +=
+            " The camera went more than a second without sending a picture, so the webcam picture froze for that time.";
+    }
+    check("run-webcam", ok, text)
 }
 
 /// The findings for a recording, in plain words.
@@ -271,7 +344,12 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
                 } else {
                     "."
                 }
-            ) + &where_the_time_went(r, cpu),
+            ) + &where_the_time_went(r, cpu)
+                + if r.webcam.is_some() {
+                    " The webcam (its picture, turning it into colours Windows can encode, and its own video file) is included in these figures."
+                } else {
+                    ""
+                },
         ));
     }
 
@@ -288,6 +366,11 @@ pub fn summarize(r: &RecordingReport) -> Vec<Check> {
                 if grew > 300.0 { " Growth like this over a long recording is a leak and must be fixed." } else { "" }
             ),
         ));
+    }
+
+    // Did the webcam keep up, and is it placed with the voice?
+    if let Some(w) = &r.webcam {
+        out.push(webcam_finding(w));
     }
 
     // Did sound and picture stay together?
@@ -433,6 +516,7 @@ mod tests {
                 slow_moments: vec![],
             },
             work: PictureWork::default(),
+            webcam: None,
         }
     }
 
@@ -720,5 +804,124 @@ mod tests {
         let checks = summarize(&m);
         assert!(!find(&checks, "run-sound-microphone").ok);
         assert!(find(&checks, "run-sound-microphone").message.contains("over 40 ms on 50 of 1000 looks"));
+    }
+
+    fn webcam_hour() -> WebcamReport {
+        WebcamReport {
+            camera: "NexiGo Iris 4K Webcam".into(),
+            width: 1280,
+            height: 720,
+            fps: 30,
+            pictures_written: 108_001,
+            pictures_repeated: 300,
+            pictures_received: 107_950,
+            pictures_wrong_size: 0,
+            pictures_lost: 0,
+            longest_gap_ms: 140,
+            stamped: 107_950,
+            unstamped: 0,
+            delay_average_ms: 96,
+            delay_most_ms: 210,
+            stopped: None,
+            recorded_ms: 3_600_000,
+            work: SinkWork::default(),
+        }
+    }
+
+    #[test]
+    fn a_recording_without_a_webcam_says_nothing_about_one() {
+        assert!(summarize(&good()).iter().all(|c| c.check != "run-webcam"));
+    }
+
+    #[test]
+    fn a_webcam_that_kept_up_is_told_in_words_with_how_late_its_pictures_arrived() {
+        let mut r = good();
+        r.webcam = Some(webcam_hour());
+        let checks = summarize(&r);
+        let c = find(&checks, "run-webcam");
+        assert!(c.ok, "{}", c.message);
+        assert!(c.message.contains("The webcam (NexiGo Iris 4K Webcam) was recorded at 1280 by 720, 30 pictures a second: 108001 pictures for 1:00:00 of recording."), "{}", c.message);
+        assert!(
+            c.message.contains(
+                "The camera sent 107950 pictures, about 30 a second; the longest wait between two was 140 ms."
+            ),
+            "{}",
+            c.message
+        );
+        assert!(
+            c.message.contains("placed where its camera time stamp says it was taken")
+                && c.message.contains("96 ms after it was taken on average (210 ms at most)"),
+            "{}",
+            c.message
+        );
+        assert!(!c.message.contains("fewer than"), "{}", c.message);
+        assert!(
+            find(&checks, "run-cpu").message.contains("The webcam (its picture"),
+            "the processor finding says the webcam is in it"
+        );
+    }
+
+    #[test]
+    fn a_camera_whose_time_stamps_cannot_be_used_is_said_to_place_pictures_late() {
+        let mut r = good();
+        let mut w = webcam_hour();
+        w.stamped = 0;
+        w.unstamped = w.pictures_received;
+        r.webcam = Some(w);
+        let m = &find(&summarize(&r), "run-webcam").message.clone();
+        assert!(
+            m.contains("time stamps could not be used") && m.contains("may appear that much later than your voice"),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn a_slow_camera_a_stalled_camera_and_a_camera_that_stopped_are_each_a_finding() {
+        let mut r = good();
+        let mut slow = webcam_hour();
+        slow.pictures_received = 54_000;
+        slow.pictures_repeated = 54_000;
+        r.webcam = Some(slow);
+        let c = find(&summarize(&r), "run-webcam").clone();
+        assert!(
+            c.ok && c.message.contains("fewer than the 30 asked for") && c.message.contains("repeat the one before"),
+            "{}",
+            c.message
+        );
+
+        let mut stalled = webcam_hour();
+        stalled.longest_gap_ms = 4_200;
+        r.webcam = Some(stalled);
+        let c = find(&summarize(&r), "run-webcam").clone();
+        assert!(!c.ok && c.message.contains("more than a second without sending a picture"), "{}", c.message);
+
+        let mut stopped = webcam_hour();
+        stopped.stopped = Some((754_000, "The camera was unplugged.".into()));
+        stopped.pictures_written = 22_621;
+        r.webcam = Some(stopped);
+        let c = find(&summarize(&r), "run-webcam").clone();
+        assert!(!c.ok && c.message.contains("The camera stopped at 12:34: The camera was unplugged. The webcam video ends there; the screen and the sound carried on."), "{}", c.message);
+
+        let mut gaps = webcam_hour();
+        gaps.pictures_written = 90_000;
+        r.webcam = Some(gaps);
+        let c = find(&summarize(&r), "run-webcam").clone();
+        assert!(!c.ok && c.message.contains("Only 90000 of the 108001 pictures"), "{}", c.message);
+    }
+
+    #[test]
+    fn pictures_lost_or_of_the_wrong_size_are_counted_in_the_finding() {
+        let mut r = good();
+        let mut w = webcam_hour();
+        w.pictures_lost = 12;
+        w.pictures_wrong_size = 2;
+        r.webcam = Some(w);
+        let c = find(&summarize(&r), "run-webcam").clone();
+        assert!(
+            c.message.contains("too slow to take 12 camera pictures")
+                && c.message.contains("2 pictures of another size"),
+            "{}",
+            c.message
+        );
     }
 }

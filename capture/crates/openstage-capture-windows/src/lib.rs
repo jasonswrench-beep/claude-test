@@ -16,6 +16,7 @@ mod crash;
 mod cue_player;
 mod echo;
 mod export;
+mod interactions;
 mod make_edit;
 mod pick;
 mod queue;
@@ -40,6 +41,8 @@ mod win_camera;
 mod win_console;
 #[cfg(windows)]
 mod win_cues;
+#[cfg(windows)]
+mod win_interactions;
 #[cfg(windows)]
 mod win_layered;
 #[cfg(windows)]
@@ -76,6 +79,35 @@ pub use export::{
     bitrate_for, export, source_path, ExportError, ExportJob, ExportReport, ExportTools, FileSounds, Progress,
     SoundReader,
 };
+pub use interactions::{
+    announcement as interactions_announcement, classify_focus, explanation as interactions_explanation, key_name,
+    role_name, Button, Drained, FocusKind, InteractionCounts, InteractionFilter, InteractionPlatform, InteractionSetup,
+    InteractionSource, InteractionTake, InteractionsReport, Level as InteractionLevel, Lookups, Mods, Raw,
+    SharedTimeline, Timeline, WindowState,
+};
+/// The real way of noting what the author does with the mouse and keyboard: Windows' own hooks and accessibility
+/// information on Windows; on any other system one that says it is not available.
+pub fn system_interaction_platform() -> Box<dyn InteractionPlatform> {
+    #[cfg(windows)]
+    {
+        Box::new(crate::win_interactions::WindowsInteractions::new())
+    }
+    #[cfg(not(windows))]
+    {
+        Box::new(NoInteractions)
+    }
+}
+
+#[cfg(not(windows))]
+struct NoInteractions;
+
+#[cfg(not(windows))]
+impl InteractionPlatform for NoInteractions {
+    fn start(&self, _: &InteractionSetup, _: SharedTimeline) -> Result<Box<dyn InteractionSource>, String> {
+        Err("Noting the mouse and keyboard only works on Windows.".to_string())
+    }
+}
+
 pub use make_edit::{edit_from_take, EditOptions};
 pub use openstage_capture_project::fmp4::{repair_file, scan_file, Mp4Scan, Repair, TopBox};
 pub use pick::{region_numbers, run_pick_region, run_pick_region_with, PickRegionOptions};

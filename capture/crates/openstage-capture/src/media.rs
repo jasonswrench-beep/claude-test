@@ -11,7 +11,7 @@
 
 use crate::session::{SessionConfig, SessionError};
 use crate::source::Source;
-use openstage_capture_project::{part_path, EventLogThread, MediaFile, SegmentWriter};
+use openstage_capture_project::{part_path, EventLogThread, LogEvent, MediaFile, SegmentWriter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,6 +36,12 @@ pub trait TakeMedia {
     fn notices(&mut self) -> Vec<(String, String)> {
         Vec::new()
     }
+    /// What the author did since this was last asked (the cursor, clicks, keys, windows), as (recording time in
+    /// milliseconds, what), in the order it should be written to the take's log. Asked for after every pump and once
+    /// more before the take is finished. Only media that note what the author does (story A6) have anything to say.
+    fn log_lines(&mut self) -> Vec<(u64, LogEvent)> {
+        Vec::new()
+    }
     /// Make every file complete. Returns how many media files the take holds.
     fn finish(self: Box<Self>, media_ms: u64) -> Result<u32, SessionError>;
 }
@@ -44,6 +50,12 @@ pub trait TakeMedia {
 pub trait MediaFactory {
     /// A short name for the source, written into `take.json`, such as `synthetic` or `screen:1`.
     fn source_id(&self) -> String;
+    /// When the media will note what the author does (story A6), the sentence that says so. The session says it as
+    /// each countdown begins, sounds a cue, and marks every state report while recording with `watching`, so the
+    /// author is never unaware of it. `None` (the default) when nothing of the kind is noted.
+    fn watching(&self) -> Option<String> {
+        None
+    }
     /// The media files each take will hold, named relative to the take's folder. Empty for the test
     /// source, whose media lives in `segments/`.
     fn media_files(&self) -> Vec<MediaFile> {

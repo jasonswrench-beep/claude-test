@@ -28,9 +28,13 @@ pub enum LogEvent {
         key: String,
         modifiers: Vec<String>,
     },
+    /// The window in front. `bounds` is where it sits, in the same pixels as the cursor, and is absent when
+    /// Windows would not say. A new line is written when the title, the program or the place changes.
     Window {
         title: String,
         process: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bounds: Option<LogBounds>,
     },
     /// The name and role of the element that was clicked, from Windows' accessibility information.
     Element {
@@ -40,6 +44,24 @@ pub enum LogEvent {
     Marker {
         label: String,
     },
+}
+
+impl LogEvent {
+    /// Whether this line records what the author did with the mouse, the keyboard or the windows, which is
+    /// private. A marker is the author's own note, put there on purpose, and is not.
+    pub fn is_interaction(&self) -> bool {
+        !matches!(self, LogEvent::Marker { .. })
+    }
+}
+
+/// A rectangle in the pixels of the recorded display, counted from its top left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 /// One line of the log: when it happened (milliseconds of recording time) and what.
@@ -282,6 +304,43 @@ mod tests {
             lines[2],
             LogLine { t: 30, event: LogEvent::Element { name: "Save".into(), role: "button".into() } }
         );
+    }
+
+    #[test]
+    fn a_window_line_may_or_may_not_say_where_the_window_is() {
+        let with = LogEvent::Window {
+            title: "Untitled - Notepad".into(),
+            process: "notepad.exe".into(),
+            bounds: Some(LogBounds { x: 10, y: -20, width: 800, height: 600 }),
+        };
+        let without = LogEvent::Window { title: "t".into(), process: "p.exe".into(), bounds: None };
+        let a = serde_json::to_string(&LogLine { t: 5, event: with.clone() }).unwrap();
+        assert_eq!(
+            a,
+            r#"{"t":5,"type":"window","title":"Untitled - Notepad","process":"notepad.exe","bounds":{"x":10,"y":-20,"width":800,"height":600}}"#
+        );
+        let b = serde_json::to_string(&LogLine { t: 6, event: without.clone() }).unwrap();
+        assert_eq!(b, r#"{"t":6,"type":"window","title":"t","process":"p.exe"}"#, "no place, no field");
+        // A line written before the place was recorded still reads.
+        assert_eq!(
+            serde_json::from_str::<LogLine>(r#"{"t":6,"type":"window","title":"t","process":"p.exe"}"#).unwrap().event,
+            without
+        );
+        assert_eq!(serde_json::from_str::<LogLine>(&a).unwrap().event, with);
+    }
+
+    #[test]
+    fn only_a_marker_is_not_an_interaction() {
+        assert!(!LogEvent::Marker { label: "x".into() }.is_interaction());
+        for event in [
+            LogEvent::CursorMove { x: 0, y: 0 },
+            LogEvent::Click { x: 0, y: 0, button: "left".into() },
+            LogEvent::Key { key: "a".into(), modifiers: vec![] },
+            LogEvent::Window { title: String::new(), process: String::new(), bounds: None },
+            LogEvent::Element { name: String::new(), role: String::new() },
+        ] {
+            assert!(event.is_interaction(), "{event:?}");
+        }
     }
 
     #[test]

@@ -25,6 +25,7 @@ mod error;
 mod events_log;
 pub mod fmp4;
 mod fsutil;
+mod interaction_review;
 mod manifest;
 mod recover;
 mod segment;
@@ -39,9 +40,14 @@ pub use edit::{
 };
 pub use error::ProjectError;
 pub use events_log::{
-    read_log, trim_incomplete_tail, EventLogThread, EventLogWriter, LogEvent, LogLine, LogSink, SaveStats, SLOW_SAVE_MS,
+    read_log, trim_incomplete_tail, EventLogThread, EventLogWriter, LogBounds, LogEvent, LogLine, LogSink, SaveStats,
+    SLOW_SAVE_MS,
 };
 pub use fsutil::{new_id, utc_now_iso, write_atomic};
+pub use interaction_review::{
+    delete_take_interactions, describe_line, describe_lines, describe_summary, read_take_log,
+    summarize as summarize_log, Deletion, LogSummary,
+};
 pub use manifest::{create_project, open_project, Manifest, Tracks, FORMAT_NAME, SCHEMA_VERSION};
 pub use recover::{recover_project, RecoverReport, RecoveredTake};
 pub use segment::{
@@ -49,6 +55,6 @@ pub use segment::{
 };
 pub use take::{
     create_take, create_take_with, finish_take, list_takes, next_take_id, read_take, set_aside_take, take_dir,
-    write_take, CameraInfo, MediaFile, MixInfo, RegionInfo, Take, TakeEntry, TakeState,
+    write_take, CameraInfo, InteractionInfo, MediaFile, MixInfo, RegionInfo, Take, TakeEntry, TakeState,
 };
 pub use wav::{read_wav_in_pieces, repair_wav, wav_info, WavFile, WavInfo, WavRepair, WavThread, WavWriter};

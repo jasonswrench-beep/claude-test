@@ -160,6 +160,8 @@ struct Runner<'a> {
     cues: &'a dyn CuePlayer,
     /// How many countdown ticks have sounded in the countdown that is running.
     ticks_played: u64,
+    /// Whether the media note what the author does, which every state report while recording says.
+    watching: bool,
 }
 
 impl<'a> Runner<'a> {
@@ -206,12 +208,22 @@ impl<'a> Runner<'a> {
         let elapsed_ms =
             if self.state == State::Countdown { now.saturating_sub(self.countdown_started) } else { self.media_ms };
         let take = self.current_take();
-        self.emit(Event::State { state: self.state, elapsed_ms, take });
+        let watching = self.watching && self.state == State::Recording;
+        self.emit(Event::State { state: self.state, elapsed_ms, take, watching });
         self.last_state_emit = now;
     }
 
     fn warn(&mut self, code: &str, message: &str) {
         self.emit(Event::Warning { code: code.to_string(), message: message.to_string() });
+    }
+
+    /// When the media will note what the author does, say so in words and with a sound, before anything is noted.
+    /// This is never done while recording time runs, so the sound is not in the recording.
+    fn announce_watching(&mut self) {
+        if let Some(message) = self.factory.watching() {
+            self.emit(Event::Check { check: "interactions-on".into(), ok: true, message });
+            self.cue_and_wait(Cue::Watching);
+        }
     }
 
     fn start_countdown_or_take(&mut self) -> Result<(), SessionError> {
@@ -220,12 +232,14 @@ impl<'a> Runner<'a> {
             self.countdown_started = self.clock.now_ms();
             self.ticks_played = 0;
             self.emit_state();
+            self.announce_watching();
             self.countdown_ticks();
             // The countdown is time to get ready in. The time warming up takes is part of the countdown,
             // not added to it.
             self.factory.warm_up(self.cfg)?;
             Ok(())
         } else {
+            self.announce_watching();
             self.begin_take()
         }
     }
@@ -257,8 +271,21 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
+    /// Put what the media noted about what the author did into the take's log.
+    fn write_log_lines(&mut self) -> Result<(), SessionError> {
+        if let Some(run) = self.run.as_mut() {
+            if let Some(media) = run.media.as_mut() {
+                for (t, event) in media.log_lines() {
+                    run.events.append(t, event)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Make every file of the current take complete. Returns the duration and the number of media files.
     fn close_run(&mut self) -> Result<(u64, u32), SessionError> {
+        self.write_log_lines()?;
         let mut run = self.run.take().expect("a take is open");
         let media_ms = self.media_ms;
         let files = match run.media.take() {
@@ -422,7 +449,7 @@ impl<'a> Runner<'a> {
         for (code, message) in media.notices() {
             self.warn(&code, &message);
         }
-        Ok(())
+        self.write_log_lines()
     }
 
     fn step(&mut self, input: &mut dyn InputSource) -> Result<bool, SessionError> {
@@ -579,6 +606,7 @@ pub fn run_session_with_cues(
         outcome: None,
         cues,
         ticks_played: 0,
+        watching: factory.watching().is_some(),
     };
     if let Err(e) = runner.start_countdown_or_take() {
         runner.fail(e);
@@ -1205,6 +1233,15 @@ mod tests {
             }
         }
 
+        /// Notes each change of state, and keeps every event.
+        struct BothSink(StateSink, Vec<Event>);
+        impl EventSink for BothSink {
+            fn emit(&mut self, event: Event) -> bool {
+                self.1.push(event.clone());
+                self.0.emit(event)
+            }
+        }
+
         struct LogCues(Log, u64);
         impl CuePlayer for LogCues {
             fn play(&self, cue: Cue) -> u64 {
@@ -1218,6 +1255,11 @@ mod tests {
             log: Log,
             fail_after_pumps: Option<u32>,
             pumps: u32,
+            /// What each call to `log_lines` hands over, in turn.
+            lines: Vec<Vec<(u64, LogEvent)>>,
+            asked: usize,
+            /// Handed over only to a call made beyond one a pump: the one just before the take is finished.
+            late: Vec<(u64, LogEvent)>,
         }
         impl TakeMedia for LogMedia {
             fn pump(&mut self, _: u64) -> Result<(), SessionError> {
@@ -1239,6 +1281,13 @@ mod tests {
             fn resumed(&mut self) {
                 self.log.note("media:resumed");
             }
+            fn log_lines(&mut self) -> Vec<(u64, LogEvent)> {
+                self.asked += 1;
+                if self.asked > self.pumps as usize {
+                    return self.late.clone();
+                }
+                self.lines.get(self.asked - 1).cloned().unwrap_or_default()
+            }
             fn finish(self: Box<Self>, _: u64) -> Result<u32, SessionError> {
                 self.log.note("media:finish");
                 Ok(1)
@@ -1247,14 +1296,27 @@ mod tests {
         struct LogFactory {
             log: Log,
             fail_after_pumps: Option<u32>,
+            watching: Option<String>,
+            lines: Vec<Vec<(u64, LogEvent)>>,
+            late: Vec<(u64, LogEvent)>,
         }
         impl MediaFactory for LogFactory {
             fn source_id(&self) -> String {
                 "log".into()
             }
+            fn watching(&self) -> Option<String> {
+                self.watching.clone()
+            }
             fn begin(&self, _: &std::path::Path, _: &SessionConfig) -> Result<Box<dyn TakeMedia>, SessionError> {
                 self.log.note("media:begin");
-                Ok(Box::new(LogMedia { log: self.log.clone(), fail_after_pumps: self.fail_after_pumps, pumps: 0 }))
+                Ok(Box::new(LogMedia {
+                    log: self.log.clone(),
+                    fail_after_pumps: self.fail_after_pumps,
+                    pumps: 0,
+                    lines: self.lines.clone(),
+                    asked: 0,
+                    late: self.late.clone(),
+                }))
             }
         }
 
@@ -1271,7 +1333,8 @@ mod tests {
             cfg.countdown_ms = countdown_ms;
             let log = Log::new();
             let mut input = ScriptedInput::new(script.into_iter().map(|(at, c)| (at, Input::Command(c))).collect());
-            let factory = LogFactory { log: log.clone(), fail_after_pumps };
+            let factory =
+                LogFactory { log: log.clone(), fail_after_pumps, watching: None, lines: Vec::new(), late: Vec::new() };
             let mut sink = StateSink(log.clone(), None);
             let outcome = match cues_ms {
                 Some(ms) => {
@@ -1286,6 +1349,133 @@ mod tests {
         /// The names of the cues that sounded, in order.
         fn cues_of(log: &Log) -> Vec<String> {
             log.names().into_iter().filter(|n| n.starts_with("cue:")).collect()
+        }
+
+        fn run_watching(
+            countdown_ms: u64,
+            script: Vec<(u64, Command)>,
+            lines: Vec<Vec<(u64, LogEvent)>>,
+        ) -> (Log, Outcome, Vec<Event>, tempfile::TempDir) {
+            run_watching_late(countdown_ms, script, lines, Vec::new())
+        }
+
+        fn run_watching_late(
+            countdown_ms: u64,
+            script: Vec<(u64, Command)>,
+            lines: Vec<Vec<(u64, LogEvent)>>,
+            late: Vec<(u64, LogEvent)>,
+        ) -> (Log, Outcome, Vec<Event>, tempfile::TempDir) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut cfg = config(&dir);
+            cfg.countdown_ms = countdown_ms;
+            let log = Log::new();
+            let mut input = ScriptedInput::new(script.into_iter().map(|(at, c)| (at, Input::Command(c))).collect());
+            let factory = LogFactory {
+                log: log.clone(),
+                fail_after_pumps: None,
+                watching: Some("Interaction recording is ON.".into()),
+                lines,
+                late,
+            };
+            let mut sink = BothSink(StateSink(log.clone(), None), Vec::new());
+            let outcome = run_session_with_cues(
+                &cfg,
+                &factory,
+                &mut input,
+                &mut sink,
+                &*log.clock,
+                &LogCues(log.clone(), CUE_MS),
+            )
+            .unwrap();
+            // The caller keeps the folder, and reads the log.
+            (log, outcome, sink.1, dir)
+        }
+
+        #[test]
+        fn when_what_the_author_does_is_noted_it_is_said_in_words_and_sounded_as_each_countdown_begins() {
+            let (log, _, events, _) = run_watching(3000, vec![(8000, Command::Stop)], Vec::new());
+            let names = log.names();
+            assert_eq!(cues_of(&log).iter().filter(|c| *c == "cue:interactions").count(), 1);
+            assert!(log.index_of("state:Countdown") < log.index_of("cue:interactions"));
+            assert!(log.index_of("cue:interactions") < log.index_of("cue:start"), "{names:?}");
+            assert!(log.index_of("cue:interactions") < log.index_of("media:begin"), "before anything is recorded");
+            let said = events.iter().position(|e| {
+                matches!(e, Event::Check { check, ok: true, message }
+                    if check == "interactions-on" && message == "Interaction recording is ON.")
+            });
+            let first_recording = events.iter().position(|e| matches!(e, Event::State { state: State::Recording, .. }));
+            assert!(said.is_some() && said < first_recording, "said in words before recording begins");
+        }
+
+        #[test]
+        fn without_a_countdown_it_is_still_said_and_sounded_before_the_start() {
+            let (log, _, events, _) = run_watching(0, vec![(2000, Command::Stop)], Vec::new());
+            assert!(log.index_of("cue:interactions") < log.index_of("cue:start"));
+            assert!(log.index_of("cue:start") < log.index_of("media:begin"));
+            assert!(events.iter().any(|e| matches!(e, Event::Check { check, .. } if check == "interactions-on")));
+        }
+
+        #[test]
+        fn starting_again_says_it_again_for_the_new_take() {
+            let (log, _, events, _) =
+                run_watching(2000, vec![(4000, Command::Restart), (9000, Command::Stop)], Vec::new());
+            assert_eq!(cues_of(&log).iter().filter(|c| *c == "cue:interactions").count(), 2);
+            let said = events.iter().filter(|e| matches!(e, Event::Check { check, .. } if check == "interactions-on"));
+            assert_eq!(said.count(), 2);
+        }
+
+        #[test]
+        fn nothing_is_said_or_sounded_when_nothing_is_noted() {
+            let (log, _) = run(3000, vec![(6000, Command::Stop)], Some(CUE_MS), None);
+            assert!(!cues_of(&log).contains(&"cue:interactions".to_string()));
+        }
+
+        #[test]
+        fn the_sound_is_never_played_while_recording_time_is_running() {
+            let (log, _, _, _) = run_watching(
+                2000,
+                vec![(4000, Command::Pause), (5000, Command::Resume), (7000, Command::Restart), (12000, Command::Stop)],
+                Vec::new(),
+            );
+            let mut running = false;
+            for name in log.names() {
+                match name.as_str() {
+                    "media:begin" | "media:resumed" => running = true,
+                    "media:paused" | "media:finish" => running = false,
+                    "cue:interactions" => assert!(!running, "the watching sound played during recording"),
+                    _ => {}
+                }
+            }
+        }
+
+        #[test]
+        fn every_state_report_while_recording_says_that_it_is_being_noted_and_no_other_does() {
+            let (_, _, events, _) = run_watching(
+                1000,
+                vec![(3000, Command::Pause), (4000, Command::Resume), (6000, Command::Stop)],
+                Vec::new(),
+            );
+            let mut recording_reports = 0;
+            for event in &events {
+                if let Event::State { state, watching, .. } = event {
+                    assert_eq!(*watching, *state == State::Recording, "{state:?}");
+                    recording_reports += usize::from(*state == State::Recording);
+                }
+            }
+            assert!(recording_reports >= 3, "reported repeatedly, each time saying so: {recording_reports}");
+        }
+
+        #[test]
+        fn what_the_media_noted_is_written_to_the_log_as_it_comes_and_once_more_before_the_take_is_finished() {
+            let click = |t: u64| (t, LogEvent::Click { x: 1, y: 2, button: "left".into() });
+            // The first two calls come during recording; the last line is only given to the call made just
+            // before finishing.
+            let lines = vec![vec![click(10), click(20)]];
+            let (_, outcome, _, dir) = run_watching_late(0, vec![(1000, Command::Stop)], lines, vec![click(990)]);
+            assert!(outcome.ok);
+            let project = dir.path().join("lesson.capture");
+            let log = read_log(&take_dir(&project, 1).join("events.jsonl")).unwrap();
+            assert_eq!(log.iter().map(|l| l.t).collect::<Vec<_>>(), [10, 20, 990], "{log:?}");
         }
 
         #[test]

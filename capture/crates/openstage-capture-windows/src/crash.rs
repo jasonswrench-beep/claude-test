@@ -273,6 +273,7 @@ mod tests {
             mix: None,
             region: None,
             camera: None,
+            interactions: None,
         }];
         media.extend(plan().media_files());
         media

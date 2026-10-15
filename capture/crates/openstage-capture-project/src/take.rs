@@ -43,6 +43,22 @@ pub struct MediaFile {
     /// For the webcam video (`kind` is `webcam`): which camera it came from. Absent on other files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraInfo>,
+    /// For the interaction log (`kind` is `interactions`): what it holds and how to read its positions. Absent on
+    /// other files, and when the author did not turn interaction recording on there is no such entry at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactions: Option<InteractionInfo>,
+}
+
+/// What an interaction log holds. Its positions (the cursor, a click, a window's place) are pixels of one display,
+/// counted from that display's top left corner, the way [`RegionInfo`] counts, so the editor can put them on the
+/// video by subtracting the region's `x` and `y` (or, for a recorded window, that window's place at the time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionInfo {
+    /// The display the positions are measured on (1 is the main display).
+    pub display: u32,
+    /// Whether the keys that were pressed are in the log. When false the author chose to leave them out.
+    pub keys: bool,
 }
 
 /// Which camera a webcam video came from. The size and rate of the picture are in the video itself.
@@ -290,6 +306,7 @@ mod tests {
             mix: None,
             region: None,
             camera: None,
+            interactions: None,
         }];
         let take = create_take_with(dir.path(), 2, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
         assert_eq!(take.media, media);
@@ -309,6 +326,7 @@ mod tests {
                 mix: None,
                 region: None,
                 camera: None,
+                interactions: None,
             },
             MediaFile {
                 file: "webcam.mp4".into(),
@@ -317,6 +335,7 @@ mod tests {
                 mix: None,
                 region: None,
                 camera: Some(CameraInfo { name: "NexiGo Iris 4K Webcam".into() }),
+                interactions: None,
             },
         ];
         create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
@@ -347,6 +366,7 @@ mod tests {
                 mix: Some(MixInfo { microphone_gain_db: 3, system_gain_db: -12 }),
                 region: None,
                 camera: None,
+                interactions: None,
             },
             MediaFile {
                 file: "mic.wav".into(),
@@ -355,6 +375,7 @@ mod tests {
                 mix: None,
                 region: None,
                 camera: None,
+                interactions: None,
             },
         ];
         create_take_with(dir.path(), 1, vec!["screen:1".into()], None, 2000, media.clone()).unwrap();
@@ -394,6 +415,7 @@ mod tests {
             mix: None,
             region: Some(RegionInfo { display: 2, x: 100, y: 200, width: 1280, height: 720 }),
             camera: None,
+            interactions: None,
         }];
         create_take_with(dir.path(), 1, vec!["screen:2".into()], None, 2000, media.clone()).unwrap();
         let text = std::fs::read_to_string(take_dir(dir.path(), 1).join("take.json")).unwrap();
@@ -411,6 +433,7 @@ mod tests {
             mix: None,
             region: None,
             camera: None,
+            interactions: None,
         }];
         create_take_with(dir.path(), 2, vec!["screen:1".into()], None, 2000, whole).unwrap();
         let text = std::fs::read_to_string(take_dir(dir.path(), 2).join("take.json")).unwrap();

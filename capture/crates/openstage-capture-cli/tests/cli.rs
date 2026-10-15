@@ -303,6 +303,101 @@ fn probe_lists_the_test_source() {
     assert!(sources.iter().any(|s| s.id == "synthetic" && s.available));
 }
 
+#[test]
+fn interactions_with_the_test_source_are_refused_rather_than_quietly_not_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    for level in ["on", "no-keys"] {
+        let (status, events) =
+            run_once(&["record", "--project", dir.path().join("p.capture").to_str().unwrap(), "--interactions", level]);
+        assert_eq!(status.code(), Some(2), "{level}");
+        assert!(events.iter().any(|e| matches!(e, Event::Error { code, message, fatal: true }
+            if code == "bad-option" && message.contains("--interactions only works with --source screen"))));
+    }
+    assert!(!dir.path().join("p.capture/takes").exists(), "nothing was recorded");
+}
+
+#[test]
+fn a_word_that_is_not_a_level_is_refused_with_the_three_that_are() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, events) =
+        run_once(&["record", "--project", dir.path().join("p.capture").to_str().unwrap(), "--interactions", "maybe"]);
+    assert_eq!(status.code(), Some(2));
+    assert!(events.iter().any(|e| matches!(e, Event::Error { code, message, .. }
+        if code == "bad-option" && message.contains("off, no-keys or on") && message.contains("\"maybe\""))));
+}
+
+#[test]
+fn saying_off_changes_nothing_and_a_recording_without_it_has_no_interaction_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("p.capture");
+    let (status, events) = run_once(&[
+        "record",
+        "--project",
+        project.to_str().unwrap(),
+        "--countdown-ms",
+        "0",
+        "--duration-ms",
+        "300",
+        "--interactions",
+        "off",
+    ]);
+    assert_eq!(status.code(), Some(0));
+    assert!(events.iter().any(|e| matches!(e, Event::Result { ok: true, .. })));
+    assert!(!events.iter().any(|e| matches!(e, Event::Check { check, .. } if check.starts_with("interactions"))));
+    assert!(!events.iter().any(|e| matches!(e, Event::State { watching: true, .. })));
+}
+
+#[test]
+fn the_interactions_command_reads_back_a_log_in_words_and_deleting_needs_a_yes() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("p.capture");
+    let mut run = Running::record(&project, &["--ignore-stdin-eof"]);
+    run.wait_for_state(State::Recording);
+    run.send(r#"{"cmd":"marker","label":"look here"}"#);
+    run.wait_for("the marker", |e| matches!(e, Event::Marker { .. }));
+    run.send(r#"{"cmd":"stop"}"#);
+    run.wait_for("the end", |e| matches!(e, Event::Result { .. }));
+    let (status, _) = run.finish();
+    assert!(status.success());
+
+    let out =
+        Command::new(BIN).args(["interactions", "--plain", "--project", project.to_str().unwrap()]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains(
+            "OK: Take 1 holds no record of what you did with the mouse and keyboard. It holds 1 marker of your own."
+        ),
+        "{text}"
+    );
+
+    let out = Command::new(BIN)
+        .args(["interactions", "--plain", "--list", "--project", project.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("you added a marker: look here"), "{text}");
+
+    // Nothing to delete here, which is not a failure.
+    let out = Command::new(BIN)
+        .args(["interactions", "--plain", "--delete", "--project", project.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8(out.stdout).unwrap().contains("holds nothing to delete"));
+}
+
+#[test]
+fn the_interactions_command_on_a_folder_that_is_not_a_recording_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(BIN)
+        .args(["interactions", "--plain", "--project", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    assert!(String::from_utf8(out.stdout).unwrap().contains("PROBLEM: Could not open the recording folder"));
+}
+
 #[cfg(not(windows))]
 #[test]
 fn cameras_says_it_needs_windows() {

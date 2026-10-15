@@ -33,6 +33,9 @@ hands-free-log.txt
 __pycache__/
 webcam-test-log.txt
 webcam-test-output/
+interactions-test-output/
+interactions-test-log.txt
+interactions-test-list.txt
 export-test-log.txt
 export-log.txt
 export-test-output/

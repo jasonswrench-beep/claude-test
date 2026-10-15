@@ -322,7 +322,7 @@ test("an edit from version 0.1, which had no overlays or zooms, opens and is bro
   for (const track of old.tracks) delete track.items;
   const back = parse(JSON.stringify(old));
   assert.ok(back.ok);
-  assert.equal(back.model.schemaVersion, "0.2.0");
+  assert.equal(back.model.schemaVersion, "0.3.0");
   assert.ok(back.model.tracks.every((tr) => tr.items.length === 0));
   assert.equal(back.problems.length, 0);
 });

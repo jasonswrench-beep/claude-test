@@ -55,6 +55,7 @@ export type ProblemCode =
   | "needs-text-alternative"
   | "item-wrong-track"
   | "bad-rect"
+  | "placement-not-allowed"
   | "bad-color"
   | "bad-style"
   | "text-empty"
@@ -129,6 +130,9 @@ export function validate(model: Model): Problem[] {
       duplicate(clip.id, "clip", track.id);
       const here = { trackId: track.id, clipId: clip.id };
       const label = where(track, clip);
+      if (clip.placement !== undefined && !isRect(clip.placement)) {
+        add({ code: "bad-rect", severity: "error", message: `${label} has a place on the picture that is not a rectangle inside it.`, ...here });
+      }
 
       if (![clip.startMs, clip.sourceStartMs, clip.sourceEndMs, clip.fadeInMs, clip.fadeOutMs].every(isWhole)) {
         add({
@@ -158,6 +162,14 @@ export function validate(model: Model): Problem[] {
           ...here,
         });
       } else {
+        if (clip.placement !== undefined && ["microphone", "system-audio", "audio"].includes(source.kind)) {
+          add({
+            code: "placement-not-allowed",
+            severity: "error",
+            message: `${label} holds ${source.name}, which is sound only, so it cannot have a place on the picture. Take the place away.`,
+            ...here,
+          });
+        }
         if (!ALLOWED_SOURCES[track.kind].includes(source.kind)) {
           add({
             code: "source-not-allowed",

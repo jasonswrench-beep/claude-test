@@ -35,11 +35,13 @@ import {
   withTrack,
   type Clip,
   type Model,
+  type Rect,
   type SourceInfo,
   type SourceRef,
   type Track,
   type TrackKind,
 } from "./model.ts";
+import { describePlace, describeSize, isRect } from "./regions.ts";
 import { describeLength, describeTime, wholeMs } from "./time.ts";
 import { validate } from "./validate.ts";
 
@@ -583,6 +585,38 @@ export function setFades(model: Model, clipId: string, fadeInMs: number, fadeOut
     withClip(model, found.track.id, { ...found.clip, fadeInMs: fadeIn, fadeOutMs: fadeOut }),
     "set fades",
     `Clip ${quote(found.clip.name)} fades in over ${describeLength(fadeIn)} and out over ${describeLength(fadeOut)}.`,
+    [clipId],
+  );
+}
+
+/**
+ * Where a picture sits in the finished video (new in 0.3): a rectangle on the frame, in ten-thousandths of its
+ * width and height. `null` takes the place away, so the picture is drawn where it is drawn by default (a screen,
+ * image or video fills the frame; a webcam is a small picture in the bottom right corner, or fills the frame when
+ * there is no other picture). Only a clip that has a picture can have a place.
+ */
+export function setPlacement(model: Model, clipId: string, place: Rect | null): Result {
+  const found = locate(model, clipId);
+  if ("ok" in found) return found;
+  const source = findSource(model, found.clip.source);
+  if (source !== undefined && (source.kind === "microphone" || source.kind === "system-audio" || source.kind === "audio")) {
+    return refuse(`Clip ${quote(found.clip.name)} is sound only, so it has no place on the picture.`);
+  }
+  const { placement: before, ...bare } = found.clip;
+  if (place === null) {
+    if (before === undefined) return unchanged(model, `Clip ${quote(found.clip.name)} already has no place of its own; it is drawn where it is by default.`);
+    return done(withClip(model, found.track.id, bare), "clear place", `Clip ${quote(found.clip.name)} is drawn where it is by default again.`, [clipId]);
+  }
+  if (!isRect(place)) {
+    return refuse("That place is not a rectangle inside the picture: it must start at 0 or more, have some width and height, and end inside the picture. Nothing was changed.");
+  }
+  if (before !== undefined && before.x === place.x && before.y === place.y && before.width === place.width && before.height === place.height) {
+    return unchanged(model, `Clip ${quote(found.clip.name)} is already there.`);
+  }
+  return done(
+    withClip(model, found.track.id, { ...bare, placement: place }),
+    "set place",
+    `Clip ${quote(found.clip.name)} is now drawn in ${describePlace(place)} of the picture, ${describeSize(place)}.`,
     [clipId],
   );
 }

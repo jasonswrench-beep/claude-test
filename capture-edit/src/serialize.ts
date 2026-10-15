@@ -44,6 +44,7 @@ function clipJson(c: Clip): Record<string, unknown> {
     fadeInMs: c.fadeInMs,
     fadeOutMs: c.fadeOutMs,
   };
+  if (c.placement !== undefined) out["placement"] = rectJson(c.placement);
   if (c.altText !== undefined) out["altText"] = c.altText;
   if (c.decorative !== undefined) out["decorative"] = c.decorative;
   return out;
@@ -168,6 +169,8 @@ function readClip(v: unknown, where: string): Clip {
   };
   return {
     ...base,
+    // Version 0.3 added a place on the frame; an older file has none, which is how it was drawn before.
+    ...(isObject(v["placement"]) ? { placement: readRect(v["placement"], w) } : {}),
     ...(typeof v["altText"] === "string" ? { altText: v["altText"] } : {}),
     ...(typeof v["decorative"] === "boolean" ? { decorative: v["decorative"] } : {}),
   };
@@ -271,10 +274,10 @@ export function parse(text: string): ParseResult {
     return { ok: false, message: `This is not an OpenStage Capture edit file: its format should be "${EDIT_FORMAT}".` };
   }
   const version = doc["schemaVersion"];
-  if (typeof version !== "string" || !(version.startsWith("0.1.") || version.startsWith("0.2."))) {
+  if (typeof version !== "string" || !(version.startsWith("0.1.") || version.startsWith("0.2.") || version.startsWith("0.3."))) {
     return {
       ok: false,
-      message: `This edit file is version ${String(version)}, and this program reads versions 0.1 and 0.2 (it writes ${EDIT_SCHEMA_VERSION}). It was probably made by a newer program.`,
+      message: `This edit file is version ${String(version)}, and this program reads versions 0.1, 0.2 and 0.3 (it writes ${EDIT_SCHEMA_VERSION}). It was probably made by a newer program.`,
     };
   }
   try {

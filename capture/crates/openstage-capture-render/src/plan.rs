@@ -10,7 +10,7 @@
 use crate::audio::AudioSpan;
 use crate::zoom::{zoom_view, ZoomSpan, ZoomView};
 use openstage_capture_project::{
-    validate_edit, Edit, EditItem, EditSeverity, EditSourceKind, EditSourceRef, EditTrackKind,
+    validate_edit, Edit, EditItem, EditRect, EditSeverity, EditSourceKind, EditSourceRef, EditTrackKind,
 };
 
 /// How the video is to be made.
@@ -39,8 +39,11 @@ impl Default for RenderSettings {
 pub struct VideoSpan {
     pub clip_id: String,
     pub track_id: String,
+    pub track_kind: EditTrackKind,
     pub source: EditSourceRef,
     pub kind: EditSourceKind,
+    /// Where on the frame it sits, if the author said (new in edit format 0.3).
+    pub placement: Option<EditRect>,
     pub out_start_ms: u64,
     pub out_end_ms: u64,
     /// Where in the source it starts. Zero for an image.
@@ -51,8 +54,12 @@ pub struct VideoSpan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layer {
     pub clip_id: String,
+    /// The kind of track it is on: a webcam is drawn as a small picture on top, anything else as the main picture.
+    pub track_kind: EditTrackKind,
     pub source: EditSourceRef,
     pub kind: EditSourceKind,
+    /// Where on the frame it sits, if the author said.
+    pub placement: Option<EditRect>,
     /// Which moment of the source to show.
     pub source_time_ms: u64,
 }
@@ -140,8 +147,10 @@ pub fn plan(edit: &Edit, settings: &RenderSettings) -> Result<RenderPlan, String
                 video.push(VideoSpan {
                     clip_id: clip.id.clone(),
                     track_id: track.id.clone(),
+                    track_kind: track.kind,
                     source: clip.source.clone(),
                     kind: source.kind,
+                    placement: clip.placement,
                     out_start_ms: out_start,
                     out_end_ms: out_end,
                     source_start_ms: whole(clip.source_start_ms),
@@ -202,8 +211,10 @@ impl RenderPlan {
             .filter(|s| s.out_start_ms * 1000 <= time_us && time_us < s.out_end_ms * 1000)
             .map(|s| Layer {
                 clip_id: s.clip_id.clone(),
+                track_kind: s.track_kind,
                 source: s.source.clone(),
                 kind: s.kind,
+                placement: s.placement,
                 source_time_ms: s.source_start_ms + (time_us - s.out_start_ms * 1000) / 1000,
             })
             .collect();

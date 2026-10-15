@@ -1,8 +1,8 @@
 # OpenStage Capture: Edit Format and Edit Model
 
-**Status:** v0.2 (matches the code in `capture-edit/` and `capture/crates/openstage-capture-project/src/edit.rs`)
+**Status:** v0.3 (matches the code in `capture-edit/` and `capture/crates/openstage-capture-project/src/edit.rs`)
 **Format name:** `openstage-capture-edit`
-**Schema version:** `0.2.0` (files at `0.1.x` still open and are brought up to date: see section 7)
+**Schema version:** `0.3.0` (files at `0.1.x` and `0.2.x` still open and are brought up to date: see section 7)
 
 This is the file that records what the author has done to a recording: which parts of the recording
 are kept, where they sit on a timeline, and how loud they are. It is called an *edit decision list*. The
@@ -54,6 +54,7 @@ indents and a closing new line, so saving the same edit twice gives the same byt
 | clip `source`, `sourceStartMs`, `sourceEndMs` | The part of the source that is used, in the source's own time. A still image always has `sourceStartMs` 0 and a `sourceEndMs` equal to how long it is shown. |
 | clip `startMs` | Where on the timeline the clip begins. It ends `sourceEndMs - sourceStartMs` later. A track's clips are in order of start and never overlap. |
 | clip `muted`, `volumeDb`, `fadeInMs`, `fadeOutMs` | Basic sound settings (story C9): off, louder or quieter in whole decibels from -40 to 20 (about 6 decibels is double or half), and fades. The fades together cannot be longer than the clip. |
+| clip `placement` | New in 0.3. Where the picture sits in the finished video: a rectangle on the frame, in the same units as an overlay's (ten-thousandths of the frame's width and height from its top left corner). Optional. Without it a screen, image or video fills the frame and a webcam is a small picture in the bottom right corner (or fills the frame when there is no other picture at that moment). A picture is never stretched: it is made as large as fits the rectangle and centred in it. Only a clip that has a picture can have one: a place on sound is an error (`placement-not-allowed`), and a place that is not a rectangle inside the picture is `bad-rect`. |
 | clip `altText`, `decorative` | For an image: what it shows, or that it is decorative. One of them is required (story C10). |
 
 ### Overlays and zooms (new in 0.2)
@@ -93,7 +94,8 @@ still missing; the author is asked for it, and export refuses to finish until it
 | `needs-alt-text` | needs-attention | An image has no alt text and is not marked decorative. |
 | `needs-text-alternative` | needs-attention | An imported video or sound has no captions, script or transcript. |
 | `item-wrong-track` | error | An overlay or zoom is on the wrong kind of track. |
-| `bad-rect` | error | A rectangle or point is not whole numbers inside the picture, or has no size. |
+| `bad-rect` | error | A rectangle or point (including a clip's `placement`) is not whole numbers inside the picture, or has no size. |
+| `placement-not-allowed` | error | A clip that holds only sound has a `placement`. |
 | `bad-color` | error | A colour is not written `#RRGGBB`. |
 | `bad-style` | error | A text size or line thickness is outside what can be drawn. |
 | `text-empty` | error | A text overlay has no text. |
@@ -171,7 +173,20 @@ Made on the owner's delegation; each can be changed.
 
 ## 5b. What the renderer does with it
 
-The renderer (`capture/crates/openstage-capture-render`) first checks the edit and refuses one with errors, with the first problem in words; unless told otherwise it also refuses one that is sound but still has things marked `needs-attention`, so an export does not finish until the author has given the alt text or descriptions that are missing. Warnings do not stop it. The length of the video is where the last clip ends. Frame `n` is shown at `n / fps` seconds, in whole microseconds. Tracks are drawn in the order listed, the first at the bottom; overlays are drawn above the pictures, later ones on top. A zoom moves in over `transitionMs` along a smooth curve (slow at the start and end), holds, and moves out the same way; when the author asks for **reduced motion**, it cuts straight to the part and straight back with no movement. Sound comes from the microphone, computer-sound and imported-audio clips, with their volume, mute and straight-line fades, added together and limited so a loud sum is clipped, never wrapped into noise. **Not yet:** the sound inside an imported video clip is not mixed.
+The renderer (`capture/crates/openstage-capture-render` plans and draws; `capture/crates/openstage-capture-windows` reads the recordings, draws the text and writes the MP4) first checks the edit and refuses one with errors, with the first problem in words; unless told otherwise it also refuses one that is sound but still has things marked `needs-attention`, so an export does not finish until the author has given the alt text or descriptions that are missing. Warnings do not stop it. The length of the video is where the last clip ends. Frame `n` is shown at `n / fps` seconds, in whole microseconds. Sound comes from the microphone, computer-sound and imported-audio clips, with their volume, mute and straight-line fades, added together and limited so a loud sum is clipped, never wrapped into noise. **Not yet:** the sound inside an imported video clip is not mixed.
+
+**How a frame is drawn**, bottom to top:
+
+1. **The main picture** (the screen, or an imported image or video, in track order): fitted into the frame, or into the clip's `placement`, and zoomed. It is never stretched; if its shape differs from its box it is made as large as fits and centred, with black either side.
+2. **What belongs to the picture** (blur, blackout, shapes, arrows), in the order the edit lists them (later on top). Their positions are fractions of the frame, and they **move and grow with the zoom**, so a blurred or blacked-out box always covers the same part of the picture whatever the zoom has done. A box that ends in the middle of a pixel is made bigger to take in the whole pixel, never smaller. A blur is strong enough to hide small print but is not a secret-keeper: a password or a name that must not be recovered should be blacked out.
+3. **The webcam** (a clip on a `webcam` track): in the bottom right corner at about 22 percent of the frame's width by default, or where its `placement` says; not zoomed; above shapes and arrows. When no other picture is showing at that moment, a webcam with no `placement` fills the frame.
+4. **Text**, above everything and **not zoomed**, so titles and labels stay the same size and in the same place while the picture moves. The text is drawn by Windows' own text drawing, so it has the fonts and language rules of the computer. It is laid out in its box with a little room round it (a third of a line's height), broken into lines at spaces, and cut off where it does not fit; the export then says that the text overlay does not fit its box, because words that are cut off cannot be read.
+
+A zoom moves in over `transitionMs` along a smooth curve (slow at the start and end), holds, and moves out the same way; when the author asks for **reduced motion**, it cuts straight to the part and straight back with no movement. A zoom rectangle that is not the shape of the frame stretches the picture (the `zoom-aspect` warning says so). The video is the size of the first picture on the screen track unless another size is asked for.
+
+Drawing uses only whole numbers and the arithmetic every computer does the same way, so a frame drawn twice from the same pictures is the same bytes.
+
+**Choices that could go either way, for the owner to veto:** (1) blur, blackout, shapes and arrows zoom with the picture but text does not (the alternative is that everything zooms together, which can push a title out of the frame); (2) the webcam is not zoomed and is drawn above shapes but below text; (3) a webcam with no place is a corner picture, or the whole frame when it is alone; (4) positions are fractions of the frame, not of the picture inside it, which makes no difference unless the picture is a different shape from the frame.
 
 ## 6. Not here yet
 
@@ -179,4 +194,4 @@ Cursor effects (C6, which come from the recorded events at render time), suggest
 
 ## 7. Versions
 
-`0.1.0` was the first version. `0.2.0` adds the `overlay` and `zoom` track kinds and their `items` (a track now always has an `items` list, empty for clip tracks). The migration from `0.1` is to give every track an empty `items` list, which the reader does when it opens an old file; saving then writes `0.2.0`. A reader refuses any other version with a plain message. Any change to the format bumps the version and ships a migration.
+`0.1.0` was the first version. `0.2.0` adds the `overlay` and `zoom` track kinds and their `items` (a track now always has an `items` list, empty for clip tracks). The migration from `0.1` is to give every track an empty `items` list, which the reader does when it opens an old file; saving then writes `0.2.0`. A reader refuses any other version with a plain message. `0.3.0` adds an optional `placement` to a clip (where its picture sits in the finished video). A file without one is drawn as before, so the migration from `0.1` or `0.2` is to change nothing but the version, which the reader does when it opens an old file; saving then writes `0.3.0`. Any change to the format bumps the version and ships a migration.

@@ -201,15 +201,15 @@ unsafe impl<T> Send for Mover<T> {}
 
 /// How a picture sits in memory: its size, the length of a row in bytes, and whether the rows run from the bottom up.
 #[derive(Clone, Copy)]
-struct Layout {
-    width: u32,
-    height: u32,
-    stride: usize,
-    bottom_up: bool,
+pub(crate) struct Layout {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) stride: usize,
+    pub(crate) bottom_up: bool,
 }
 
 /// What the reader is now giving: asked of the current output type.
-unsafe fn layout_of(reader: &IMFSourceReader) -> Result<Layout, ScreenError> {
+pub(crate) unsafe fn layout_of(reader: &IMFSourceReader) -> Result<Layout, ScreenError> {
     let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
     let current = reader
         .GetCurrentMediaType(stream)
@@ -387,7 +387,7 @@ fn read_pictures(reader: &IMFSourceReader, shared: &Shared, mut layout: Layout) 
 
 /// Copy a picture out of Windows' memory into ours, rows from the top, whatever order Windows has them in.
 /// `false` if the picture was too short to be a whole picture.
-unsafe fn copy_picture(
+pub(crate) unsafe fn copy_picture(
     sample: &windows::Win32::Media::MediaFoundation::IMFSample,
     layout: Layout,
     out: &mut [u8],

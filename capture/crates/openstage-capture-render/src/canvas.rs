@@ -62,21 +62,43 @@ pub struct SourceRect {
     pub h: f64,
 }
 
-/// A picture to draw from: blue, green, red, unused, rows from the top, no padding.
+/// A picture to draw from: blue, green, red, then how solid each pixel is (255 is fully solid, 0 is clear, as in a
+/// logo with a see-through background), rows from the top, no padding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Picture {
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
+    /// Whether every pixel is fully solid, which lets a picture be copied row by row. Found by looking at it.
+    opaque: bool,
 }
 
 impl Picture {
+    /// A picture from its bytes. Looks at every pixel once to see whether any is see-through.
+    pub fn new(width: u32, height: u32, bgra: Vec<u8>) -> Self {
+        let opaque = bgra.chunks_exact(4).all(|p| p[3] == 255);
+        Self { width, height, bgra, opaque }
+    }
+
+    /// A picture whose pixels the caller knows are all fully solid (a frame of a video), so there is nothing to look at.
+    pub fn solid_pixels(width: u32, height: u32, bgra: Vec<u8>) -> Self {
+        Self { width, height, bgra, opaque: true }
+    }
+
     pub fn solid(width: u32, height: u32, color: Rgb) -> Self {
         let mut bgra = Vec::with_capacity(width as usize * height as usize * 4);
         for _ in 0..width as usize * height as usize {
             bgra.extend_from_slice(&[color.2, color.1, color.0, 255]);
         }
-        Self { width, height, bgra }
+        Self { width, height, bgra, opaque: true }
+    }
+
+    /// The pixel at (`x`, `y`) with how solid it is, clamped to the picture.
+    fn at4(&self, x: i64, y: i64) -> [u8; 4] {
+        let x = x.clamp(0, self.width as i64 - 1) as usize;
+        let y = y.clamp(0, self.height as i64 - 1) as usize;
+        let i = (y * self.width as usize + x) * 4;
+        [self.bgra[i], self.bgra[i + 1], self.bgra[i + 2], self.bgra[i + 3]]
     }
 
     fn at(&self, x: i64, y: i64) -> [u8; 3] {
@@ -117,6 +139,12 @@ impl Canvas {
     pub fn set_pixel(&mut self, x: u32, y: u32, color: Rgb) {
         let i = (y as usize * self.width as usize + x as usize) * 4;
         self.bgra[i..i + 4].copy_from_slice(&[color.2, color.1, color.0, 255]);
+    }
+
+    /// Lay `color` over the pixel at (`x`, `y`) with the given share (0 to 255) of it: 255 replaces the pixel, 0
+    /// leaves it. Used for the smoothed edges of letters. Panics outside the canvas.
+    pub fn blend_pixel(&mut self, x: u32, y: u32, color: Rgb, share: u32) {
+        self.blend(x, y, color, share);
     }
 
     /// Lay `color` over a pixel with the given share (0 to 255) of it: 255 replaces the pixel, 0 leaves it.
@@ -169,7 +197,7 @@ impl Canvas {
             && source.y >= 0.0
             && source.x + source.w <= picture.width as f64
             && source.y + source.h <= picture.height as f64;
-        if whole && inside {
+        if whole && inside && picture.opaque {
             let (ox, oy) = (source.x as i64 - target.x as i64, source.y as i64 - target.y as i64);
             for y in clip.y..clip.y + clip.h {
                 let from = (((y as i64 + oy) as usize) * picture.width as usize + (clip.x as i64 + ox) as usize) * 4;
@@ -207,6 +235,21 @@ impl Canvas {
         let y1 = (dest.y + dest.h).ceil().min(self.height as f64) as i32;
         let (sx, sy) = (source.w / dest.w, source.h / dest.h);
         let smoothing = sx <= 1.0 && sy <= 1.0;
+        if !picture.opaque {
+            // A picture with see-through parts (a logo): each pixel is laid over what is already there by how solid it is.
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let (u0, v0) = (source.x + (x as f64 - dest.x) * sx, source.y + (y as f64 - dest.y) * sy);
+                    let ([b, g, r], solid) = if smoothing {
+                        bilinear_a(picture, u0 + sx / 2.0, v0 + sy / 2.0)
+                    } else {
+                        average_a(picture, u0, v0, sx, sy)
+                    };
+                    self.blend(x as u32, y as u32, Rgb(r, g, b), solid as u32);
+                }
+            }
+            return;
+        }
         for y in y0..y1 {
             for x in x0..x1 {
                 let (u0, v0) = (source.x + (x as f64 - dest.x) * sx, source.y + (y as f64 - dest.y) * sy);
@@ -420,6 +463,65 @@ fn average(picture: &Picture, u: f64, v: f64, w: f64, h: f64) -> [u8; 3] {
     [(sum[0] / weight + 0.5) as u8, (sum[1] / weight + 0.5) as u8, (sum[2] / weight + 0.5) as u8]
 }
 
+/// Like [`bilinear`] for a picture with see-through parts: colours are mixed by how solid they are, so the
+/// clear pixels at an edge do not dim it. Gives the colour and how solid the result is (0 to 255).
+fn bilinear_a(picture: &Picture, u: f64, v: f64) -> ([u8; 3], u8) {
+    let (u, v) = (u - 0.5, v - 0.5);
+    let (x0, y0) = (u.floor(), v.floor());
+    let (fx, fy) = ((u - x0) as f32, (v - y0) as f32);
+    let (x0, y0) = (x0 as i64, y0 as i64);
+    let taps = [picture.at4(x0, y0), picture.at4(x0 + 1, y0), picture.at4(x0, y0 + 1), picture.at4(x0 + 1, y0 + 1)];
+    let weights = [(1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy];
+    let mut colour = [0.0f32; 3];
+    let mut solid = 0.0f32;
+    for (t, w) in taps.iter().zip(weights) {
+        let a = t[3] as f32 / 255.0 * w;
+        solid += a;
+        for c in 0..3 {
+            colour[c] += t[c] as f32 * a;
+        }
+    }
+    if solid <= 0.0 {
+        return ([0; 3], 0);
+    }
+    (
+        [(colour[0] / solid + 0.5) as u8, (colour[1] / solid + 0.5) as u8, (colour[2] / solid + 0.5) as u8],
+        (solid * 255.0 + 0.5).clamp(0.0, 255.0) as u8,
+    )
+}
+
+/// Like [`average`] for a picture with see-through parts.
+fn average_a(picture: &Picture, u: f64, v: f64, w: f64, h: f64) -> ([u8; 3], u8) {
+    let (x_end, y_end) = (u + w, v + h);
+    let mut colour = [0.0f64; 3];
+    let mut solid = 0.0f64;
+    let mut weight = 0.0f64;
+    let mut y = v.floor();
+    while y < y_end {
+        let wy = (y + 1.0).min(y_end) - y.max(v);
+        let mut x = u.floor();
+        while x < x_end {
+            let wx = (x + 1.0).min(x_end) - x.max(u);
+            let pixel = picture.at4(x as i64, y as i64);
+            let a = pixel[3] as f64 / 255.0 * wx * wy;
+            solid += a;
+            weight += wx * wy;
+            for c in 0..3 {
+                colour[c] += pixel[c] as f64 * a;
+            }
+            x += 1.0;
+        }
+        y += 1.0;
+    }
+    if solid <= 0.0 || weight <= 0.0 {
+        return ([0; 3], 0);
+    }
+    (
+        [(colour[0] / solid + 0.5) as u8, (colour[1] / solid + 0.5) as u8, (colour[2] / solid + 0.5) as u8],
+        (solid / weight * 255.0 + 0.5).clamp(0.0, 255.0) as u8,
+    )
+}
+
 /// One pass of a box blur along rows (`across`) or columns, of window `2 * radius + 1`, with the edge pixel
 /// repeated beyond the edge. Whole-number sums, so the result is the same everywhere.
 fn blur_pass(block: &[[u8; 3]], w: usize, h: usize, radius: usize, across: bool) -> Vec<[u8; 3]> {
@@ -502,7 +604,7 @@ mod tests {
                 bgra.extend_from_slice(&[x as u8, y as u8, (x + y) as u8, 255]);
             }
         }
-        Picture { width, height, bgra }
+        Picture::new(width, height, bgra)
     }
 
     #[test]
@@ -529,7 +631,7 @@ mod tests {
                 bgra.extend_from_slice(&[v, v, v, 255]);
             }
         }
-        let stripes = Picture { width: 8, height: 4, bgra };
+        let stripes = Picture::new(8, 4, bgra);
         let mut c = Canvas::new(4, 2);
         c.draw_picture(&stripes, SourceRect { x: 0.0, y: 0.0, w: 8.0, h: 4.0 }, PixelRect::new(0, 0, 4, 2));
         for y in 0..2 {
@@ -542,7 +644,7 @@ mod tests {
 
     #[test]
     fn a_picture_made_larger_is_smooth_and_keeps_its_corners() {
-        let two = Picture { width: 2, height: 1, bgra: vec![0, 0, 0, 255, 200, 200, 200, 255] };
+        let two = Picture::new(2, 1, vec![0, 0, 0, 255, 200, 200, 200, 255]);
         let mut c = Canvas::new(8, 1);
         c.draw_picture(&two, SourceRect { x: 0.0, y: 0.0, w: 2.0, h: 1.0 }, PixelRect::new(0, 0, 8, 1));
         let values: Vec<u8> = (0..8).map(|x| c.pixel(x, 0).0).collect();
@@ -565,6 +667,33 @@ mod tests {
     fn p_pixel(p: &Picture, x: u32, y: u32) -> Rgb {
         let i = (y as usize * p.width as usize + x as usize) * 4;
         Rgb(p.bgra[i + 2], p.bgra[i + 1], p.bgra[i])
+    }
+
+    #[test]
+    fn the_see_through_parts_of_a_picture_show_what_is_behind_and_half_clear_parts_blend() {
+        // A logo: a solid red pixel, a clear pixel, and a half-clear white one.
+        let logo = Picture::new(3, 1, vec![0, 0, 255, 255, 9, 9, 9, 0, 255, 255, 255, 128]);
+        let mut c = Canvas::new(3, 1);
+        c.clear(Rgb(0, 0, 100));
+        c.draw_picture(&logo, SourceRect { x: 0.0, y: 0.0, w: 3.0, h: 1.0 }, PixelRect::new(0, 0, 3, 1));
+        assert_eq!(c.pixel(0, 0), RED, "a solid pixel replaces what is behind");
+        assert_eq!(c.pixel(1, 0), Rgb(0, 0, 100), "a clear pixel leaves what is behind");
+        let Rgb(r, g, b) = c.pixel(2, 0);
+        assert!(
+            (r as i32 - 128).abs() <= 1 && (g as i32 - 128).abs() <= 1 && (b as i32 - 177).abs() <= 1,
+            "{r} {g} {b}: half white over dark blue"
+        );
+        // Made larger, the edge of a solid shape on a clear background is not dimmed by the clear pixels.
+        let dot = Picture::new(2, 1, vec![0, 0, 255, 255, 0, 0, 0, 0]);
+        let mut c = Canvas::new(8, 1);
+        c.clear(Rgb(0, 0, 0));
+        c.draw_picture(&dot, SourceRect { x: 0.0, y: 0.0, w: 2.0, h: 1.0 }, PixelRect::new(0, 0, 8, 1));
+        assert_eq!(c.pixel(0, 0), RED);
+        assert!(
+            c.pixel(3, 0).0 > 100 && c.pixel(3, 0).1 == 0,
+            "the colour stays red where it fades: {:?}",
+            c.pixel(3, 0)
+        );
     }
 
     #[test]

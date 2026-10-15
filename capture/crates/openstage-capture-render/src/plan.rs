@@ -202,6 +202,18 @@ impl RenderPlan {
         index * 1_000_000 / self.settings.fps as u64
     }
 
+    /// The picture of a span at the moment it begins (used to find out how big the recorded pictures are).
+    pub fn layer_for(&self, span: &VideoSpan) -> Layer {
+        Layer {
+            clip_id: span.clip_id.clone(),
+            track_kind: span.track_kind,
+            source: span.source.clone(),
+            kind: span.kind,
+            placement: span.placement,
+            source_time_ms: span.source_start_ms,
+        }
+    }
+
     /// Everything needed to draw frame `index`.
     pub fn frame(&self, index: u64) -> FrameRecipe {
         let time_us = self.frame_time_us(index);

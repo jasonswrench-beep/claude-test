@@ -12,6 +12,8 @@ mod checks;
 mod demo;
 mod plain;
 
+#[cfg(windows)]
+use checks::emit_progress;
 use checks::{emit_check, finish_checks, finish_checks_with, run_recorder_crash_test, run_video_crash_test};
 use clap::{Parser, Subcommand};
 use openstage_capture::{
@@ -20,6 +22,11 @@ use openstage_capture::{
 };
 use openstage_capture_project::{recover_project, take_dir};
 use openstage_capture_protocol::{decode_command, encode_event, Event, ProtocolError, SourceInfo, MAX_LINE_BYTES};
+#[cfg(windows)]
+use openstage_capture_windows::{
+    cancel_requested, install_cancel_handler, run_render_with, ExportTools, FileSounds, RenderOptions, WindowsPictures,
+    WindowsText,
+};
 use openstage_capture_windows::{
     check_balance_in_files, check_echo_in_files, check_sound_files, choose_camera, choose_window,
     compare_audio_readback, compare_readback, compare_size_readback, compare_webcam_readback, describe_cameras,
@@ -361,12 +368,47 @@ enum Cmd {
         #[arg(long)]
         plain: bool,
     },
-    /// Turn a project into a video. Not built yet.
+    /// Turn a recording, or an edit, into a finished MP4 (Windows only). Draws every frame (the screen, zooms, blur,
+    /// blacked-out boxes, shapes, arrows, the webcam and text), mixes the sound, writes the video to `<out>.part`,
+    /// and puts it at `<out>` only when it is whole, so a cancelled export leaves nothing behind and an earlier
+    /// video at `<out>` is never damaged. Press Ctrl+C to cancel. Afterwards it reads the video back through
+    /// Windows and checks its length, size and sound.
     Render {
+        /// The capture project folder (where the recordings are).
         #[arg(long)]
         project: PathBuf,
+        /// Where the finished video goes, for example `lesson.mp4`.
         #[arg(long)]
         out: PathBuf,
+        /// The edit to export, if not the project's own `edit.json`.
+        #[arg(long)]
+        edit: Option<PathBuf>,
+        /// Instead of an edit, export this take as it was recorded: the screen, the voice, the computer's sound and
+        /// the webcam, each whole.
+        #[arg(long)]
+        take: Option<u32>,
+        /// With `--take`: also add a title, a box, an ellipse, an arrow, a blur, a blacked-out box and a zoom, to
+        /// see that each is drawn. For testing the exporter, not for real lessons.
+        #[arg(long)]
+        demo: bool,
+        /// Where the course's own files are (pictures and sounds an edit imports).
+        #[arg(long)]
+        assets: Option<PathBuf>,
+        /// Pictures per second in the video.
+        #[arg(long, default_value_t = 30)]
+        fps: u32,
+        /// Make the video this size, for example `1280x720`, instead of the size of the first picture.
+        #[arg(long)]
+        size: Option<String>,
+        /// Use cuts instead of animated zooms, for viewers who cannot turn motion off.
+        #[arg(long)]
+        reduce_motion: bool,
+        /// Export even if the edit still lacks things OpenStage requires (alt text, descriptions).
+        #[arg(long)]
+        allow_unfinished: bool,
+        /// Print sentences for a person to read instead of one-line JSON events.
+        #[arg(long)]
+        plain: bool,
     },
 }
 
@@ -439,6 +481,19 @@ fn read_commands(tx: Sender<Input>) {
 
 fn say(event: Event) {
     StdoutSink.emit(event);
+}
+
+/// A video size such as `1280x720`: both sides even and at least 64.
+fn parse_size(text: &str) -> Result<(u32, u32), String> {
+    let bad = || format!("The size \"{text}\" is not written like 1280x720.");
+    let (w, h) = text.trim().split_once(['x', 'X', ',']).ok_or_else(bad)?;
+    let (w, h): (u32, u32) = (w.trim().parse().map_err(|_| bad())?, h.trim().parse().map_err(|_| bad())?);
+    if w < 64 || h < 64 || w % 2 == 1 || h % 2 == 1 {
+        return Err(format!(
+            "The size {w} by {h} cannot be used: H.264 video needs an even width and height, each at least 64."
+        ));
+    }
+    Ok((w, h))
 }
 
 /// `on` or `off` (or yes/no, true/false) for an option, or a sentence saying what was wrong.
@@ -1138,13 +1193,81 @@ fn main() -> ExitCode {
                 });
             finish_checks(plain, all_fine)
         }
-        Cmd::Render { .. } => {
-            hello();
-            fatal(
-                "not-implemented",
-                "Turning a recording into a video is not built yet. It arrives in Phase 3.".into(),
-            );
-            ExitCode::from(2)
+        Cmd::Render { project, out, edit, take, demo, assets, fps, size, reduce_motion, allow_unfinished, plain } => {
+            if !plain {
+                hello();
+            }
+            let size = match size.as_deref().map(parse_size).transpose() {
+                Ok(size) => size,
+                Err(message) => {
+                    emit_check(plain, Check { check: "export".into(), ok: false, message });
+                    return finish_checks_with(plain, false, "", "The export did not start.");
+                }
+            };
+            #[cfg(windows)]
+            {
+                let opts = RenderOptions {
+                    project: project.clone(),
+                    out,
+                    edit_file: edit,
+                    take,
+                    demo,
+                    assets: assets.clone(),
+                    fps: fps.max(1),
+                    size,
+                    reduce_motion,
+                    allow_unfinished,
+                };
+                install_cancel_handler();
+                let video = system_video_platform();
+                let mut pictures = match WindowsPictures::new(&project, assets.as_deref()) {
+                    Ok(pictures) => pictures,
+                    Err(message) => {
+                        emit_check(plain, Check { check: "export".into(), ok: false, message });
+                        return finish_checks_with(plain, false, "", "The export did not start.");
+                    }
+                };
+                let mut sounds = FileSounds::new(&project, assets.as_deref());
+                let ok = run_render_with(
+                    &opts,
+                    ExportTools {
+                        video: video.as_ref(),
+                        pictures: &mut pictures,
+                        text: &WindowsText,
+                        sound: &mut sounds,
+                    },
+                    &cancel_requested,
+                    &mut |c| emit_check(plain, c),
+                    &mut |p| {
+                        let percent = (p.frames_done * 100 / p.frame_count.max(1)) as u32;
+                        emit_progress(
+                            plain,
+                            "export",
+                            percent,
+                            format!("Exporting: {percent} percent ({} of {} pictures).", p.frames_done, p.frame_count),
+                        )
+                    },
+                );
+                finish_checks_with(
+                    plain,
+                    ok,
+                    "The video was exported.",
+                    "The export did not finish, or the finished video did not read back as it should.",
+                )
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (project, out, edit, take, demo, assets, fps, size, reduce_motion, allow_unfinished);
+                emit_check(
+                    plain,
+                    Check {
+                        check: "export".into(),
+                        ok: false,
+                        message: "Exporting a video only works on Windows, because Windows' own video tools read the recordings and write the MP4.".into(),
+                    },
+                );
+                finish_checks_with(plain, false, "", "The export did not start.")
+            }
         }
     }
 }

@@ -41,7 +41,7 @@ openstage-capture video-info --file <video>                          (Windows on
 openstage-capture screen-test [options]                          (Windows only; tries screen capture)
 openstage-capture video-test [options]                           (Windows only; tries making an MP4 of the screen)
 openstage-capture video-crash-test [options]                     (Windows only; records, kills the program, checks what survived)
-openstage-capture render --project <folder> --out <file>        (not built yet)
+openstage-capture render --project <folder> --out <file> [options]  (Windows only; turns a recording or an edit into a finished MP4)
 ```
 
 ### Exit codes
@@ -50,7 +50,7 @@ openstage-capture render --project <folder> --out <file>        (not built yet)
 |---|---|
 | 0 | It worked. |
 | 1 | Something went wrong (a `fatal` error event was printed first). |
-| 2 | Not available: an unknown source, a command not built yet (`render`), or `screen-test` on a computer that is not running Windows. |
+| 2 | Not available: an unknown source, or a command that needs Windows (`render`, `screen-test` and the other tests of Windows' video, sound and cameras) on a computer that is not running Windows. |
 
 ### Options for `audio-test`
 
@@ -105,6 +105,28 @@ Lists the cameras this computer has (story A2), numbered from 1 in the order Win
 Lets the author choose the part of a display to record, by dragging or by typing (story A1), and gives back the four numbers `--region` takes. Options: `--display` (default 1), `--region` (start from this rectangle instead of the middle of the display; one that does not fit the display is ignored), `--out` (save the chosen numbers in this file as `left,top,width,height` on one line, ended with a carriage return and a line feed so a batch file can read it), `--plain`. It sends one `check`, named `region-chosen`: `ok` is true with a sentence that says what was chosen and the `--region` to use (and what was changed to make the size even), or false if the picker was closed without choosing, the display or start could not be used, or the picker could not open. Exit code 0 when a region was chosen, 1 when not, 2 when this is not Windows. With `--plain` the last line is `A region was chosen.` or `No region was chosen.`
 
 Two windows open on the chosen display. An **overlay** dims it and shows the rectangle with a white border and eight handles (the four corners and the middle of each side): drag inside to move it, drag a handle to resize it, drag on the dimmed part to draw a new rectangle. It never leaves the display and is never smaller than 64 by 64. A small **window of numbers**, made of ordinary Windows controls so that the keyboard and screen readers work with it, has the four boxes Left, Top, Width and Height, a box (read only, reachable with Tab) that says in words what is chosen or what is wrong, and the buttons "Use this region" (Enter), "Whole display" and "Cancel" (Escape). Dragging changes the numbers and typing changes the rectangle. An unusable choice sounds the Windows alert and is explained in the box; nothing closes until a usable region is used or the window is cancelled. The overlay never takes the keyboard.
+
+### `render`
+
+Turns a recording, or an edit, into a finished MP4 (story F1). Windows only. Options:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--project` | required | The capture project folder (where the recordings are). |
+| `--out` | required | Where the finished video goes. The folder is made if it does not exist. |
+| `--edit` | the project's `edit.json` | The edit to export. With no `edit.json`, and no `--take`, the command says there is no edit and what to do. |
+| `--take` | none | Instead of an edit, export this take as it was recorded: the screen, the voice, the computer's sound and the webcam, each whole, on their own tracks. It cannot be combined with `--edit`. A take that was set aside, or that stopped without finishing, is refused in words (repair it with `recover`). |
+| `--demo` | off | With `--take`: also add a title, a red box, a yellow ellipse, a green arrow, a blurred patch, a blacked-out patch and a zoom into the top left quarter, at fixed fractions of the take, so that each can be seen to be drawn. For testing the exporter. |
+| `--assets` | none | Where the course's own files are (pictures and sounds an edit imports). An edit that uses one without it is told so. |
+| `--fps` | 30 | Pictures per second in the video. |
+| `--size` | the first picture | The video's size, such as `1280x720` (both sides even, at least 64). Without it the video is the size of the first picture on the screen track (a webcam alone: the webcam's). |
+| `--reduce-motion` | off | Use cuts instead of animated zooms. |
+| `--allow-unfinished` | off | Export an edit that is sound but still lacks things OpenStage requires (alt text, descriptions). Without it, such an edit is refused with what is missing. |
+| `--plain` | off | Sentences for a person instead of JSON events. |
+
+The video is written to `<out>.part` and renamed to `<out>` only when it is whole, so a cancelled or failed export deletes the `.part` file and leaves any earlier video at `<out>` exactly as it was. Ctrl+C (or Ctrl+Break) asks the export to stop; it stops before the next picture, deletes its half-made file and says so. A program that is killed outright leaves a `.part` file behind, which the next export deletes. How the pictures are drawn and the sound is mixed is in `docs/capture-edit-format.md`, section 5b.
+
+It sends, in order: a `check` named `edit` (which edit is being exported and how long it is, or why there is none); `progress` events (about every tenth of the way, see below); a `check` named `export` (what was made: the length, the number of pictures, the size, the rate, whether it has sound and where it is, or why it failed or was cancelled); then the read-back, the same way the recorder reads back a recording: `video-readback` (Windows opens the finished video the way a player would; its length must match to within 0.7 seconds), `video-size` (its size is the size asked for) and `audio-readback` (its sound track is as long as the video, sent only when it has sound); and last a `check` named `export-note`, not ok, for each thing the author should know about the result (so far: a text overlay whose words do not fit its box and are cut off). Notes do not change the exit code, because the exporter did its job; with `--plain` they are said as `Note:`. Exit code 0 when the video was made and read back as it should, 1 when it was not, 2 when this is not Windows.
 
 ### `video-info`
 
@@ -273,6 +295,12 @@ One finding from a test or setup check, in plain language. Sent by `windows` (as
 {"event":"check","check":"screen-capture","ok":true,"message":"Received 151 pictures in 5.0 seconds from Display 1, 1920 by 1080, main display. Each picture is 1920 by 1080 pixels."}
 ```
 `check` names what was checked, `ok` says whether it was fine, and `message` says what that means for a person.
+
+### `progress`
+How far a long job has got, in words, so that someone who cannot see a progress bar can hear it. Sent by `render` about every tenth of the way and at the end. `percent` is 0 to 100. A new event: a reader that does not know it ignores it, as for every event.
+```json
+{"event":"progress","task":"export","percent":40,"message":"Exporting: 40 percent (360 of 900 pictures)."}
+```
 
 ### `result`
 The last line of a `record` or `recover` run.

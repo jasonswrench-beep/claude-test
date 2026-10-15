@@ -266,6 +266,8 @@ dependencies = [
  "openstage-capture",
  "openstage-capture-project",
  "openstage-capture-protocol",
+ "openstage-capture-render",
+ "serde_json",
  "tempfile",
  "thiserror",
  "windows",

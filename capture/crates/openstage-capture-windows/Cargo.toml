@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 openstage-capture = { path = "../openstage-capture" }
 openstage-capture-project = { path = "../openstage-capture-project" }
+openstage-capture-render = { path = "../openstage-capture-render" }
+serde_json.workspace = true
 thiserror.workspace = true
 
 # Only built on Windows. Microsoft's own Rust bindings, MIT OR Apache-2.0.
@@ -28,12 +30,14 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
     "Win32_Media",
     "Win32_Media_Audio",
     "Win32_Media_MediaFoundation",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Console",
     "Win32_System_LibraryLoader",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Performance",

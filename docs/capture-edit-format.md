@@ -133,6 +133,7 @@ label that undo and redo announce.
 | join | Joins a clip with the next when they are the same file, touch, and continue one into the other. Otherwise says which of those is false. | Joined 2 clips into one clip of 1 minute. |
 | reorder | Moves a clip to another place in its track's order and lays the clips out again, one after another, keeping the gaps where they were. | Clip "Lesson" moved to number 1 of 3; the clips on the Screen track were laid out again in the new order. |
 | rename, mute, volume, fades, alt text | Settings of a clip. | Clip "Voice" is now 6 decibels quieter than recorded. |
+| move to another track | Moves a clip, overlay or zoom to another track of a kind that takes it, keeping its time. Refuses a track that does not take its recording (and says what the track does take), a clip that would overlap one already there, and, for a zoom, one that would run into another zoom. | Clip "Voice" moved from the Audio track to the Audio 2 track, still starting at 0 seconds. |
 | add text, shape, arrow, blur, redaction, zoom | Puts an overlay or zoom on its track. Refuses an unfitting track, a bad colour or rectangle, an overlapping or too-busy zoom. Adds warnings and what is still needed to the sentence. | Added the text overlay "Welcome" to the Overlays track at 5 seconds, 3 seconds long. Warning: ... is hard to read: ... contrast of 1.1 to 1, and 3.0 to 1 is needed. |
 | move, trim start, trim end, delete, set position, set text, set look, set zoom, alt text | Change an overlay or zoom. A change that would make the edit unsound is refused and changes nothing. | Zoom "Zoom" now shows the top left of the picture at 2 times. |
 
@@ -148,6 +149,12 @@ mistake is explained with examples. **Times are said in words:** `1 minute 12.4 
 "Redid: split clip." A drag (a mouse drag or a held key) is many small actions but one undo step: begin a
 group, act, end the group; the end says what the whole drag came to ("Clip "Lesson" now starts at 34
 seconds, 4 seconds shorter."). Escape cancels the group and records nothing. The last 200 steps are kept.
+
+**How far a grip can go** (`limits.ts`, new with the timeline). For any clip, overlay or zoom, `limitsOf` gives the lowest and highest time its whole self may start (a drag), its start may be (the start grip) and its end may be (the end grip): the ends of a slider, and where a drag stops. They are not worked out a second time: each is found by asking the editing action whether it would be accepted, so a grip can always be taken to the end of its slider and one step beyond is always refused (150 random edits check this). Where nothing stops it the limit is 10 minutes past the end of the edit. A zoom stops at the zoom before and after it on its track, though the edit would allow it to be moved clean over one.
+
+**An edit from what was recorded** (`fromTakes.ts`). The first edit of a project: one source for each file of each finished take, a track for each kind of recording (Screen, Webcam, Microphone, Computer sound) and one clip for each file, takes laid one after another. A take that is still recording (or was cut off), was set aside, or has no length is left out, and the notes say so in words. The project's `take.json` files are read by the program that opens the folder; this only turns what they say into an edit.
+
+**What plays at a moment** (`playback.ts`). The schedule a preview follows: which pictures and sounds play, where in each recording they are, how loud (the volume setting, with straight-line fades), which overlays are showing, and how far zoomed in. It follows the exporter's rules: a screen, webcam, video or image clip gives picture only (a screen recording's own sound is not used; the microphone and the computer's sound are clips of their own), and a zoom moves along the same smooth curve, or cuts with reduced motion. A preview is a way to check the edit; the exported video is what counts.
 
 **The clip list** (story C1) has a row for every clip with the columns Name, Track, Type, Start, Length,
 End and State, a caption ("Tracks and clips: 3 clips on 3 tracks, 1 minute long."), and a sentence for each

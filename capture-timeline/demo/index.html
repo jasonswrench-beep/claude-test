@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Clip list demo</title>
 <link rel="stylesheet" href="../src/clip-list.css">
+<link rel="stylesheet" href="../src/timeline.css">
+<link rel="stylesheet" href="../src/preview.css">
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; padding: 1rem; background: var(--os-cl-bg); color: var(--os-cl-fg); font: 1rem/1.5 system-ui, "Segoe UI", sans-serif; }
@@ -12,7 +14,7 @@
   h1 { font-size: 1.75rem; margin: 0 0 0.5rem; overflow-wrap: anywhere; }
   .demo-note { padding: 0.75rem 1rem; border: 1px solid var(--os-cl-line); border-radius: 0.25rem; margin-bottom: 1rem; }
   .demo-note p { margin: 0.25rem 0; }
-  .demo-tools { margin-top: 1.5rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .demo-tools { margin: 0 0 0.5rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
   a { color: var(--os-cl-accent); }
   .skip { position: absolute; left: -999px; top: 0.5rem; padding: 0.5rem 0.75rem; background: var(--os-cl-bg); border: 2px solid var(--os-cl-accent); }
   .skip:focus { left: 1rem; }
@@ -20,18 +22,22 @@
 </style>
 </head>
 <body>
-<a class="skip" href="#clips">Skip to the clip list</a>
+<a class="skip" href="#clips">Skip to the editor</a>
 <main>
   <h1>OpenStage Capture: clip list demo</h1>
   <div class="demo-note">
-    <p><strong>This is a demo with made-up data.</strong> It is a short lesson cut into clips on five tracks. Nothing is recorded or saved, and no file on your computer is changed.</p>
-    <p>Choose a row with the Up and Down arrow keys. Press S to split it at the playhead, or open <em>Keyboard shortcuts</em> under the list for every key.</p>
+    <p><strong>This is a demo.</strong> It starts with a made-up lesson. Nothing is recorded, and no file on your computer is changed unless you choose Save. You can open an edit file, or a recording folder made by OpenStage Capture (the one that ends in .capture), and play it.</p>
+    <p>The preview, the timeline and the clip list all show the same edit and make the same changes. Choose a clip with the arrow keys, press S to split it at the playhead, Space to play, or open <em>Keyboard shortcuts</em> under the timeline or the list for every key. F6 moves between the three.</p>
   </div>
-  <div id="clips"></div>
-  <div class="demo-tools">
+  <div class="demo-tools" role="group" aria-label="Open and save">
+    <button type="button" class="os-cl-button" id="open-file">Open an edit file</button>
+    <button type="button" class="os-cl-button" id="open-folder">Open a recording folder</button>
+    <button type="button" class="os-cl-button" id="save">Save <kbd class="os-cl-key" aria-hidden="true">Ctrl+S</kbd></button>
+    <button type="button" class="os-cl-button" id="save-copy">Save a copy</button>
     <button type="button" class="os-cl-button" id="start-again">Start again with the sample lesson</button>
-    <button type="button" class="os-cl-button" id="save-copy">Save a copy of this edit (edit.json)</button>
   </div>
+  <p class="os-cl-hint" id="file-state"></p>
+  <div id="clips"></div>
   <p class="os-cl-hint" id="demo-note-url"></p>
 </main>
 <script type="module" src="./demo.ts"></script>

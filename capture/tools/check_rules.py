@@ -34,6 +34,8 @@ SKIP_DIRS = {"target", ".git", "node_modules"}
 HEADER_SUFFIXES = {".rs", ".py"}
 EDIT = REPO / "capture-edit"  # the TypeScript edit model
 EDIT_HEADER_SUFFIXES = {".ts"}
+TIMELINE = REPO / "capture-timeline"  # the editing screens (clip list), TypeScript and plain DOM
+TIMELINE_HEADER_SUFFIXES = {".ts", ".mjs", ".css"}
 FLAG_SUFFIXES = {".toml", ".rs", ".bat", ".cmd", ".sh", ".yml", ".yaml", ".py", ".lock"}
 STYLE_SUFFIXES = {".md", ".rs", ".bat", ".py", ".yml", ".yaml", ".toml"}
 EM_DASH = chr(0x2014)  # built from its code so this file does not trip its own check
@@ -140,6 +142,11 @@ def check_headers():
             head = "\n".join(path.read_text(encoding="utf-8").splitlines()[:5])
             if "SPDX-License-Identifier: Apache-2.0" not in head:
                 missing.append(str(path.relative_to(REPO)))
+    if TIMELINE.is_dir():
+        for path in files(TIMELINE, TIMELINE_HEADER_SUFFIXES):
+            head = "\n".join(path.read_text(encoding="utf-8").splitlines()[:5])
+            if "SPDX-License-Identifier: Apache-2.0" not in head:
+                missing.append(str(path.relative_to(REPO)))
     if missing:
         record("FAIL", "license headers", "missing SPDX header: " + ", ".join(missing))
     else:
@@ -168,10 +175,10 @@ def check_ffmpeg_flags():
 
 def check_style():
     found = []
-    for base in (ROOT, REPO / "docs", EDIT):
+    for base in (ROOT, REPO / "docs", EDIT, TIMELINE):
         if not base.is_dir():
             continue
-        for path in files(base, STYLE_SUFFIXES | {".ts", ".json"}):
+        for path in files(base, STYLE_SUFFIXES | {".ts", ".json", ".mjs", ".css", ".html"}):
             if EM_DASH in path.read_text(encoding="utf-8", errors="replace"):
                 found.append(str(path.relative_to(REPO)))
     readme = REPO / "README.md"
@@ -205,16 +212,18 @@ def batch_block_problems(text):
 
 
 def check_edit_package():
-    """The TypeScript edit model ships with no runtime dependencies at all, so there is nothing to license-check."""
-    manifest = EDIT / "package.json"
-    if not manifest.exists():
-        return
-    package = json.loads(manifest.read_text(encoding="utf-8"))
-    runtime = package.get("dependencies") or {}
-    if runtime:
-        record("FAIL", "edit model has no runtime dependencies", "found: " + ", ".join(sorted(runtime)))
-    else:
-        record("PASS", "edit model has no runtime dependencies")
+    """The TypeScript edit model and the editing screens ship with no runtime dependencies at all, so there is
+    nothing to license-check."""
+    for folder, name in ((EDIT, "edit model"), (TIMELINE, "editing screens")):
+        manifest = folder / "package.json"
+        if not manifest.exists():
+            continue
+        package = json.loads(manifest.read_text(encoding="utf-8"))
+        runtime = package.get("dependencies") or {}
+        if runtime:
+            record("FAIL", f"{name} has no runtime dependencies", "found: " + ", ".join(sorted(runtime)))
+        else:
+            record("PASS", f"{name} has no runtime dependencies")
 
 
 def batch_path_problems(text):
@@ -268,6 +277,16 @@ def batch_rust_problems(name, raw):
         setup = [i for i, line in enumerate(lines) if line.startswith("call") and "rust-setup.bat" in line]
         if not setup or setup[0] > uses_cargo[0]:
             problems.append("must call rust-setup.bat before the first use of cargo")
+    # Node.js may be installed but not on the PATH in the same way, so it is found the same way.
+    uses_node = [i for i, line in enumerate(lines) if line.lower().startswith("node ") or "('node " in line.lower()]
+    if uses_node:
+        setup = [
+            i
+            for i, line in enumerate(lines)
+            if line.startswith("call") and "rust-setup.bat" in line and line.rstrip().lower().endswith(" node")
+        ]
+        if not setup or setup[0] > uses_node[0]:
+            problems.append("must call rust-setup.bat node before the first use of node")
     return problems
 
 

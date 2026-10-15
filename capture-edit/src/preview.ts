@@ -128,32 +128,68 @@ export function listCaption(model: Model): string {
   return `Tracks and clips: ${clips} ${clips === 1 ? "clip" : "clips"}${extra} on ${tracks} ${tracks === 1 ? "track" : "tracks"}, ${describeLength(modelLengthMs(model))} long.`;
 }
 
+function clipSentence(model: Model, track: Track, clip: Clip, state: string | undefined): string {
+  const parts = [
+    `${clip.name}, ${typeName(model, clip).toLowerCase()} on the ${track.name} track`,
+    `starts at ${describeTime(clip.startMs)}`,
+    `${describeLength(clipLengthMs(clip))} long`,
+    `ends at ${describeTime(clipEndMs(clip))}`,
+  ];
+  if (clip.muted) parts.push("muted");
+  if (clip.volumeDb !== 0) parts.push(`${Math.abs(clip.volumeDb)} decibels ${clip.volumeDb < 0 ? "quieter" : "louder"}`);
+  if (clip.fadeInMs > 0) parts.push(`fades in over ${describeLength(clip.fadeInMs)}`);
+  if (clip.fadeOutMs > 0) parts.push(`fades out over ${describeLength(clip.fadeOutMs)}`);
+  if (state !== undefined && state !== "ready" && state !== "muted") parts.push(state);
+  return parts.join(", ") + ".";
+}
+
 /** One clip in a sentence, as it is read when it takes focus. */
 export function describeClip(model: Model, clipId: string): string {
   for (const track of model.tracks) {
     const clip = track.clips.find((c) => c.id === clipId);
     if (clip === undefined) continue;
     const row = listRows(model).find((r) => r.clipId === clipId);
-    const parts = [
-      `${clip.name}, ${typeName(model, clip).toLowerCase()} on the ${track.name} track`,
-      `starts at ${describeTime(clip.startMs)}`,
-      `${describeLength(clipLengthMs(clip))} long`,
-      `ends at ${describeTime(clipEndMs(clip))}`,
-    ];
-    if (clip.muted) parts.push("muted");
-    if (clip.volumeDb !== 0) parts.push(`${Math.abs(clip.volumeDb)} decibels ${clip.volumeDb < 0 ? "quieter" : "louder"}`);
-    if (clip.fadeInMs > 0) parts.push(`fades in over ${describeLength(clip.fadeInMs)}`);
-    if (clip.fadeOutMs > 0) parts.push(`fades out over ${describeLength(clip.fadeOutMs)}`);
-    if (row !== undefined && row.state !== "ready" && row.state !== "muted") parts.push(row.state);
-    return parts.join(", ") + ".";
+    return clipSentence(model, track, clip, row?.state);
   }
   const found = findItem(model, clipId);
   if (found !== undefined) return describeItem(found.item, found.track.name, model);
   return `There is no clip with the id ${clipId}.`;
 }
 
+/**
+ * A sentence for every clip, overlay and zoom, by id: the same sentences as `describeClip`, worked out in one
+ * pass over the edit's checks instead of one pass for each. A long recording cut into hundreds of clips
+ * needs this to keep the list quick.
+ */
+export function describeRows(model: Model): Map<string, string> {
+  const problems = validate(model);
+  const sentences = new Map<string, string>();
+  for (const track of model.tracks) {
+    for (const clip of track.clips) {
+      const state = stateOf(
+        problems.filter((p) => p.clipId === clip.id),
+        clip.muted,
+      );
+      sentences.set(clip.id, clipSentence(model, track, clip, state));
+    }
+    for (const item of track.items) {
+      const state = stateOf(
+        problems.filter((p) => p.itemId === item.id),
+        false,
+      );
+      sentences.set(item.id, itemSentence(item, track.name, state));
+    }
+  }
+  return sentences;
+}
+
 /** An overlay or zoom in one sentence, as it is read when it takes focus. */
 export function describeItem(item: Item, trackName: string, model?: Model): string {
+  const state = model === undefined ? undefined : stateOf(validate(model).filter((p) => p.itemId === item.id), false);
+  return itemSentence(item, trackName, state);
+}
+
+function itemSentence(item: Item, trackName: string, state: string | undefined): string {
   const parts = [
     `${item.name}, ${itemKindName(item)} on the ${trackName} track`,
     `starts at ${describeTime(item.startMs)}`,
@@ -176,7 +212,6 @@ export function describeItem(item: Item, trackName: string, model?: Model): stri
     default:
       parts.push(`over ${describePlace(item.rect)} of the picture`);
   }
-  const state = model === undefined ? undefined : stateOf(validate(model).filter((p) => p.itemId === item.id), false);
   if (state !== undefined && state !== "ready") parts.push(state);
   return parts.join(", ") + ".";
 }

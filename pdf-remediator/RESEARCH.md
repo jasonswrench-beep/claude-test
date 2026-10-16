@@ -17,7 +17,7 @@
 
 Benchmarks quoted from CUNY's docs are the authors' own and were **not reproduced**.
 
-**Not verified in any test:** veraPDF (download blocked in the sandbox), tag reading order, screen-reader behavior, behavior on real books. "Better" below means richer structure, not certified conformance.
+**Not verified in any test:** tag reading order, screen-reader behavior, behavior on real books. The standalone veraPDF CLI could not be downloaded in the sandbox; round 2 (§8) ran veraPDF's PDF/UA-1 validation core from the jar bundled in `opendataloader-pdf` instead. "Better" below means richer structure, not certified conformance.
 
 ## 2. Landscape
 
@@ -117,3 +117,74 @@ python3 -m venv venv_ap && ./venv_ap/bin/pip install accesspdf
 ```
 
 Phase 0 should rebuild this as a script in `eval/` with veraPDF included, and extend it to book-like inputs.
+
+---
+
+# Round 2 (2026-10-16): more GitHub projects and a veraPDF measurement
+
+How candidates were found: web search restricted to github.com (the sandbox's GitHub search tools are scoped to one repo, and most non-GitHub sites are blocked), then each promising repo was cloned read-only. Search-result descriptions are the projects' own claims.
+
+## 7. Additional projects
+
+| Project | What it is | Checked how | License | Last commit |
+|---|---|---|---|---|
+| [opendataloader-project/opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf) | Java PDF parser with Python/Node wrappers. Free: layout analysis, auto-tag to **Tagged PDF**, header/footer filtering, hybrid mode (Docling backend, OCR, formulas, picture descriptions). **PDF/UA-1/2 export and a visual tag editor are enterprise add-ons.** Ships an agent skill (`skills/odl-pdf`). Built with PDF Association / Dual Lab (veraPDF developers). | **Installed v2.5.13 and ran it** (§8); README read | Apache-2.0 (veraPDF parts MPL-2.0) | 2026-10-15 |
+| [pdf-accessibility-remediation/pdf-accessibility-remediation](https://github.com/pdf-accessibility-remediation/pdf-accessibility-remediation) | OCR (OCRmyPDF skip mode, pages with text untouched) → ODL auto-tag → Claude via OpenRouter returns a JSON **work order** (heading levels, alt text, artifacts, language, reading order) → deterministic apply → veraPDF (WCAG 2.2 machine profile) before and after → review.md classifying rules as fixed / still failing / newly failing. Cost estimate and confirmation before any paid call. Resume by run label. Stops PDF 2.0 and namespaced tag trees for a human. | README, docs list, intake code read | none found | 2026-10-13 |
+| [MatiasAwdew/pdf-accessibility-remediator](https://github.com/MatiasAwdew/pdf-accessibility-remediator) | Python CLI + local Flask review app. Adobe AutoTag or built-in tagger; repairs headings, lists, tables, links, artifacts; Claude alt text with few-shot learning from reviewer corrections; font embedding; veraPDF validate-and-fix loop. Windows-oriented (desktop shortcut, Windows fonts, `%APPDATA%`). Lists PyMuPDF among its dependencies. Reports 3/3 held-out PDFs pass veraPDF (self-reported). | README read | none found | 2026-10-08 |
+| [Mohakgarg5/KCP_PDF_REMEDIATION](https://github.com/Mohakgarg5/KCP_PDF_REMEDIATION) | Built for InDesign-exported Kellogg case PDFs (closest to book-style documents). Own content-stream tagger (~3.1k lines) + post-processor (~2.3k) + struct sanitizer; many dated regression tests; claims zero veraPDF failures on its cases (self-reported). | README, file sizes read | none found | 2026-10-01 |
+| [anitasrinivasan/ada-pdf-compliance](https://github.com/anitasrinivasan/ada-pdf-compliance) | Claude Code plugin aimed at slide-deck exports: title, language, bookmarks from page titles, alt text, link descriptions; structure tree via Acrobat or a pikepdf path. | README read | MIT | 2026-03-31 |
+| [mlibrary/analyze_pdf](https://github.com/mlibrary/analyze_pdf) | Analyzer (not a remediator): PDF/UA-1 and WCAG checks through veraPDF, JSON output. README says it was AI-generated and may contain errors. | README read | none found | 2026-04-15 |
+
+## 8. veraPDF measurement (PDF/UA-1)
+
+**Method.** `opendataloader-pdf`'s jar bundles veraPDF's validation core and its `PDFUA-1.xml` profile. A 40-line Java runner (`eval/poc/VerapdfCheck.java`) calls it. JDK 21 no longer ships JAXB, so three small jars (`jaxb-api-2.3.1`, `jaxb-core-2.3.0.1`, `jaxb-impl-2.3.0.1`) were added to the classpath. Same test files as §3: the flyer (tags stripped) and four one-page fixtures.
+
+**Metadata patch used for the equal-footing runs** (`eval/poc/patch_ua.py`, ~15 lines of pikepdf): `MarkInfo/Marked = true`, `DisplayDocTitle = true`, `dc:title` in XMP and Info, `pdfuaid:part = 1`, `Lang` if missing, `/Tabs /S` on every page. This is a stand-in for SPEC S5's catalog fixes.
+
+### 8.1 Flyer, as each tool left it (failed rules / failed assertions)
+
+| Output | Rules | Assertions | What failed |
+|---|---|---|---|
+| Untagged input | 11 | 110 | Everything: no tags, no MarkInfo, no title, no PDF/UA id, content untagged (100+ assertions), fonts, widget |
+| PDFix `AddTags` only | 4 | 4 | PDF/UA id; widget needs TU; fonts (7.21.4.1-1, 7.21.4.2-2) |
+| PDFix batch (12 of 14 steps) | 3 | 3 | widget TU; fonts ×2 |
+| accesspdf `fix` | 7 | 83 | 74 untagged content items; 4 figures without alt; widget not in Form tag; PDF/UA id; fonts |
+| **ODL free tagger** | **7** | **7** | **All catalog-level** (MarkInfo missing, DisplayDocTitle, dc:title, PDF/UA id, Tabs) plus fonts. **No content-level failures.** |
+
+### 8.2 Equal footing (same metadata patch applied to every output)
+
+| File | ODL | PDFix `AddTags` | accesspdf |
+|---|---|---|---|
+| Flyer | **2 rules** (fonts) | 3 rules (widget TU, fonts) | 6 rules / 82 assertions (74 untagged content, widget nesting, 4 figures w/o alt, fonts) |
+| headings | 1 rule (fonts) | 1 rule (fonts) | 1 rule (fonts) |
+| multicolumn | 1 (fonts) | 1 (fonts) | 1 (fonts) |
+| simple | 1 (fonts) | 1 (fonts) | 1 (fonts) |
+| tables | 1 (fonts) | 1 (fonts) | 2 (fonts + 10 untagged content items) |
+
+### 8.3 What this does and does not show
+
+- **Supports "wrap ODL, own the PDF/UA layer":** with a trivial patch, the free ODL output had no content-level veraPDF failures on any of the five files. The paid "PDF/UA export" appears to cover the kind of document-level work our S5 would do. Whether it also does more is unknown.
+- **Fonts are the remaining gap** on every file. The fixtures use non-embedded standard fonts (a worst case); the flyer is an InDesign export. Real books may differ. → SPEC promotes font repair into scope.
+- **ODL's alt text is a placeholder:** all four figures got `image 1`…`image 4`, which passes veraPDF rule 7.3-1. PDFix copied caption text instead. Neither is a description. → SPEC check 13 and the judgment layer.
+- accesspdf's tagging left many content items neither tagged nor artifacted on the designed flyer, but matched the others on simple fixtures.
+- **Limits:** five small files; veraPDF checks only the machine-checkable subset; reading order, heading appropriateness and screen-reader behavior were not assessed; real books were not tested.
+
+### 8.4 Additional findings that shaped the spec
+
+11. The free ODL tier stops at Tagged PDF; vendor sells PDF/UA export. Keep the engine interface swappable.
+12. Placeholder alt text passes veraPDF. Needs its own check.
+13. Fonts were the last failing PDF/UA rules after metadata patching. Promote font repair into scope.
+14. An independent project (pdf-accessibility-remediation) arrived at the same architecture: OCRmyPDF skip mode, ODL tagging, model-produced work order, deterministic apply, veraPDF gate, human review report. Cost confirmation, resume-by-label and "newly failing" regression classification are worth copying.
+
+## 9. Leads found but not examined
+
+- [PSPDFKit-labs/nutrient-skills](https://github.com/pspdfkit-labs/nutrient-skills): agent skills for a paid Nutrient API (20 auto-tagged pages/month free per its docs).
+- [Community-Access/accessibility-agents](https://github.com/Community-Access/accessibility-agents): agent set with a PDF accessibility specialist (Matterhorn).
+- [jshields-ca/pdf-accessibility](https://github.com/jshields-ca/pdf-accessibility) (Docubil): web app for WCAG analysis and safe auto-fixes.
+- [iaminvester86/PDF-Remediation](https://github.com/iaminvester86/PDF-Remediation); [amytho/pdf-acc-toolset](https://github.com/amytho/pdf-acc-toolset) (C#/iText manual tag-tree editor, last push April 2024 per a listing).
+- [mgifford/pdf-crawler](https://github.com/mgifford/pdf-crawler): finds PDFs on websites and flags accessibility issues (audit only).
+- Emboss (`emboss-pdf`): *generates* PDF/UA-tagged PDFs from structured/LLM content and calls the veraPDF CLI; not a remediator, but a reference for writing tagged output.
+- [latex3/tagging-project](https://github.com/latex3/tagging-project): tagged PDF from LaTeX at the source, relevant if any books originate in LaTeX.
+- Commercial/hosted (not GitHub): Adobe PDF Accessibility Auto-Tag API, Nutrient, PDFix Actions, UCSD PDF Remediator, WMU ReadReady, ITHAKA's AWS pipeline (PDFix + veraPDF).
+- Research: arXiv 2509.18965 (benchmark dataset and framework for PDF accessibility evaluation) and arXiv 2503.22216 (step-by-step remediation to improve tag accuracy, PAVE 2.0). The benchmark dataset may be usable for the Phase 0 corpus; check its license first.
+- iTagPDF (CMU, CHI 2026): research system for academic PDFs; no evidence found that code is released.

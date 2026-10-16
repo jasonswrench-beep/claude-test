@@ -1,7 +1,7 @@
 # PDF Remediator — Product & Engineering Spec
 
 **Working title:** PDF Remediator (name TBD)
-**Status:** Draft v0.1 — 2026-10-15
+**Status:** Draft v0.2 — 2026-10-16 (see Changelog at the end)
 **Origin:** Tool comparison session (evidence in [RESEARCH.md](RESEARCH.md))
 **Owner:** Jason Wrench
 
@@ -36,7 +36,7 @@ git checkout claude/epic-shannon-q23swq
 # read: pdf-remediator/SPEC.md and pdf-remediator/RESEARCH.md
 ```
 
-Install locally before Phase 0: Python 3.11+, Java 11+, [veraPDF](https://verapdf.org/), Tesseract, Ghostscript, `ocrmypdf`, `opendataloader-pdf`. (The veraPDF download was not reachable from the cloud sandbox where this was drafted, so the install has not been tested.)
+Install locally before Phase 0: Python 3.11+, Java 11+, [veraPDF](https://verapdf.org/), Tesseract, Ghostscript, `ocrmypdf`, `opendataloader-pdf`. (Install the real veraPDF CLI. It was unreachable from the cloud sandbox where this was drafted, so the Phase 0 evidence so far used the veraPDF validation core bundled inside the `opendataloader-pdf` jar, via the small runner in `pdf-remediator/eval/poc/`. See RESEARCH.md §8.)
 
 ### Prompt to paste into the first desktop session
 
@@ -81,6 +81,7 @@ Three gates. A file reaches the top status only when all three are satisfied.
 - Run `verapdf --flavour ua1 <file>` and parse the report. (Confirm output-format flags with `verapdf --help` on the installed version.)
 - **Pass:** zero failed rules, or every remaining failure is on a documented waiver list with a reason.
 - Caveat to state in every report: veraPDF checks only the machine-checkable part of PDF/UA. Alt-text quality, reading-order correctness and heading appropriateness need a human (see the Matterhorn Protocol).
+- **veraPDF accepts placeholder alt text.** The free `opendataloader-pdf` tagger writes `image 1`, `image 2`, … as `/Alt`, which satisfies the machine rule (7.3-1) while telling a screen-reader user nothing. Gate 2 check 13 exists for this reason.
 
 ### 2.2 Gate 2 — Ally and WCAG proxy (automated, local)
 
@@ -100,6 +101,7 @@ Ally cannot be run locally. The tool runs local checks that mirror what Ally is 
 | 10 | Reading order plausible | Compare tag order to geometric order; flag disagreements |
 | 11 | Bookmarks present on long documents | Threshold configurable (default 20 pages) |
 | 12 | Links tagged and have meaningful text | Link tags with OBJR; flag "click here" |
+| 13 | Alt text is not a placeholder | Reject `image N`, file names, bare "Figure"/"Image", empty, or very short/very long strings; route to the judgment layer |
 
 ### 2.3 Gate 3 — Human verification (recorded)
 
@@ -201,7 +203,7 @@ class TagEngine(Protocol):
 
 | Engine | Role | Notes |
 |---|---|---|
-| `opendataloader-pdf` | Default | Free, local, Java. Already used by the existing skill. Quality on books **untested**. |
+| `opendataloader-pdf` | Default | Free (Apache-2.0), local, Java; already used by the existing skill. **Its README says the free tier outputs Tagged PDF only; PDF/UA-1/2 export is a paid enterprise add-on**, so our S5 must supply the PDF/UA-level fixes. Measured: on the test flyer, ODL plus a 15-line metadata patch left only font failures under veraPDF (RESEARCH.md §8). It writes placeholder alt text (`image N`). Quality on **books untested**. |
 | PDFix SDK | Optional plug-in | Proprietary. Strongest heuristic tagger in testing (headings, lists, tables, forms) but cannot be bundled. Usable by anyone with their own license. |
 | Adobe PDF Services | Optional plug-in | Cloud API. Violates local-first and needs data-governance sign-off (FERPA). Opt-in only. |
 | accesspdf tagger | Candidate | Apache-2.0, local. Weaker on a real designed document in testing. |
@@ -222,7 +224,7 @@ Deterministic repairs on whatever the engine produced:
 - **Footnotes/endnotes:** `Note` tags where detectable.
 - **Bookmarks:** build from headings (threshold for long docs). Optional TOC/TOCI tagging.
 - **Metadata:** `MarkInfo/Marked`, `Lang`, `dc:title` in XMP plus Info, `DisplayDocTitle`, XMP `pdfuaid:part = 1`, page `/Tabs /S`.
-- **Fonts:** report unembedded fonts and missing ToUnicode. Fixing is out of scope v1 (flag).
+- **Fonts:** detect unembedded fonts, incomplete CIDSet and missing ToUnicode, and attempt repair (embed or substitute, subset, widths, ToUnicode). **Promoted from out-of-scope:** after metadata patching, font rules (veraPDF 7.21.4.x) were the *only* remaining PDF/UA-1 failure on every ODL and PDFix output in the proof of concept. How common this is in real books is unknown (the fixtures used non-embedded standard fonts); measure it in Phase 0.
 
 Each processor is independent, runs in try/except, and reports `changes_made` and `warnings` (accesspdf pattern).
 
@@ -251,6 +253,7 @@ Per file: `*.accessible.pdf`, `*.report.json`, `*.review.html`, `*.alttext.yaml`
 One protocol, one file per provider; no provider-specific code elsewhere.
 
 - Providers: Anthropic, OpenAI, Gemini, and any **local OpenAI-compatible endpoint (Ollama etc.)**. The local endpoint is the "local path": same interface, no network.
+- Optional local alt-text path: ODL's hybrid mode (`--enrich-picture-description`) produces picture descriptions locally. Untested; compare against Ollama vision models in Phase 2.
 - Keys: environment variable, or OS keychain (`keyring`). Never written to config files, reports, logs, or the repo. Web UI (later) takes the key per request.
 - `--no-ai`: everything deterministic; alt text stays `needs_review` and is never invented.
 
@@ -272,6 +275,7 @@ Requests are small, **batched per page**, and **cached by input hash**. Systems 
 - Only image crops and short text snippets are sent. Never the whole document unless the user configures a provider that requires it.
 - Every run prints and records a **data-sent summary** (what, how many items, which provider).
 - `--local-only` blocks all network access except to localhost.
+- Before any paid model call, print the estimated request count and cost and ask for confirmation (`--yes` skips). Pattern taken from pdf-accessibility-remediation (RESEARCH.md §7).
 - Cloud providers: README text and doctor output remind users to get institutional sign-off for FERPA-protected material.
 
 ### 5.4 Review policy
@@ -440,7 +444,7 @@ For every file and engine: veraPDF failed-rule count by rule; Gate 2 pass/fail p
 1. Install the stack on the desktop (§0). Run `veraPDF` on one file to confirm it works.
 2. Build the corpus (§10.1), especially the book-like fixtures.
 3. Build the scoring harness (§10.2).
-4. Run candidate engines: `opendataloader-pdf`, PDFix SDK (pip `pdfix-sdk`; read its terms first), accesspdf's tagger. Adobe only if credentials and sign-off exist.
+4. Run candidate engines: `opendataloader-pdf`, PDFix SDK (pip `pdfix-sdk`; read its terms first), accesspdf's tagger. Adobe only if credentials and sign-off exist. **ODL, PDFix and accesspdf have already been measured on one flyer and four one-page fixtures (RESEARCH.md §8); extend that to the book fixtures.** Reuse `eval/poc/` (veraPDF runner, metadata patch, inspector).
 5. Spike **artifacting running headers/footers** on a tagged PDF with pikepdf; estimate effort.
 6. Write results to `pdf-remediator/eval/RESULTS.md` with a recommendation: default engine, and whether Mode B is needed.
 
@@ -473,6 +477,8 @@ Scale on large books; Mode B writer if Phase 0/1 data justify it; optional PDFix
 | Risk | Mitigation |
 |---|---|
 | Engine quality on books is unknown | Phase 0 bake-off on real book fixtures before committing |
+| Free ODL tier stops at Tagged PDF; the vendor sells PDF/UA export | Own the S5 PDF/UA layer; keep the engine interface so the engine can be swapped |
+| Placeholder alt text passes veraPDF | Gate 2 check 13; judgment layer replaces placeholders; review packet lists them |
 | Artifacting inside an already-tagged PDF is hard | Spike in Phase 0; budget for a content-stream rewrite |
 | Ally cannot be run locally; proxy may diverge | Ledger of real Ally scores; tune proxy checks against it |
 | veraPDF pass ≠ accessible | Human gate; report states the limit |
@@ -503,3 +509,15 @@ Scale on large books; Mode B writer if Phase 0/1 data justify it; optional PDFix
 | nys-cdo/poc-pdf-assessor | Triage: effort estimate, reach, retire/replace/remediate, shell-tag detection | none | Ideas only |
 | ethan87w/pdf-remediation | Hash-keyed AI cache; honest-scope framing | none | Ideas only |
 | Rafael-Calderon/pdf-remediation-pipeline | Not recommended as a model (metadata only, empty tag tree) | MIT | Matterhorn reference doc only |
+| pdf-accessibility-remediation/pdf-accessibility-remediation | Closest match to this spec: OCR (skip mode) → ODL tag → model returns a JSON work order → deterministic apply → veraPDF before/after with fixed / still-failing / newly-failing classification; cost estimate and confirmation; resume by run label; stops PDF 2.0 files for a human | none found | Ideas only |
+| MatiasAwdew/pdf-accessibility-remediator | Local review cards app; few-shot learning from reviewer corrections; font embedding; veraPDF validate-and-fix loop; heading/table/link repairs | none found | Ideas only |
+| Mohakgarg5/KCP_PDF_REMEDIATION | Content-stream tagger for InDesign-style documents (about 3.1k lines) plus 2.3k-line post-processor; many dated regression tests | none found | Ideas only |
+| anitasrinivasan/ada-pdf-compliance | Claude Code plugin; slide-deck focus; bookmarks from page titles; link descriptions | MIT | May adapt with attribution |
+| opendataloader-project/opendataloader-pdf | Default engine candidate; ships agent skills and a bundled veraPDF core | Apache-2.0 (veraPDF parts MPL-2.0) | May use as a dependency |
+
+---
+
+## Changelog
+
+- **v0.2 (2026-10-16):** Added Gate 2 check 13 (placeholder alt text). Recorded that the free ODL tier outputs Tagged PDF only and that PDF/UA export is paid. Promoted font repair into scope. Added optional local picture-description path, cost-confirmation before paid calls, new reference projects and risks, and the Phase 0 note that ODL/PDFix/accesspdf were already measured once (RESEARCH.md §7–§9, `eval/poc/`).
+- **v0.1 (2026-10-15):** Initial spec from the seven-tool comparison.
